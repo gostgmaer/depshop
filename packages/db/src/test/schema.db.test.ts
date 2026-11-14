@@ -11,7 +11,6 @@ afterAll(() => prisma.$disconnect());
 /** Models whose rows belong to a single user (spec: each needs a userId FK). */
 const USER_OWNED_TABLES = [
   "UserSession",
-  "AuthToken",
   "UserPreference",
   "Search",
   "SearchSourceRun",
@@ -62,7 +61,6 @@ describe("schema: no multi-tenancy", () => {
         "AgentRun",
         "AiModelConfig",
         "AuditLog",
-        "AuthToken",
         "BillingEvent",
         "Category",
         "Notification",

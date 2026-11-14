@@ -4,11 +4,29 @@ import { loadEnv } from "./env.js";
 const base = {
   DATABASE_URL: "postgresql://u:p@127.0.0.1:5432/db",
   SESSION_SECRET: "x".repeat(32),
+  TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+  IAM_BASE_URL: "http://127.0.0.1:3304/api/v1/iam/",
 };
 
 describe("loadEnv", () => {
-  it("rejects a short session secret", () => {
+  it("rejects a short session secret and a wrong-size encryption key", () => {
     expect(() => loadEnv({ ...base, SESSION_SECRET: "short" })).toThrow(/SESSION_SECRET/);
+    expect(() =>
+      loadEnv({ ...base, TOKEN_ENCRYPTION_KEY: Buffer.alloc(16).toString("base64") }),
+    ).toThrow(/TOKEN_ENCRYPTION_KEY/);
+  });
+
+  it("requires the IAM base URL and derives the JWKS URL from it", () => {
+    const { IAM_BASE_URL: _omit, ...withoutIam } = base;
+    expect(() => loadEnv(withoutIam)).toThrow(/IAM_BASE_URL/);
+    const env = loadEnv(base);
+    expect(env.IAM_BASE_URL).toBe("http://127.0.0.1:3304/api/v1/iam");
+    expect(env.IAM_JWKS_URL).toBe("http://127.0.0.1:3304/api/v1/iam/.well-known/jwks.json");
+    expect([env.IAM_TENANT, env.IAM_JWT_ISSUER, env.IAM_JWT_AUDIENCE]).toEqual([
+      "easydev",
+      "iam-service",
+      "easydev",
+    ]);
   });
 
   it("derives allowed origins from APP_URL and CORS_ORIGINS", () => {
@@ -24,28 +42,18 @@ describe("loadEnv", () => {
     ]);
   });
 
-  it("defaults secure cookies on only in production", () => {
+  it("defaults secure cookies on only in production, and refuses insecure production", () => {
     expect(loadEnv({ ...base, NODE_ENV: "development" }).COOKIE_SECURE).toBe(false);
-    expect(
-      loadEnv({ ...base, NODE_ENV: "production", EMAIL_TRANSPORT: "smtp", SMTP_HOST: "smtp.test" })
-        .COOKIE_SECURE,
-    ).toBe(true);
+    expect(loadEnv({ ...base, NODE_ENV: "production" }).COOKIE_SECURE).toBe(true);
+    expect(() => loadEnv({ ...base, NODE_ENV: "production", COOKIE_SECURE: "false" })).toThrow(
+      /COOKIE_SECURE/,
+    );
   });
 
-  it("refuses unsafe production settings", () => {
-    expect(() => loadEnv({ ...base, NODE_ENV: "production" })).toThrow(/EMAIL_TRANSPORT/);
-    expect(() =>
-      loadEnv({
-        ...base,
-        NODE_ENV: "production",
-        EMAIL_TRANSPORT: "smtp",
-        SMTP_HOST: "smtp.test",
-        COOKIE_SECURE: "false",
-      }),
-    ).toThrow(/COOKIE_SECURE/);
-  });
-
-  it("requires SMTP_HOST for the smtp transport", () => {
-    expect(() => loadEnv({ ...base, EMAIL_TRANSPORT: "smtp" })).toThrow(/SMTP_HOST/);
+  it("leaves the notification and file services optional", () => {
+    const env = loadEnv(base);
+    expect(env.NOTIFICATION_SERVICE_URL).toBeUndefined();
+    expect(env.FILE_SERVICE_URL).toBeUndefined();
+    expect(env.NOTIFICATION_TENANT_ID).toBe("dealmind");
   });
 });

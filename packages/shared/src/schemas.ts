@@ -25,13 +25,23 @@ export const emailSchema = z
   .email("Enter a valid email address")
   .max(254);
 
-/** At least 10 characters with a letter and a digit; at most 128. */
+/** Special characters the shared EasyDev IAM accepts for its "special" rule. */
+export const PASSWORD_SPECIAL_CHARS = "@$!%*?&";
+
+/**
+ * Password policy. Accounts live in the shared EasyDev IAM, which requires a
+ * lowercase letter, an uppercase letter, a digit and one of @$!%*?& (min 8).
+ * DealMind enforces the same rules (with a 10-character minimum) so a password
+ * accepted by our forms is never rejected by the IAM.
+ */
 export const passwordSchema = z
   .string()
   .min(10, "Password must be at least 10 characters")
   .max(128, "Password must be at most 128 characters")
-  .regex(/[A-Za-z]/, "Password must contain a letter")
-  .regex(/\d/, "Password must contain a digit");
+  .regex(/[a-z]/, "Password must contain a lowercase letter")
+  .regex(/[A-Z]/, "Password must contain an uppercase letter")
+  .regex(/\d/, "Password must contain a digit")
+  .regex(/[@$!%*?&]/, `Password must contain one of ${PASSWORD_SPECIAL_CHARS}`);
 
 export const nameSchema = z
   .string()

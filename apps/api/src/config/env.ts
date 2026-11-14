@@ -44,34 +44,43 @@ const envSchema = z
     /** Defaults to true in production. Must be true whenever served over HTTPS. */
     COOKIE_SECURE: z.enum(["true", "false"]).optional(),
 
-    EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(24),
-    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(240).default(30),
+    /**
+     * AES-256-GCM key (32 bytes, base64) encrypting the IAM tokens stored in
+     * DealMind sessions. Rotating it signs every user out.
+     */
+    TOKEN_ENCRYPTION_KEY: z
+      .string()
+      .refine(
+        (v) => Buffer.from(v, "base64").length === 32,
+        "TOKEN_ENCRYPTION_KEY must be 32 bytes, base64",
+      ),
 
-    /** "smtp" sends real mail (Mailpit in development); "console" only logs. */
-    EMAIL_TRANSPORT: z.enum(["smtp", "console"]).default("console"),
-    EMAIL_FROM: z.string().min(3).default("DealMind AI <no-reply@dealmind.local>"),
-    SMTP_HOST: z.string().optional(),
-    SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(1025),
-    SMTP_SECURE: bool("false"),
-    SMTP_USER: z.string().optional(),
-    SMTP_PASSWORD: z.string().optional(),
+    // ── Shared EasyDev IAM (identity provider) ─────────────────────────
+    /** IAM API base, e.g. http://127.0.0.1:3304/api/v1/iam */
+    IAM_BASE_URL: z
+      .string()
+      .url()
+      .transform((v) => v.replace(/\/+$/, "")),
+    /** x-tenant-id sent to the IAM. A config constant: DealMind itself has no tenancy. */
+    IAM_TENANT: z.string().min(1).default("easydev"),
+    IAM_JWT_ISSUER: z.string().min(1).default("iam-service"),
+    IAM_JWT_AUDIENCE: z.string().min(1).default("easydev"),
+    /** Defaults to <IAM_BASE_URL>/.well-known/jwks.json */
+    IAM_JWKS_URL: z.string().url().optional(),
+    IAM_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
+
+    // ── Shared EasyDev notification service (optional until used) ──────
+    NOTIFICATION_SERVICE_URL: z.string().url().optional(),
+    NOTIFICATION_API_KEY: z.string().optional(),
+    NOTIFICATION_TENANT_ID: z.string().min(1).default("dealmind"),
+
+    // ── Shared EasyDev file-upload service (optional until used) ───────
+    FILE_SERVICE_URL: z.string().url().optional(),
+    FILE_SERVICE_HMAC_SECRET: z.string().optional(),
+    FILE_SERVICE_TENANT_ID: z.string().min(1).default("dealmind"),
   })
   .superRefine((env, ctx) => {
-    if (env.EMAIL_TRANSPORT === "smtp" && !env.SMTP_HOST) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["SMTP_HOST"],
-        message: "required when EMAIL_TRANSPORT=smtp",
-      });
-    }
     if (env.NODE_ENV === "production") {
-      if (env.EMAIL_TRANSPORT !== "smtp") {
-        ctx.addIssue({
-          code: "custom",
-          path: ["EMAIL_TRANSPORT"],
-          message: "must be smtp in production",
-        });
-      }
       if (env.COOKIE_SECURE === "false") {
         ctx.addIssue({
           code: "custom",
@@ -93,6 +102,7 @@ const envSchema = z
     COOKIE_SECURE: env.COOKIE_SECURE ? env.COOKIE_SECURE === "true" : env.NODE_ENV === "production",
     /** Every origin allowed to make cookie-authenticated, state-changing requests. */
     ALLOWED_ORIGINS: [...new Set([new URL(env.APP_URL).origin, ...env.CORS_ORIGINS])],
+    IAM_JWKS_URL: env.IAM_JWKS_URL ?? `${env.IAM_BASE_URL}/.well-known/jwks.json`,
   }));
 
 export type Env = z.infer<typeof envSchema>;

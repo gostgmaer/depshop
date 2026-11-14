@@ -1,5 +1,4 @@
 import {
-  AppError,
   changePasswordInput,
   forgotPasswordInput,
   loginInput,
@@ -74,7 +73,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
       },
     },
     async (req, reply) => {
-      await auth.register(req.body);
+      await auth.register(req.body, clientInfo(req));
       return reply.status(202).send({ message: REGISTER_MESSAGE });
     },
   );
@@ -144,7 +143,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
       },
     },
     async (req) => {
-      await auth.verifyEmail(req.body.token);
+      await auth.verifyEmail(req.body.token, await app.optionalAuth(req));
       return { message: "Your email address is verified." };
     },
   );
@@ -184,7 +183,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
       },
     },
     async (req, reply) => {
-      await auth.forgotPassword(req.body.email);
+      await auth.forgotPassword(req.body.email, clientInfo(req));
       return reply.status(202).send({ message: FORGOT_PASSWORD_MESSAGE });
     },
   );
@@ -276,8 +275,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
     async (req, reply) => {
       const me = getAuth(req);
       // Scoped by the caller's userId: another user's session is "not found".
-      if (!(await sessions.revokeOwned(me.userId, req.params.id)))
-        throw AppError.notFound("Session");
+      await auth.revokeSession(me, req.params.id);
       if (req.params.id === me.sessionId) app.clearSessionCookie(reply);
       return reply.status(204).send(null);
     },

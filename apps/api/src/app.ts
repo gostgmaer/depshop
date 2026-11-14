@@ -17,6 +17,7 @@ import { cookieNames } from "./lib/cookies.js";
 import { CsrfTokens } from "./lib/csrf.js";
 import { registerErrorHandler } from "./lib/error-handler.js";
 import { LoginThrottle, type LoginThrottleOptions } from "./lib/login-throttle.js";
+import { TokenCipher } from "./lib/token-cipher.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
 import {
   type AuthRateLimits,
@@ -25,19 +26,34 @@ import {
 } from "./modules/auth/auth-routes.js";
 import { AuthService } from "./modules/auth/auth-service.js";
 import { SessionService } from "./modules/auth/session-service.js";
-import { EmailService } from "./modules/email/email-service.js";
-import type { EmailTransport } from "./modules/email/email-transport.js";
+import { IamClient } from "./modules/iam/iam-client.js";
+import { IamTokenVerifier } from "./modules/iam/iam-token-verifier.js";
+import { FileGateway } from "./modules/platform/file-gateway.js";
+import { NotificationGateway } from "./modules/platform/notification-gateway.js";
 import { type HealthCheck, healthRoutes } from "./modules/health/health-routes.js";
 import { userRoutes } from "./modules/users/user-routes.js";
 import { UserService } from "./modules/users/user-service.js";
 import { authPlugin } from "./plugins/auth.js";
 import { csrfPlugin } from "./plugins/csrf.js";
 
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Shared EasyDev platform services. notifications/files are null when not configured. */
+    platform: {
+      iam: IamClient;
+      notifications: NotificationGateway | null;
+      files: FileGateway | null;
+    };
+  }
+}
+
 export interface AppDeps {
   env: Env;
   prisma: PrismaClient;
-  emailTransport: EmailTransport;
+  /** Critical readiness checks supplied by the host (e.g. database). */
   healthChecks: Record<string, HealthCheck>;
+  /** Overridable for tests (e.g. a fake IAM's fetch). */
+  fetch?: typeof fetch;
   logger?: FastifyServerOptions["logger"];
   /** Overridable for tests; production uses the defaults. */
   rateLimits?: AuthRateLimits;
@@ -114,25 +130,71 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await app.register(swaggerUi, { routePrefix: "/docs" });
   }
 
-  const sessions = new SessionService(prisma, {
-    ttlDays: env.SESSION_TTL_DAYS,
-    idleTimeoutDays: env.SESSION_IDLE_TIMEOUT_DAYS,
-    ...(deps.sessionTouchIntervalMs === undefined
-      ? {}
-      : { touchIntervalMs: deps.sessionTouchIntervalMs }),
+  const iamFetch = deps.fetch ?? fetch;
+  const iam = new IamClient({
+    baseUrl: env.IAM_BASE_URL,
+    tenant: env.IAM_TENANT,
+    timeoutMs: env.IAM_TIMEOUT_MS,
+    fetch: iamFetch,
   });
-  const email = new EmailService(deps.emailTransport, env.APP_URL, app.log);
+  const verifier = new IamTokenVerifier({
+    jwksUrl: env.IAM_JWKS_URL,
+    issuer: env.IAM_JWT_ISSUER,
+    audience: env.IAM_JWT_AUDIENCE,
+    timeoutMs: env.IAM_TIMEOUT_MS,
+    fetch: iamFetch,
+  });
+  const notifications = env.NOTIFICATION_SERVICE_URL
+    ? new NotificationGateway({
+        baseUrl: env.NOTIFICATION_SERVICE_URL,
+        apiKey: env.NOTIFICATION_API_KEY,
+        tenantId: env.NOTIFICATION_TENANT_ID,
+        timeoutMs: 5_000,
+      })
+    : null;
+  const files = env.FILE_SERVICE_URL
+    ? new FileGateway({
+        baseUrl: env.FILE_SERVICE_URL,
+        hmacSecret: env.FILE_SERVICE_HMAC_SECRET,
+        tenantId: env.FILE_SERVICE_TENANT_ID,
+      })
+    : null;
+  app.decorate("platform", { iam, notifications, files });
+
+  const sessions = new SessionService(
+    prisma,
+    new TokenCipher(env.TOKEN_ENCRYPTION_KEY),
+    iam,
+    verifier,
+    {
+      ttlDays: env.SESSION_TTL_DAYS,
+      idleTimeoutDays: env.SESSION_IDLE_TIMEOUT_DAYS,
+      ...(deps.sessionTouchIntervalMs === undefined
+        ? {}
+        : { touchIntervalMs: deps.sessionTouchIntervalMs }),
+    },
+  );
   const throttle = new LoginThrottle(
     deps.loginThrottle ?? { maxFailures: 5, windowMs: 15 * 60_000, lockMs: 15 * 60_000 },
   );
-  const auth = new AuthService(prisma, sessions, email, throttle, {
-    emailVerificationTtlHours: env.EMAIL_VERIFICATION_TTL_HOURS,
-    passwordResetTtlMinutes: env.PASSWORD_RESET_TTL_MINUTES,
-  });
-  const users = new UserService(prisma);
+  const auth = new AuthService(prisma, sessions, iam, verifier, throttle);
+  const users = new UserService(prisma, sessions, iam);
 
   await app.register(authPlugin, { sessions, cookies, secureCookies: env.COOKIE_SECURE });
-  await app.register(healthRoutes, { prefix: "/health", checks: deps.healthChecks });
+  await app.register(healthRoutes, {
+    prefix: "/health",
+    // Critical: the API cannot serve users without these.
+    checks: {
+      ...deps.healthChecks,
+      iam: () => iam.health(),
+      iamJwks: () => verifier.health(),
+    },
+    // Reported, but not yet required by any feature.
+    optionalChecks: {
+      ...(notifications ? { notifications: () => notifications.health() } : {}),
+      ...(files ? { files: () => files.health() } : {}),
+    },
+  });
   await app.register(
     async (v1) => {
       await v1.register(authRoutes, {

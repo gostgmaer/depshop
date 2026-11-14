@@ -46,11 +46,16 @@ enum UserStatus {
   SUSPENDED
 }
 
+/// Local mirror of an identity owned by the shared EasyDev IAM. Credentials,
+/// email verification, password reset and 2FA live in the IAM; DealMind keeps
+/// this row so its own data can reference users by foreign key, plus the
+/// DealMind-specific role and status. Profile fields are synced at sign-in.
 model User {
   id              String     @id @default(uuid(7)) @db.Uuid
+  /// The IAM user id (JWT `sub`). Immutable link to the IAM identity.
+  iamUserId       String     @unique @db.Uuid
   /// Always stored lower-case (CHECK constraint), so uniqueness is case-insensitive.
   email           String     @unique
-  passwordHash    String
   name            String
   role            UserRole   @default(USER)
   status          UserStatus @default(ACTIVE)
@@ -60,7 +65,6 @@ model User {
   updatedAt       DateTime   @updatedAt
 
   sessions               UserSession[]
-  authTokens             AuthToken[]
   preference             UserPreference?
   searches               Search[]
   searchSourceRuns       SearchSourceRun[]
@@ -99,33 +103,21 @@ model UserSession {
   ipAddress    String?
   createdAt    DateTime  @default(now())
 
+  /// The IAM session behind this DealMind session (from the IAM access token).
+  iamSessionId             String?  @db.Uuid
+  /// The user's IAM tokens, AES-256-GCM encrypted with TOKEN_ENCRYPTION_KEY.
+  /// They never leave the server: the browser only holds the DealMind cookie.
+  iamAccessTokenEnc        String
+  iamAccessTokenExpiresAt  DateTime
+  iamRefreshTokenEnc       String
+  iamRefreshTokenExpiresAt DateTime
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([familyId])
   @@index([expiresAt])
-}
-
-enum AuthTokenType {
-  EMAIL_VERIFICATION
-  PASSWORD_RESET
-}
-
-/// Single-use, expiring email-verification and password-reset tokens.
-/// Only the SHA-256 hash is stored; the raw token exists only in the email link.
-model AuthToken {
-  id        String        @id @default(uuid(7)) @db.Uuid
-  userId    String        @db.Uuid
-  type      AuthTokenType
-  tokenHash String        @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime      @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, type])
-  @@index([expiresAt])
+  @@index([iamSessionId])
 }
 
 model UserPreference {

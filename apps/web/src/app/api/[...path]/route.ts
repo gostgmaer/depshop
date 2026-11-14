@@ -7,9 +7,14 @@
  * are passed through unchanged (HttpOnly/SameSite/Secure are set by the API).
  */
 import type { NextRequest } from "next/server";
+import { trustedClientIp } from "@/lib/client-ip";
 
 const API_URL = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4000";
+/** Reverse proxies in front of Next.js that set X-Forwarded-For (0 = none, dev only). */
+const TRUSTED_PROXY_COUNT = Number(process.env.TRUSTED_PROXY_COUNT ?? "0");
 
+// X-Forwarded-For / X-Real-IP are deliberately NOT copied from the client:
+// they are attacker-controlled. See trustedClientIp().
 const FORWARDED_REQUEST_HEADERS = [
   "accept",
   "content-type",
@@ -18,9 +23,6 @@ const FORWARDED_REQUEST_HEADERS = [
   "sec-fetch-site",
   "user-agent",
   "x-csrf-token",
-  "x-forwarded-for",
-  "x-forwarded-proto",
-  "x-real-ip",
 ];
 const FORWARDED_RESPONSE_HEADERS = [
   "content-type",
@@ -43,6 +45,8 @@ async function proxy(request: NextRequest, { params }: Context): Promise<Respons
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  const clientIp = trustedClientIp(request.headers.get("x-forwarded-for"), TRUSTED_PROXY_COUNT);
+  if (clientIp) headers.set("x-forwarded-for", clientIp);
 
   const hasBody = !["GET", "HEAD"].includes(request.method);
   let upstream: Response;

@@ -10,7 +10,7 @@ describe("auth schemas", () => {
   it("normalises email and enforces the password policy", () => {
     const ok = registerInput.parse({
       email: " Asha@Example.COM ",
-      password: "abcdefghi1",
+      password: "Abcdefgh1!x",
       name: "Asha",
     });
     expect(ok.email).toBe("asha@example.com");
@@ -22,8 +22,18 @@ describe("auth schemas", () => {
     ).toBe(false);
   });
 
+  it("matches the shared IAM password policy", () => {
+    const ok = (password: string) =>
+      registerInput.safeParse({ email: "a@b.co", password, name: "A" }).success;
+    expect(ok("Correct-horse-42!")).toBe(true);
+    expect(ok("correct-horse-42!")).toBe(false); // no uppercase
+    expect(ok("CORRECT-HORSE-42!")).toBe(false); // no lowercase
+    expect(ok("Correct-horse-xx!")).toBe(false); // no digit
+    expect(ok("Correct-horse-42-")).toBe(false); // "-" is not in the IAM special set
+  });
+
   it("rejects client-supplied identity or privilege fields", () => {
-    const sneaky = { email: "a@b.co", password: "abcdefghi1", name: "A", role: "ADMIN" };
+    const sneaky = { email: "a@b.co", password: "Abcdefgh1!x", name: "A", role: "ADMIN" };
     expect(registerInput.safeParse(sneaky).success).toBe(false);
     expect(updateProfileInput.safeParse({ name: "A", userId: "x" }).success).toBe(false);
     expect(updatePreferencesInput.safeParse({ notifyEmail: false, userId: "x" }).success).toBe(
@@ -33,7 +43,7 @@ describe("auth schemas", () => {
 
   it("requires a different new password and at least one preference", () => {
     expect(
-      changePasswordInput.safeParse({ currentPassword: "abcdefghi1", newPassword: "abcdefghi1" })
+      changePasswordInput.safeParse({ currentPassword: "Abcdefgh1!x", newPassword: "Abcdefgh1!x" })
         .success,
     ).toBe(false);
     expect(updatePreferencesInput.safeParse({}).success).toBe(false);

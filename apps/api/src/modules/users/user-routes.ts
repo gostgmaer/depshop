@@ -25,7 +25,7 @@ export const userRoutes: FastifyPluginAsyncZod<{ users: UserService }> = async (
         response: { 200: meResponse },
       },
     },
-    async (req) => ({ user: await users.updateProfile(getAuth(req).userId, req.body) }),
+    async (req) => ({ user: await users.updateProfile(getAuth(req), req.body) }),
   );
 
   app.get(

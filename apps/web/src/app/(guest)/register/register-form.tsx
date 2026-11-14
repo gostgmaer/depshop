@@ -74,7 +74,7 @@ export function RegisterForm() {
       <Field
         label="Password"
         error={errors.password?.message}
-        hint="At least 10 characters, with a letter and a number."
+        hint="At least 10 characters with upper- and lowercase letters, a number and one of @$!%*?&."
       >
         {(p) => (
           <Input

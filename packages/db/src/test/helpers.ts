@@ -18,10 +18,21 @@ export function createUser(prisma: PrismaClient, data: Partial<Prisma.UserCreate
     data: {
       email: `user-${unique()}@example.com`,
       name: "Test User",
-      passwordHash: "argon2-hash-placeholder",
+      iamUserId: randomUUID(),
       ...data,
     },
   });
+}
+
+/** Placeholder (not real ciphertext) values for the encrypted IAM token columns. */
+export function iamTokenFields() {
+  const later = new Date(Date.now() + 86_400_000);
+  return {
+    iamAccessTokenEnc: "test-ciphertext",
+    iamAccessTokenExpiresAt: later,
+    iamRefreshTokenEnc: "test-ciphertext",
+    iamRefreshTokenExpiresAt: later,
+  };
 }
 
 /** Minimal global catalog: one source, product, variant and offer. */

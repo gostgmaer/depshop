@@ -86,6 +86,8 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
         data: { status: req.body.status },
         select: adminSelect,
       });
+      // DealMind-side suspension: ends DealMind sessions. The IAM account itself is
+      // shared with other EasyDev products and is not touched.
       if (req.body.status === "SUSPENDED") await sessions.revokeAllForUser(user.id);
       await recordAudit(prisma, {
         actorId: actor.userId,

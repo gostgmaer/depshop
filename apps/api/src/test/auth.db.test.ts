@@ -1,18 +1,22 @@
 /**
- * Authentication & authorization integration tests: real Fastify app, real
- * PostgreSQL (*_api_test), real cookies and CSRF. The numbered describes map
- * to the Phase 1.4 test requirements.
+ * Authentication & authorization integration tests: the real Fastify app and
+ * real PostgreSQL (*_api_test), with the shared EasyDev IAM replaced by an
+ * in-memory fake that reproduces its observed contract (see fake-iam.ts).
+ * Numbered describes map to the Phase 1.4 test requirements.
  */
 import { createHash } from "node:crypto";
 import type { ErrorResponseBody, MeResponse, SessionsResponse } from "@dealmind/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { TokenCipher } from "../lib/token-cipher.js";
 import {
   Agent,
   PASSWORD,
+  TOKEN_KEY,
   type TestContext,
   createTestApp,
+  expireIamAccessTokens,
   signUp,
-  tokenFromEmail,
+  tokenFromIam,
   truncateAll,
 } from "./harness.js";
 
@@ -26,39 +30,35 @@ beforeAll(async () => {
 afterAll(() => ctx.close());
 beforeEach(async () => {
   await truncateAll(ctx.prisma);
-  ctx.mail.clear();
+  ctx.iam.reset();
 });
 
 describe("1. registration", () => {
-  it("creates an unverified user with Argon2id hash, preferences, FREE plan and a hashed verification token", async () => {
+  it("creates the account in the IAM, splits the name, and does not sign in", async () => {
     const agent = new Agent(ctx.app);
     const res = await agent.post("/api/v1/auth/register", {
       email: "Asha@Example.com",
       password: PASSWORD,
-      name: "Asha",
+      name: "Asha Rao Iyer",
     });
     expect(res.statusCode).toBe(202);
-    expect(agent.cookie("dm_session")).toBeUndefined(); // registration does not sign in
+    expect(agent.cookie("dm_session")).toBeUndefined();
 
-    const user = await ctx.prisma.user.findUniqueOrThrow({
-      where: { email: "asha@example.com" },
-      include: { preference: true, subscription: true },
+    const [call] = ctx.iam.callsTo("/auth/register");
+    expect(call?.tenant).toBe("easydev"); // config constant, not a DealMind concept
+    expect(call?.body).toEqual({
+      email: "asha@example.com",
+      password: PASSWORD,
+      firstName: "Asha",
+      lastName: "Rao Iyer",
+      // No displayName: the IAM's RegisterDto rejects unknown properties.
     });
-    expect(user.passwordHash).toMatch(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
-    expect(user.emailVerifiedAt).toBeNull();
-    expect(user.preference).not.toBeNull();
-    expect(user.subscription?.planCode).toBe("FREE");
-
-    const [mail] = ctx.mail.to("asha@example.com");
-    expect(mail?.subject).toMatch(/verify/i);
-    const token = tokenFromEmail(ctx.mail, "asha@example.com");
-    expect(mail?.text).toContain(`http://localhost:3000/verify-email?token=${token}`);
-    const stored = await ctx.prisma.authToken.findFirstOrThrow({ where: { userId: user.id } });
-    expect(stored.tokenHash).toBe(sha256(token)); // only the hash is stored
-    expect(stored.tokenHash).not.toContain(token);
+    expect(ctx.iam.users.get("asha@example.com")?.verified).toBe(false);
+    // The local mirror is created on first sign-in, not at registration.
+    expect(await ctx.prisma.user.count()).toBe(0);
   });
 
-  it("rejects weak passwords and client-supplied privilege fields", async () => {
+  it("rejects weak passwords and client-supplied privilege fields before calling the IAM", async () => {
     const agent = new Agent(ctx.app);
     const weak = await agent.post("/api/v1/auth/register", {
       email: "a@b.co",
@@ -66,6 +66,12 @@ describe("1. registration", () => {
       name: "A",
     });
     expect(weak.statusCode).toBe(422);
+    const noSpecial = await agent.post("/api/v1/auth/register", {
+      email: "a@b.co",
+      password: "Correcthorse42",
+      name: "A",
+    });
+    expect(noSpecial.statusCode).toBe(422); // IAM policy needs one of @$!%*?&
     const sneaky = await agent.post("/api/v1/auth/register", {
       email: "a@b.co",
       password: PASSWORD,
@@ -73,31 +79,26 @@ describe("1. registration", () => {
       role: "ADMIN",
     });
     expect(sneaky.statusCode).toBe(422);
-    expect(await ctx.prisma.user.count()).toBe(0);
+    expect(ctx.iam.callsTo("/auth/register")).toHaveLength(0);
   });
 });
 
 describe("2. duplicate registration", () => {
-  it("responds identically, creates nothing, and notifies the real owner", async () => {
+  it("responds identically when the IAM reports the account exists", async () => {
     const agent = new Agent(ctx.app);
     const body = { email: "dup@example.com", password: PASSWORD, name: "Dup" };
     const first = await agent.post("/api/v1/auth/register", body);
     const second = await agent.post("/api/v1/auth/register", { ...body, name: "Attacker" });
-
     expect(second.statusCode).toBe(first.statusCode);
-    expect(second.json()).toEqual(first.json()); // no account enumeration
-    expect(await ctx.prisma.user.count()).toBe(1);
-    expect((await ctx.prisma.user.findFirstOrThrow()).name).toBe("Dup");
-    const subjects = ctx.mail.to("dup@example.com").map((m) => m.subject);
-    expect(subjects).toHaveLength(2);
-    expect(subjects[1]).toMatch(/tried to create/i);
-    expect(await ctx.prisma.authToken.count()).toBe(1);
+    expect(second.json()).toEqual(first.json()); // the IAM's 409 is not revealed
+    expect(ctx.iam.users.size).toBe(1);
+    expect(ctx.iam.users.get("dup@example.com")?.firstName).toBe("Dup");
   });
 });
 
 describe("3. login", () => {
-  it("sets an HttpOnly, SameSite=Lax session cookie and never returns secrets", async () => {
-    await signUp(ctx, "login@example.com");
+  it("sets an HttpOnly, SameSite=Lax cookie, mirrors the IAM user, and never leaks IAM data", async () => {
+    await signUp(ctx, "login@example.com", { name: "Login User" });
     const agent = new Agent(ctx.app);
     const res = await agent.post("/api/v1/auth/login", {
       email: "LOGIN@example.com",
@@ -111,30 +112,50 @@ describe("3. login", () => {
         httpOnly?: boolean;
         sameSite?: string;
         path?: string;
-        secure?: boolean;
         maxAge?: number;
       }[]
     ).find((c) => c.name === "dm_session");
-    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "Lax", path: "/" });
-    expect(cookie?.maxAge).toBe(30 * 86_400);
-    expect(res.body).not.toMatch(/passwordHash|tokenHash|argon2/);
+    expect(cookie).toMatchObject({
+      httpOnly: true,
+      sameSite: "Lax",
+      path: "/",
+      maxAge: 30 * 86_400,
+    });
+    // The IAM login response contains passwordHash/twoFactorSecret and tokens:
+    // none of it may reach the browser.
+    expect(res.body).not.toMatch(/passwordHash|twoFactorSecret|accessToken|refreshToken|\$2b\$/);
     expect(res.json<MeResponse>().user).toMatchObject({
       email: "login@example.com",
+      name: "Login User",
       role: "USER",
       emailVerified: true,
     });
 
+    const iamUser = ctx.iam.users.get("login@example.com");
+    const mirror = await ctx.prisma.user.findUniqueOrThrow({
+      where: { email: "login@example.com" },
+    });
+    expect(mirror.iamUserId).toBe(iamUser?.id);
     const raw = agent.cookie("dm_session") ?? "";
     expect(await ctx.prisma.userSession.count({ where: { tokenHash: sha256(raw) } })).toBe(1);
     expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200);
   });
 
+  it("stores IAM tokens encrypted, never in plaintext", async () => {
+    const { userId } = await signUp(ctx, "crypto@example.com");
+    const session = await ctx.prisma.userSession.findFirstOrThrow({ where: { userId } });
+    expect(session.iamAccessTokenEnc).toMatch(/^v1\./);
+    expect(session.iamAccessTokenEnc).not.toContain("eyJ"); // no raw JWT
+    const cipher = new TokenCipher(TOKEN_KEY);
+    expect(cipher.decrypt(session.iamAccessTokenEnc).split(".")).toHaveLength(3);
+    expect(session.iamSessionId).not.toBeNull();
+  });
+
   it("uses __Host- prefixed Secure cookies when COOKIE_SECURE=true", async () => {
-    const secure = await createTestApp({ COOKIE_SECURE: "true" });
+    const secure = await createTestApp({ COOKIE_SECURE: "true" }, {}, ctx.iam);
     try {
       await signUp(secure, "secure@example.com");
-      const agent = new Agent(secure.app);
-      const res = await agent.post("/api/v1/auth/login", {
+      const res = await new Agent(secure.app).post("/api/v1/auth/login", {
         email: "secure@example.com",
         password: PASSWORD,
       });
@@ -153,8 +174,7 @@ describe("3. login", () => {
     const { agent } = await signUp(ctx, "fixation@example.com");
     const before = agent.cookie("dm_session");
     await agent.post("/api/v1/auth/login", { email: "fixation@example.com", password: PASSWORD });
-    const after = agent.cookie("dm_session");
-    expect(after).not.toBe(before);
+    expect(agent.cookie("dm_session")).not.toBe(before);
     const old = await ctx.prisma.userSession.findUniqueOrThrow({
       where: { tokenHash: sha256(before ?? "") },
     });
@@ -168,70 +188,75 @@ describe("4. incorrect password", () => {
     const agent = new Agent(ctx.app);
     const wrong = await agent.post("/api/v1/auth/login", {
       email: "victim@example.com",
-      password: "wrong-pass-1",
+      password: "Wrong-pass-1!",
     });
     const unknown = await agent.post("/api/v1/auth/login", {
       email: "nobody@example.com",
-      password: "wrong-pass-1",
+      password: "Wrong-pass-1!",
     });
-    expect(wrong.statusCode).toBe(401);
-    expect(unknown.statusCode).toBe(401);
+    expect([wrong.statusCode, unknown.statusCode]).toEqual([401, 401]);
     expect(errorOf(wrong).message).toBe(errorOf(unknown).message);
     expect(agent.cookie("dm_session")).toBeUndefined();
   });
 
-  it("locks an account after repeated failures, even for the right password", async () => {
+  it("locks an account after repeated failures without even asking the IAM", async () => {
     await signUp(ctx, "locked@example.com");
     const agent = new Agent(ctx.app);
     for (let i = 0; i < 5; i += 1) {
       await agent.post("/api/v1/auth/login", {
         email: "locked@example.com",
-        password: "wrong-pass-1",
+        password: "Wrong-pass-1!",
       });
     }
+    const loginsBefore = ctx.iam.callsTo("/auth/login").length;
     const res = await agent.post("/api/v1/auth/login", {
       email: "locked@example.com",
       password: PASSWORD,
     });
     expect(res.statusCode).toBe(429);
+    expect(ctx.iam.callsTo("/auth/login")).toHaveLength(loginsBefore);
   });
 
-  it("rejects a suspended user's correct password", async () => {
+  it("rejects a DealMind-suspended user's correct password and ends the IAM session", async () => {
     const { userId } = await signUp(ctx, "suspended@example.com");
     await ctx.prisma.user.update({ where: { id: userId }, data: { status: "SUSPENDED" } });
+    const logoutsBefore = ctx.iam.callsTo("/auth/logout").length;
     const res = await new Agent(ctx.app).post("/api/v1/auth/login", {
       email: "suspended@example.com",
       password: PASSWORD,
     });
     expect(res.statusCode).toBe(403);
+    expect(ctx.iam.callsTo("/auth/logout").length).toBe(logoutsBefore + 1);
   });
 });
 
 describe("5. logout", () => {
-  it("revokes the session server-side and clears the cookie", async () => {
-    const { agent } = await signUp(ctx, "bye@example.com");
+  it("revokes the DealMind session and the IAM session, and clears the cookie", async () => {
+    const { agent, userId } = await signUp(ctx, "bye@example.com");
     const stolen = agent.cookie("dm_session") ?? "";
-    const res = await agent.post("/api/v1/auth/logout");
-    expect(res.statusCode).toBe(204);
-    expect(agent.cookie("dm_session")).toBeUndefined();
+    const { iamSessionId } = await ctx.prisma.userSession.findFirstOrThrow({
+      where: { userId, revokedAt: null },
+    });
 
-    // Replaying the old cookie value must not work.
+    expect((await agent.post("/api/v1/auth/logout")).statusCode).toBe(204);
+    expect(agent.cookie("dm_session")).toBeUndefined();
+    expect(ctx.iam.sessions.get(iamSessionId ?? "")?.revoked).toBe(true);
+
     const replay = new Agent(ctx.app);
     replay.jar.set("dm_session", stolen);
     expect((await replay.get("/api/v1/auth/me")).statusCode).toBe(401);
   });
 });
 
-describe("6. expired sessions", () => {
+describe("6. expired and revoked sessions", () => {
   it("rejects sessions past their absolute expiry", async () => {
     const { agent, userId } = await signUp(ctx, "expired@example.com");
     await ctx.prisma.userSession.updateMany({
       where: { userId },
       data: { expiresAt: new Date(Date.now() - 1_000), createdAt: new Date(Date.now() - 10_000) },
     });
-    const res = await agent.get("/api/v1/auth/me");
-    expect(res.statusCode).toBe(401);
-    expect(agent.cookie("dm_session")).toBeUndefined(); // dead cookie cleared
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(401);
+    expect(agent.cookie("dm_session")).toBeUndefined();
   });
 
   it("rejects sessions idle longer than the idle timeout", async () => {
@@ -242,41 +267,52 @@ describe("6. expired sessions", () => {
     });
     expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(401);
   });
+
+  it("ends the DealMind session once the IAM session is revoked elsewhere", async () => {
+    const { agent, userId } = await signUp(ctx, "elsewhere@example.com");
+    ctx.iam.revokeAllSessions("elsewhere@example.com");
+    // Still valid until the cached IAM access token needs revalidation...
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200);
+    await expireIamAccessTokens(ctx.prisma, userId);
+    // ...then the refresh fails and the session ends.
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(401);
+  });
+
+  it("refreshes IAM tokens transparently and exactly once under concurrency", async () => {
+    const { agent, userId } = await signUp(ctx, "refresh@example.com");
+    await expireIamAccessTokens(ctx.prisma, userId);
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => agent.get("/api/v1/auth/me")),
+    );
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200, 200, 200]);
+    // A second refresh with the same single-use token would revoke the IAM session.
+    expect(ctx.iam.callsTo("/auth/refresh")).toHaveLength(1);
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200);
+  });
 });
 
 describe("7. email verification", () => {
-  it("verifies once; tokens are single-use, expire, and are replaced on resend", async () => {
+  it("verifies via the IAM token, reflects it for the signed-in user, and is single-use", async () => {
     const { agent } = await signUp(ctx, "verify@example.com", { verify: false });
     expect((await agent.get("/api/v1/auth/me")).json<MeResponse>().user.emailVerified).toBe(false);
 
-    const first = tokenFromEmail(ctx.mail, "verify@example.com");
+    const first = tokenFromIam(ctx.iam, "verify@example.com", "verify");
     expect((await agent.post("/api/v1/auth/resend-verification")).statusCode).toBe(200);
-    const second = tokenFromEmail(ctx.mail, "verify@example.com");
+    const second = tokenFromIam(ctx.iam, "verify@example.com", "verify");
     expect(second).not.toBe(first);
-    expect((await agent.post("/api/v1/auth/verify-email", { token: first })).statusCode).toBe(400); // superseded
+    expect((await agent.post("/api/v1/auth/verify-email", { token: first })).statusCode).toBe(400);
 
     expect((await agent.post("/api/v1/auth/verify-email", { token: second })).statusCode).toBe(200);
     expect((await agent.get("/api/v1/auth/me")).json<MeResponse>().user.emailVerified).toBe(true);
-    expect((await agent.post("/api/v1/auth/verify-email", { token: second })).statusCode).toBe(400); // reused
-  });
-
-  it("rejects expired verification tokens", async () => {
-    const { agent, userId } = await signUp(ctx, "late@example.com", { verify: false });
-    const token = tokenFromEmail(ctx.mail, "late@example.com");
-    await ctx.prisma.authToken.updateMany({
-      where: { userId },
-      data: { createdAt: new Date(Date.now() - 10_000), expiresAt: new Date(Date.now() - 1_000) },
-    });
-    const res = await agent.post("/api/v1/auth/verify-email", { token });
-    expect(res.statusCode).toBe(400);
-    expect(errorOf(res).message).toMatch(/invalid or has expired/);
+    const reused = await agent.post("/api/v1/auth/verify-email", { token: second });
+    expect(reused.statusCode).toBe(400);
+    expect(errorOf(reused).message).toMatch(/invalid or has expired/);
   });
 });
 
 describe("8. password reset & change", () => {
   it("does not reveal whether an email exists", async () => {
     await signUp(ctx, "known@example.com");
-    ctx.mail.clear();
     const agent = new Agent(ctx.app);
     const known = await agent.post("/api/v1/auth/forgot-password", { email: "known@example.com" });
     const unknown = await agent.post("/api/v1/auth/forgot-password", {
@@ -284,57 +320,59 @@ describe("8. password reset & change", () => {
     });
     expect([known.statusCode, unknown.statusCode]).toEqual([202, 202]);
     expect(known.json()).toEqual(unknown.json());
-    expect(ctx.mail.to("known@example.com")).toHaveLength(1);
-    expect(ctx.mail.to("ghost@example.com")).toHaveLength(0);
+    expect(ctx.iam.lastResetToken.has("known@example.com")).toBe(true);
+    expect(ctx.iam.lastResetToken.has("ghost@example.com")).toBe(false);
   });
 
-  it("resets the password with a single-use token and signs out every session", async () => {
-    const { agent: laptop } = await signUp(ctx, "reset@example.com");
-    const phone = new Agent(ctx.app);
-    await phone.post("/api/v1/auth/login", { email: "reset@example.com", password: PASSWORD });
-
+  it("resets the password via the IAM; existing sessions end at IAM revalidation", async () => {
+    const { agent: laptop, userId } = await signUp(ctx, "reset@example.com");
     const anon = new Agent(ctx.app);
     await anon.post("/api/v1/auth/forgot-password", { email: "reset@example.com" });
-    const token = tokenFromEmail(ctx.mail, "reset@example.com");
-    const res = await anon.post("/api/v1/auth/reset-password", {
+    const token = tokenFromIam(ctx.iam, "reset@example.com", "reset");
+    const reset = await anon.post("/api/v1/auth/reset-password", {
       token,
-      password: "brand-new-pass-7",
+      password: "Brand-new-pass-7!",
     });
-    expect(res.statusCode).toBe(200);
-    expect(
-      (await anon.post("/api/v1/auth/reset-password", { token, password: "another-pass-8" }))
-        .statusCode,
-    ).toBe(400);
+    expect(reset.statusCode).toBe(200);
+    const again = await anon.post("/api/v1/auth/reset-password", {
+      token,
+      password: "Another-pass-8!",
+    });
+    expect(again.statusCode).toBe(400);
 
+    await expireIamAccessTokens(ctx.prisma, userId);
     expect((await laptop.get("/api/v1/auth/me")).statusCode).toBe(401);
-    expect((await phone.get("/api/v1/auth/me")).statusCode).toBe(401);
     const login = (password: string) =>
       new Agent(ctx.app).post("/api/v1/auth/login", { email: "reset@example.com", password });
     expect((await login(PASSWORD)).statusCode).toBe(401);
-    expect((await login("brand-new-pass-7")).statusCode).toBe(200);
-    expect(ctx.mail.to("reset@example.com").at(-1)?.subject).toMatch(/password was changed/i);
+    expect((await login("Brand-new-pass-7!")).statusCode).toBe(200);
   });
 
-  it("changes the password, revokes other sessions and rotates the current one", async () => {
-    const { agent: laptop } = await signUp(ctx, "change@example.com");
+  it("changes the password, revokes other sessions (and their IAM sessions), rotates this one", async () => {
+    const { agent: laptop, userId } = await signUp(ctx, "change@example.com");
     const phone = new Agent(ctx.app);
     await phone.post("/api/v1/auth/login", { email: "change@example.com", password: PASSWORD });
-    const before = laptop.cookie("dm_session") ?? "";
+    const phoneRow = await ctx.prisma.userSession.findFirstOrThrow({
+      where: { userId, revokedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
+    const before = laptop.cookie("dm_session");
 
     const wrong = await laptop.post("/api/v1/auth/change-password", {
-      currentPassword: "not-my-password-1",
-      newPassword: "changed-pass-99",
+      currentPassword: "Not-my-password-1!",
+      newPassword: "Changed-pass-99!",
     });
     expect(wrong.statusCode).toBe(400);
 
     const ok = await laptop.post("/api/v1/auth/change-password", {
       currentPassword: PASSWORD,
-      newPassword: "changed-pass-99",
+      newPassword: "Changed-pass-99!",
     });
     expect(ok.statusCode).toBe(200);
-    expect(laptop.cookie("dm_session")).not.toBe(before); // rotated
+    expect(laptop.cookie("dm_session")).not.toBe(before);
     expect((await laptop.get("/api/v1/auth/me")).statusCode).toBe(200);
     expect((await phone.get("/api/v1/auth/me")).statusCode).toBe(401);
+    expect(ctx.iam.sessions.get(phoneRow.iamSessionId ?? "")?.revoked).toBe(true);
   });
 
   it("treats replay of a rotated-away session token as theft and revokes the family", async () => {
@@ -342,13 +380,11 @@ describe("8. password reset & change", () => {
     const old = agent.cookie("dm_session") ?? "";
     await agent.post("/api/v1/auth/change-password", {
       currentPassword: PASSWORD,
-      newPassword: "changed-pass-99",
+      newPassword: "Changed-pass-99!",
     });
-
     const attacker = new Agent(ctx.app);
     attacker.jar.set("dm_session", old);
     expect((await attacker.get("/api/v1/auth/me")).statusCode).toBe(401);
-    // The legitimate (rotated) session in the same family is revoked too.
     expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(401);
   });
 });
@@ -371,10 +407,23 @@ describe("9. protected routes", () => {
     expect(errorOf(res).code).toBe("UNAUTHENTICATED");
   });
 
-  it("rejects forged session cookies", async () => {
-    const agent = new Agent(ctx.app);
-    agent.jar.set("dm_session", "forged-value-that-is-not-a-real-session");
-    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(401);
+  it("rejects forged session cookies and never accepts a raw IAM token", async () => {
+    const forged = new Agent(ctx.app);
+    forged.jar.set("dm_session", "forged-value-that-is-not-a-real-session");
+    expect((await forged.get("/api/v1/auth/me")).statusCode).toBe(401);
+
+    const iamToken = await ctx.iam.sign({
+      sub: "x",
+      email: "x@example.com",
+      type: "access",
+      sessionId: "s",
+    });
+    const bearer = await ctx.app.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${iamToken}` },
+    });
+    expect(bearer.statusCode).toBe(401); // browsers authenticate only via the DealMind cookie
   });
 });
 
@@ -403,12 +452,14 @@ describe("10. USER versus ADMIN", () => {
   });
 
   it("applies role changes immediately and rotates the target's sessions", async () => {
-    const { agent: admin } = await signUp(ctx, "root@example.com", { role: "ADMIN" });
+    const { agent: admin, userId: adminId } = await signUp(ctx, "root@example.com", {
+      role: "ADMIN",
+    });
     const { agent: user, userId } = await signUp(ctx, "promote@example.com");
 
     const promote = await admin.patch(`/api/v1/admin/users/${userId}/role`, { role: "ADMIN" });
     expect(promote.statusCode).toBe(200);
-    expect((await user.get("/api/v1/auth/me")).statusCode).toBe(401); // must re-authenticate
+    expect((await user.get("/api/v1/auth/me")).statusCode).toBe(401);
     await user.post("/api/v1/auth/login", { email: "promote@example.com", password: PASSWORD });
     expect((await user.get("/api/v1/admin/users")).statusCode).toBe(200);
 
@@ -416,11 +467,7 @@ describe("10. USER versus ADMIN", () => {
       where: { action: "admin.user_role_changed" },
     });
     expect(audit.entityId).toBe(userId);
-
-    const self = await admin.patch(
-      `/api/v1/admin/users/${(await ctx.prisma.user.findUniqueOrThrow({ where: { email: "root@example.com" } })).id}/role`,
-      { role: "USER" },
-    );
+    const self = await admin.patch(`/api/v1/admin/users/${adminId}/role`, { role: "USER" });
     expect(self.statusCode).toBe(403);
   });
 
@@ -444,29 +491,35 @@ describe("11. cross-user private data", () => {
 
     const bobsView = (await bob.get("/api/v1/auth/sessions")).json<SessionsResponse>();
     expect(bobsView.sessions.map((s) => s.id)).not.toContain(aliceSession.id);
-
-    const attack = await bob.delete(`/api/v1/auth/sessions/${aliceSession.id}`);
-    expect(attack.statusCode).toBe(404); // not 403: existence is not leaked
+    expect((await bob.delete(`/api/v1/auth/sessions/${aliceSession.id}`)).statusCode).toBe(404);
     expect((await alice.get("/api/v1/auth/me")).statusCode).toBe(200);
+    expect(ctx.iam.sessions.get(aliceSession.iamSessionId ?? "")?.revoked).toBe(false);
   });
 
   it("profile and preference updates only ever touch the caller", async () => {
     const { agent: alice } = await signUp(ctx, "alice2@example.com", { name: "Alice" });
     const { userId: bobId } = await signUp(ctx, "bob2@example.com", { name: "Bob" });
 
-    const smuggled = await alice.patch("/api/v1/users/me/preferences", {
+    const smuggledPrefs = await alice.patch("/api/v1/users/me/preferences", {
       notifyEmail: false,
       userId: bobId,
     });
-    expect(smuggled.statusCode).toBe(422);
-    expect(
-      (await alice.patch("/api/v1/users/me", { name: "Bob Hacked", userId: bobId })).statusCode,
-    ).toBe(422);
-
+    expect(smuggledPrefs.statusCode).toBe(422);
+    const smuggledName = await alice.patch("/api/v1/users/me", {
+      name: "Bob Hacked",
+      userId: bobId,
+    });
+    expect(smuggledName.statusCode).toBe(422);
     expect(
       (await alice.patch("/api/v1/users/me/preferences", { notifyEmail: false })).statusCode,
     ).toBe(200);
-    expect((await alice.patch("/api/v1/users/me", { name: "Alice B" })).statusCode).toBe(200);
+
+    const renamed = await alice.patch("/api/v1/users/me", { name: "Alice Bhatt" });
+    expect(renamed.json<MeResponse>().user.name).toBe("Alice Bhatt");
+    expect(ctx.iam.users.get("alice2@example.com")).toMatchObject({
+      firstName: "Alice",
+      lastName: "Bhatt",
+    });
 
     const bob = await ctx.prisma.user.findUniqueOrThrow({
       where: { id: bobId },
@@ -474,25 +527,30 @@ describe("11. cross-user private data", () => {
     });
     expect(bob.name).toBe("Bob");
     expect(bob.preference?.notifyEmail).toBe(true);
+    expect(ctx.iam.users.get("bob2@example.com")?.firstName).toBe("Bob");
   });
 });
 
 describe("12. session revocation", () => {
-  it("lists sessions without secrets and revokes another device", async () => {
-    const { agent: laptop } = await signUp(ctx, "devices@example.com");
+  it("lists sessions without secrets and revokes another device (and its IAM session)", async () => {
+    const { agent: laptop, userId } = await signUp(ctx, "devices@example.com");
     const phone = new Agent(ctx.app);
     await phone.post("/api/v1/auth/login", { email: "devices@example.com", password: PASSWORD });
 
     const res = await laptop.get("/api/v1/auth/sessions");
-    expect(res.body).not.toMatch(/tokenHash|familyId|dm_session/);
+    expect(res.body).not.toMatch(/tokenHash|familyId|iam|dm_session/i);
     const { sessions } = res.json<SessionsResponse>();
     expect(sessions).toHaveLength(2);
-    expect(sessions.filter((s) => s.current)).toHaveLength(1);
-
     const other = sessions.find((s) => !s.current);
+    const otherRow = await ctx.prisma.userSession.findUniqueOrThrow({
+      where: { id: other?.id ?? "" },
+    });
+
     expect((await laptop.delete(`/api/v1/auth/sessions/${other?.id}`)).statusCode).toBe(204);
     expect((await phone.get("/api/v1/auth/me")).statusCode).toBe(401);
+    expect(ctx.iam.sessions.get(otherRow.iamSessionId ?? "")?.revoked).toBe(true);
     expect((await laptop.get("/api/v1/auth/me")).statusCode).toBe(200);
+    expect(await ctx.prisma.userSession.count({ where: { userId, revokedAt: null } })).toBe(1);
   });
 
   it("revoking the current session signs this browser out", async () => {
@@ -503,12 +561,42 @@ describe("12. session revocation", () => {
     expect(agent.cookie("dm_session")).toBeUndefined();
   });
 
-  it("suspending a user revokes all of their sessions", async () => {
+  it("suspending a user revokes all of their DealMind sessions", async () => {
     const { agent: admin } = await signUp(ctx, "mod@example.com", { role: "ADMIN" });
     const { agent: user, userId } = await signUp(ctx, "naughty@example.com");
     await admin.patch(`/api/v1/admin/users/${userId}/status`, { status: "SUSPENDED" });
     expect(await ctx.prisma.userSession.count({ where: { userId, revokedAt: null } })).toBe(0);
     expect((await user.get("/api/v1/auth/me")).statusCode).toBe(401);
+  });
+});
+
+describe("IAM availability", () => {
+  it("returns 503 (not a credential error) when the IAM is down at sign-in", async () => {
+    await signUp(ctx, "outage@example.com");
+    ctx.iam.down = true;
+    const res = await new Agent(ctx.app).post("/api/v1/auth/login", {
+      email: "outage@example.com",
+      password: PASSWORD,
+    });
+    expect(res.statusCode).toBe(503);
+    expect(errorOf(res).code).toBe("DEPENDENCY_UNAVAILABLE");
+  });
+
+  it("keeps signed-in users working during an outage and never logs them out because of it", async () => {
+    const { agent, userId } = await signUp(ctx, "resilient@example.com");
+    ctx.iam.down = true;
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200); // cached IAM token still valid
+    await expireIamAccessTokens(ctx.prisma, userId);
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(503); // can't revalidate: 503, not 401
+    ctx.iam.down = false;
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200); // session survived
+  });
+
+  it("reports IAM health in readiness", async () => {
+    const ok = await ctx.app.inject({ method: "GET", url: "/health/ready" });
+    expect(ok.json()).toMatchObject({ status: "ok", checks: { iam: "ok", iamJwks: "ok" } });
+    ctx.iam.down = true;
+    expect((await ctx.app.inject({ method: "GET", url: "/health/ready" })).statusCode).toBe(503);
   });
 });
 
@@ -528,16 +616,15 @@ describe("CSRF & origin protection", () => {
         "x-csrf-token": "abc.def",
       },
     });
-    expect(forged.statusCode).toBe(403); // matching but unsigned token
-    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200); // still signed in
+    expect(forged.statusCode).toBe(403);
+    expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200);
   });
 
   it("rejects requests from foreign origins even with a valid token", async () => {
     const { agent } = await signUp(ctx, "origin@example.com");
     const evil = new Agent(ctx.app, "https://evil.example");
     for (const [k, v] of agent.jar) evil.jar.set(k, v);
-    const res = await evil.post("/api/v1/auth/logout");
-    expect(res.statusCode).toBe(403);
+    expect((await evil.post("/api/v1/auth/logout")).statusCode).toBe(403);
     expect((await agent.get("/api/v1/auth/me")).statusCode).toBe(200);
   });
 
@@ -577,14 +664,18 @@ describe("preferences", () => {
 
 describe("rate limiting", () => {
   it("limits login attempts per IP with the production defaults", async () => {
-    const strict = await createTestApp({}, { rateLimits: undefined, loginThrottle: undefined });
+    const strict = await createTestApp(
+      {},
+      { rateLimits: undefined, loginThrottle: undefined },
+      ctx.iam,
+    );
     try {
       const agent = new Agent(strict.app);
       const statuses: number[] = [];
       for (let i = 0; i < 11; i += 1) {
         const res = await agent.post("/api/v1/auth/login", {
           email: `n${i}@example.com`,
-          password: "whatever-1",
+          password: "Whatever-1!",
         });
         statuses.push(res.statusCode);
       }

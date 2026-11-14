@@ -1,4 +1,15 @@
-import { type AuthTokenType, type PrismaClient, isUniqueViolation } from "@dealmind/db";
+/**
+ * Authentication as a BFF in front of the shared EasyDev IAM.
+ *
+ * The IAM owns credentials, email verification, password reset/change and its
+ * own sessions. DealMind adds what a browser-facing app needs on top:
+ *  - its own HttpOnly cookie sessions holding encrypted IAM tokens;
+ *  - account-enumeration-safe responses (the IAM returns 409 for duplicates);
+ *  - per-account login throttling and session rotation;
+ *  - a local User mirror (keyed by IAM user id) for DealMind data ownership,
+ *    plus DealMind-specific role and status.
+ */
+import type { PrismaClient } from "@dealmind/db";
 import {
   AppError,
   DEFAULT_PLANS,
@@ -8,17 +19,17 @@ import {
   type RegisterInput,
 } from "@dealmind/shared";
 import type { LoginThrottle } from "../../lib/login-throttle.js";
-import { hashPassword, verifyAgainstDummy, verifyPassword } from "../../lib/password.js";
-import { generateToken, hashToken } from "../../lib/tokens.js";
-import type { EmailService } from "../email/email-service.js";
+import {
+  type IamClient,
+  IamError,
+  type IamUserProfile,
+  displayNameOf,
+  splitName,
+} from "../iam/iam-client.js";
+import type { IamTokenVerifier } from "../iam/iam-token-verifier.js";
 import { recordAudit } from "../users/audit.js";
 import { toPublicUser, userSelect } from "../users/user-view.js";
 import type { AuthContext, ClientInfo, IssuedSession, SessionService } from "./session-service.js";
-
-export interface AuthServiceOptions {
-  emailVerificationTtlHours: number;
-  passwordResetTtlMinutes: number;
-}
 
 /** Same response for new and existing emails: registration must not enumerate accounts. */
 export const REGISTER_MESSAGE =
@@ -28,78 +39,54 @@ export const FORGOT_PASSWORD_MESSAGE =
 export const INVALID_CREDENTIALS = "Invalid email or password";
 export const INVALID_LINK = "This link is invalid or has expired";
 
+const unavailable = () =>
+  new AppError(ErrorCode.DEPENDENCY_UNAVAILABLE, "The identity service is temporarily unavailable");
+
+/** Re-throws IAM outages as 503; returns other IAM errors for case-specific mapping. */
+function iamFailure(err: unknown): IamError {
+  if (err instanceof IamError) {
+    if (err.unavailable) throw unavailable();
+    return err;
+  }
+  throw err;
+}
+
 export class AuthService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly sessions: SessionService,
-    private readonly email: EmailService,
+    private readonly iam: IamClient,
+    private readonly verifier: IamTokenVerifier,
     private readonly throttle: LoginThrottle,
-    private readonly opts: AuthServiceOptions,
   ) {}
 
   // ── Registration & login ────────────────────────────────────────────────
 
-  async register(input: RegisterInput): Promise<void> {
-    // Hash first, unconditionally, so new and existing emails take equal time.
-    const passwordHash = await hashPassword(input.password);
-
-    const existing = await this.prisma.user.findUnique({
-      where: { email: input.email },
-      select: { id: true },
-    });
-    if (existing) {
-      void this.email.sendAccountExists(input.email);
-      return;
-    }
-
-    let user: { id: string };
+  async register(input: RegisterInput, client: ClientInfo): Promise<void> {
     try {
-      const free = DEFAULT_PLANS.FREE;
-      user = await this.prisma.user.create({
-        data: {
-          email: input.email,
-          name: input.name,
-          passwordHash,
-          preference: { create: {} },
-          subscription: {
-            create: {
-              plan: {
-                connectOrCreate: {
-                  where: { code: free.code },
-                  create: { ...free, limits: { ...free.limits } },
-                },
-              },
-            },
-          },
-        },
-        select: { id: true },
+      await this.iam.register({
+        email: input.email,
+        password: input.password,
+        ...splitName(input.name),
+        ...(client.ipAddress ? { clientIp: client.ipAddress } : {}),
       });
     } catch (err) {
-      if (isUniqueViolation(err)) {
-        // Concurrent registration of the same email: behave as "exists".
-        void this.email.sendAccountExists(input.email);
-        return;
+      const e = iamFailure(err);
+      if (e.status === 409) return; // existing account: identical response
+      if (e.status === 403) throw AppError.forbidden("Sign-up is currently closed");
+      if (e.status === 429)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many attempts. Try again later.");
+      if (e.status === 400 || e.status === 422) {
+        // IAM-side validation (e.g. disposable email domain). Not enumeration-sensitive.
+        throw new AppError(ErrorCode.VALIDATION_FAILED, e.message);
       }
-      throw err;
+      throw e;
     }
-
-    const token = await this.issueToken(
-      user.id,
-      "EMAIL_VERIFICATION",
-      this.opts.emailVerificationTtlHours * 3_600_000,
-    );
-    void this.email.sendVerification(
-      input.email,
-      input.name,
-      token,
-      this.opts.emailVerificationTtlHours,
-    );
   }
 
   /**
-   * Verifies credentials and starts a NEW session. Any session presented with
-   * the request is revoked first (session-fixation defence: identifiers are
-   * always rotated on login).
+   * Signs in through the IAM and starts a NEW DealMind session. Any session
+   * presented with the request is revoked first (session-fixation defence).
    */
   async login(
     input: LoginInput,
@@ -108,109 +95,157 @@ export class AuthService {
   ): Promise<{ user: PublicUser; session: IssuedSession }> {
     const key = input.email;
     if (this.throttle.isLocked(key)) {
-      await verifyAgainstDummy(input.password);
       throw new AppError(ErrorCode.RATE_LIMITED, "Too many sign-in attempts. Try again later.");
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: input.email },
-      select: { ...userSelect, passwordHash: true, status: true },
-    });
-    if (!user) {
-      await verifyAgainstDummy(input.password);
-      this.throttle.recordFailure(key);
-      throw AppError.unauthenticated(INVALID_CREDENTIALS);
+    let result;
+    try {
+      result = await this.iam.login(input.email, input.password, client.ipAddress);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 401 || e.status === 404) {
+        this.throttle.recordFailure(key);
+        throw AppError.unauthenticated(INVALID_CREDENTIALS);
+      }
+      if (e.status === 429)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many sign-in attempts. Try again later.");
+      if (e.status === 403) throw AppError.forbidden(e.message);
+      throw e;
     }
-    if (!(await verifyPassword(user.passwordHash, input.password))) {
-      this.throttle.recordFailure(key);
-      throw AppError.unauthenticated(INVALID_CREDENTIALS);
+
+    const claims = await this.verifier.verify(result.accessToken);
+    if (claims.sub !== result.user.id) throw unavailable(); // inconsistent IAM response
+
+    const user = await this.upsertMirror(result.user, claims.isEmailVerified);
+    if (user.status !== "ACTIVE") {
+      await this.iam.logout(result.accessToken).catch(() => undefined);
+      throw AppError.forbidden("This account is suspended");
     }
-    // Only reachable with the correct password, so this reveals nothing to guessers.
-    if (user.status !== "ACTIVE") throw AppError.forbidden("This account is suspended");
 
     this.throttle.recordSuccess(key);
     if (presentedSession) await this.sessions.revoke(presentedSession.sessionId);
-    const session = await this.sessions.create(user.id, client);
+    const session = await this.sessions.create(user.id, client, { tokens: result, claims });
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
     return { user: toPublicUser(user), session };
   }
 
+  /** Creates or refreshes the local mirror of an IAM identity. */
+  private async upsertMirror(profile: IamUserProfile, emailVerified: boolean) {
+    const email = profile.email.toLowerCase();
+    const name = displayNameOf(profile).slice(0, 100);
+    const verifiedAt = emailVerified || profile.isEmailVerified ? new Date() : null;
+    const existing = await this.prisma.user.findUnique({
+      where: { iamUserId: profile.id },
+      select: { id: true, emailVerifiedAt: true },
+    });
+    const select = { ...userSelect, status: true } as const;
+    if (existing) {
+      return this.prisma.user.update({
+        where: { id: existing.id },
+        data: { email, name, emailVerifiedAt: existing.emailVerifiedAt ?? verifiedAt },
+        select,
+      });
+    }
+    const free = DEFAULT_PLANS.FREE;
+    return this.prisma.user.create({
+      data: {
+        iamUserId: profile.id,
+        email,
+        name,
+        emailVerifiedAt: verifiedAt,
+        preference: { create: {} },
+        subscription: {
+          create: {
+            plan: {
+              connectOrCreate: {
+                where: { code: free.code },
+                create: { ...free, limits: { ...free.limits } },
+              },
+            },
+          },
+        },
+      },
+      select,
+    });
+  }
+
+  /** Ends the DealMind session and its IAM session (best effort). */
   async logout(auth: AuthContext): Promise<void> {
+    const accessToken = await this.sessions.getIamAccessToken(auth.sessionId).catch(() => null);
     await this.sessions.revoke(auth.sessionId);
+    if (accessToken) await this.iam.logout(accessToken).catch(() => undefined);
   }
 
   // ── Email verification ─────────────────────────────────────────────────
 
-  async verifyEmail(token: string): Promise<void> {
-    const userId = await this.consumeToken(token, "EMAIL_VERIFICATION");
-    await this.prisma.user.updateMany({
-      where: { id: userId, emailVerifiedAt: null },
-      data: { emailVerifiedAt: new Date() },
-    });
+  async verifyEmail(token: string, auth: AuthContext | null): Promise<void> {
+    try {
+      await this.iam.verifyEmail(token);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 400 || e.status === 404 || e.status === 410) {
+        throw new AppError(ErrorCode.BAD_REQUEST, INVALID_LINK);
+      }
+      throw e;
+    }
+    // If the verifying browser is signed in, reflect the change immediately.
+    if (auth) {
+      await this.prisma.user.updateMany({
+        where: { id: auth.userId, emailVerifiedAt: null },
+        data: { emailVerifiedAt: new Date() },
+      });
+    }
   }
 
   async resendVerification(auth: AuthContext): Promise<"sent" | "already-verified"> {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: auth.userId },
-      select: { email: true, name: true, emailVerifiedAt: true },
+      select: { email: true, emailVerifiedAt: true },
     });
     if (user.emailVerifiedAt) return "already-verified";
-    const ttl = this.opts.emailVerificationTtlHours;
-    const token = await this.issueToken(auth.userId, "EMAIL_VERIFICATION", ttl * 3_600_000);
-    void this.email.sendVerification(user.email, user.name, token, ttl);
+    try {
+      await this.iam.sendVerification(user.email);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 429)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Please wait before requesting another email.");
+      throw e;
+    }
     return "sent";
   }
 
   // ── Password reset & change ─────────────────────────────────────────────
 
-  async forgotPassword(email: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      select: { id: true, status: true },
-    });
-    if (!user || user.status !== "ACTIVE") return;
-    const ttl = this.opts.passwordResetTtlMinutes;
-    const token = await this.issueToken(user.id, "PASSWORD_RESET", ttl * 60_000);
-    void this.email.sendPasswordReset(email, token, ttl);
+  async forgotPassword(email: string, client: ClientInfo): Promise<void> {
+    try {
+      await this.iam.forgotPassword(email, client.ipAddress);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 429)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many requests. Try again later.");
+      // Any other IAM answer is swallowed: the response must not reveal account existence.
+    }
   }
 
   /**
-   * Sets a new password from a reset link. Signs out EVERY session (the reset
-   * may be in response to a compromise) and does not sign the user in.
+   * Sets a new password from a reset link. The IAM revokes the account's IAM
+   * sessions; DealMind sessions follow at their next IAM revalidation.
    */
   async resetPassword(token: string, password: string): Promise<void> {
-    const passwordHash = await hashPassword(password);
-    const userId = await this.consumeToken(token, "PASSWORD_RESET");
-    const current = await this.prisma.user.findUniqueOrThrow({
-      where: { id: userId },
-      select: { email: true, emailVerifiedAt: true },
-    });
-    const user = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        passwordHash,
-        // Following the emailed link proves control of the inbox.
-        ...(current.emailVerifiedAt ? {} : { emailVerifiedAt: new Date() }),
-      },
-      select: { email: true },
-    });
-    await this.prisma.authToken.deleteMany({
-      where: { userId, type: "PASSWORD_RESET", usedAt: null },
-    });
-    await this.sessions.revokeAllForUser(userId);
-    this.throttle.recordSuccess(user.email);
-    await recordAudit(this.prisma, {
-      actorId: userId,
-      action: "auth.password_reset",
-      entity: "User",
-      entityId: userId,
-    });
-    void this.email.sendPasswordChanged(user.email);
+    try {
+      await this.iam.resetPassword(token, password);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 400 || e.status === 404 || e.status === 410) {
+        throw new AppError(ErrorCode.BAD_REQUEST, INVALID_LINK);
+      }
+      throw e;
+    }
   }
 
   /**
-   * Changes the password for a signed-in user, revokes all OTHER sessions and
-   * rotates the current session identifier.
+   * Changes the password in the IAM, revokes all OTHER sessions (DealMind and
+   * their IAM sessions) and rotates the current DealMind session identifier.
    */
   async changePassword(
     auth: AuthContext,
@@ -218,18 +253,20 @@ export class AuthService {
     newPassword: string,
     client: ClientInfo,
   ): Promise<IssuedSession> {
-    const user = await this.prisma.user.findUniqueOrThrow({
-      where: { id: auth.userId },
-      select: { email: true, passwordHash: true },
-    });
-    if (!(await verifyPassword(user.passwordHash, currentPassword))) {
-      throw new AppError(ErrorCode.BAD_REQUEST, "Current password is incorrect");
+    const accessToken = await this.sessions.getIamAccessToken(auth.sessionId);
+    try {
+      await this.iam.changePassword(accessToken, currentPassword, newPassword);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 400 || e.status === 401 || e.status === 403) {
+        throw new AppError(ErrorCode.BAD_REQUEST, "Current password is incorrect");
+      }
+      throw e;
     }
-    await this.prisma.user.update({
-      where: { id: auth.userId },
-      data: { passwordHash: await hashPassword(newPassword) },
-    });
-    await this.sessions.revokeAllForUser(auth.userId, auth.sessionId);
+    const otherIamSessions = await this.sessions.revokeAllForUser(auth.userId, auth.sessionId);
+    await Promise.all(
+      otherIamSessions.map((id) => this.iam.revokeSession(accessToken, id).catch(() => undefined)),
+    );
     const rotated = await this.sessions.rotate(auth.sessionId, auth.userId, client);
     await recordAudit(this.prisma, {
       actorId: auth.userId,
@@ -237,44 +274,16 @@ export class AuthService {
       entity: "User",
       entityId: auth.userId,
     });
-    void this.email.sendPasswordChanged(user.email);
     return rotated;
   }
 
-  // ── Single-use email tokens ─────────────────────────────────────────────
-
-  /** Issues a new token, invalidating any outstanding token of the same type. */
-  private async issueToken(userId: string, type: AuthTokenType, ttlMs: number): Promise<string> {
-    const token = generateToken();
-    await this.prisma.$transaction([
-      this.prisma.authToken.deleteMany({ where: { userId, type, usedAt: null } }),
-      this.prisma.authToken.create({
-        data: {
-          userId,
-          type,
-          tokenHash: hashToken(token),
-          expiresAt: new Date(Date.now() + ttlMs),
-        },
-      }),
-    ]);
-    return token;
-  }
-
-  /** Atomically marks a valid token as used and returns its user, or throws. */
-  private async consumeToken(token: string, type: AuthTokenType): Promise<string> {
-    const record = await this.prisma.authToken.findUnique({
-      where: { tokenHash: hashToken(token) },
-      select: { id: true, userId: true, type: true, usedAt: true, expiresAt: true },
-    });
-    if (!record || record.type !== type || record.usedAt || record.expiresAt <= new Date()) {
-      throw new AppError(ErrorCode.BAD_REQUEST, INVALID_LINK);
+  /** Revokes one of the caller's DealMind sessions and its IAM session. */
+  async revokeSession(auth: AuthContext, sessionId: string): Promise<void> {
+    const accessToken = await this.sessions.getIamAccessToken(auth.sessionId).catch(() => null);
+    const { revoked, iamSessionId } = await this.sessions.revokeOwned(auth.userId, sessionId);
+    if (!revoked) throw AppError.notFound("Session");
+    if (accessToken && iamSessionId) {
+      await this.iam.revokeSession(accessToken, iamSessionId).catch(() => undefined);
     }
-    // Conditional update: only one concurrent request can consume the token.
-    const claimed = await this.prisma.authToken.updateMany({
-      where: { id: record.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-    if (claimed.count !== 1) throw new AppError(ErrorCode.BAD_REQUEST, INVALID_LINK);
-    return record.userId;
   }
 }

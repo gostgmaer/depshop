@@ -13,8 +13,12 @@
  *  - trustedProxyCount = N: the client is the entry appended by the
  *    outermost trusted proxy, i.e. the N-th entry from the right.
  */
-export function trustedClientIp(forwardedFor: string | null, trustedProxyCount: number): string | undefined {
-  if (!Number.isInteger(trustedProxyCount) || trustedProxyCount <= 0 || !forwardedFor) return undefined;
+export function trustedClientIp(
+  forwardedFor: string | null,
+  trustedProxyCount: number,
+): string | undefined {
+  if (!Number.isInteger(trustedProxyCount) || trustedProxyCount <= 0 || !forwardedFor)
+    return undefined;
   const hops = forwardedFor
     .split(",")
     .map((h) => h.trim())

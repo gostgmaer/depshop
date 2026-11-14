@@ -9,29 +9,36 @@ appears.
 
 ## Models
 
-| Domain        | Model                                             | Ownership                         |
-| ------------- | ------------------------------------------------- | --------------------------------- |
-| Identity      | `User`                                            | the account itself                |
-|               | `UserPreference`                                  | user (1:1)                        |
-|               | `UserSession`                                     | user (refresh-token sessions)     |
-| Catalog       | `Category`, `Product`, `ProductVariant`           | **global**                        |
-| Shopping      | `ShoppingSource`, `ProductOffer`, `PriceSnapshot` | **global**                        |
-| Search        | `Search`, `SearchResult`                          | user                              |
-|               | `SearchSourceRun` (per-source outcome)            | user                              |
-| User features | `Watchlist`, `WatchlistItem`, `PriceAlert`        | user                              |
-|               | `Notification`, `NotificationDelivery`            | user                              |
-| AI            | `AgentRun`                                        | user                              |
-|               | `AiModelConfig`                                   | global (admin)                    |
-| Monetization  | `Subscription`, `UsageRecord`, `BillingEvent`     | user                              |
-|               | `AffiliateClick`                                  | user, nullable (anonymous clicks) |
-|               | `SubscriptionPlan`, `AffiliateConversion`         | global (admin reporting)          |
-| Platform      | `PlatformSetting`, `AuditLog`                     | global (admin)                    |
+| Domain        | Model                                             | Ownership                                                   |
+| ------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| Identity      | `User`                                            | the account itself                                          |
+|               | `UserPreference`                                  | user (1:1)                                                  |
+|               | `UserSession`                                     | user (DealMind browser sessions; hold encrypted IAM tokens) |
+| Catalog       | `Category`, `Product`, `ProductVariant`           | **global**                                                  |
+| Shopping      | `ShoppingSource`, `ProductOffer`, `PriceSnapshot` | **global**                                                  |
+| Search        | `Search`, `SearchResult`                          | user                                                        |
+|               | `SearchSourceRun` (per-source outcome)            | user                                                        |
+| User features | `Watchlist`, `WatchlistItem`, `PriceAlert`        | user                                                        |
+|               | `Notification`, `NotificationDelivery`            | user                                                        |
+| AI            | `AgentRun`                                        | user                                                        |
+|               | `AiModelConfig`                                   | global (admin)                                              |
+| Monetization  | `Subscription`, `UsageRecord`, `BillingEvent`     | user                                                        |
+|               | `AffiliateClick`                                  | user, nullable (anonymous clicks)                           |
+|               | `SubscriptionPlan`, `AffiliateConversion`         | global (admin reporting)                                    |
+| Platform      | `PlatformSetting`, `AuditLog`                     | global (admin)                                              |
 
 `SearchSourceRun`, `SubscriptionPlan`, `AffiliateConversion`, `AiModelConfig`,
 `PlatformSetting` and `AuditLog` go beyond the minimum model list. They back
 master-spec requirements: per-source error reporting, plan catalogue,
 commission reporting, AI model configuration, platform configuration and
 admin auditability.
+
+## Identity mirror
+
+`User` is a local mirror of an identity owned by the shared EasyDev IAM
+(see [SHARED_SERVICES.md](SHARED_SERVICES.md)). `iamUserId` (unique) links it
+to the IAM user; DealMind stores no passwords or verification/reset tokens.
+Name and email are synced at sign-in; `role` and `status` are DealMind's own.
 
 ## Conventions
 
@@ -91,11 +98,13 @@ enforced too. Each constraint has a test in `constraints.db.test.ts`.
 
 ## Migrations
 
-| Migration                    | Purpose                                                  |
-| ---------------------------- | -------------------------------------------------------- |
-| `20261114100000_extensions`  | `pg_trgm`; `vector` when available                       |
-| `20261114100100_init`        | All tables, indexes, FKs (generated by Prisma)           |
-| `20261114100200_constraints` | CHECK constraints, `NULLS NOT DISTINCT` alert uniqueness |
+| Migration                        | Purpose                                                                                                                                                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `20261114100000_extensions`      | `pg_trgm`; `vector` when available                                                                                                                                                                                                                                 |
+| `20261114100100_init`            | All tables, indexes, FKs (generated by Prisma)                                                                                                                                                                                                                     |
+| `20261114100200_constraints`     | CHECK constraints, `NULLS NOT DISTINCT` alert uniqueness                                                                                                                                                                                                           |
+| `20261114200000_auth_tokens`     | (Phase 1.4) `AuthToken`, `UserSession.lastUsedAt`                                                                                                                                                                                                                  |
+| `20261114300000_iam_integration` | Identity moves to the shared IAM: drops `User.passwordHash` and `AuthToken`; adds `User.iamUserId` and encrypted IAM token columns on `UserSession`. **Refuses to run if pre-IAM users exist** (they can't be linked automatically); deletes pre-existing sessions |
 
 **Drift check.** The migrations must replay to exactly the Prisma schema:
 

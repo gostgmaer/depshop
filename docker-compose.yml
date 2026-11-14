@@ -74,29 +74,9 @@ services:
       retries: 12
       start_period: 5s
 
-  # Local email catcher: the API sends verification/reset emails here over
-  # SMTP; read them at http://127.0.0.1:${MAILPIT_UI_PORT}. Nothing leaves
-  # this machine. Development only: production uses a real SMTP provider.
-  mailpit:
-    <<: *restart
-    image: axllent/mailpit:v1.27.11
-    environment:
-      MP_DATABASE: /data/mailpit.db
-      MP_MAX_MESSAGES: "500"
-      MP_SMTP_AUTH_ACCEPT_ANY: "1"
-      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
-    ports:
-      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
-      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
-    volumes:
-      - mailpit-data:/data
-    networks: [dealmind]
-    healthcheck:
-      test: ["CMD", "/mailpit", "readyz"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
+  # Identity, email and file storage come from the shared EasyDev services
+  # (IAM, notification-service, file-upload-service) running in their own
+  # stacks on the external `core-network`. DealMind runs no copies of them.
 
   # ───────────────────────────── Dev-only admin UIs ─────────────────────────────
   # Opt-in via `--profile tools`. Never enable this profile in production.
@@ -208,16 +188,22 @@ services:
       APP_URL: http://localhost
       TRUST_PROXY: uniquelocal
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
-      # Local Docker stack delivers mail to Mailpit.
-      EMAIL_TRANSPORT: smtp
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      EMAIL_FROM: ${EMAIL_FROM:-DealMind AI <no-reply@dealmind.local>}
-    networks: [dealmind]
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in .env}
+      # Shared EasyDev services, reached by container name on core-network.
+      IAM_BASE_URL: http://auth-service:3000/api/v1/iam
+      IAM_TENANT: ${IAM_TENANT:-easydev}
+      IAM_JWT_ISSUER: ${IAM_JWT_ISSUER:-iam-service}
+      IAM_JWT_AUDIENCE: ${IAM_JWT_AUDIENCE:-easydev}
+      NOTIFICATION_SERVICE_URL: http://notification-service:4000
+      NOTIFICATION_API_KEY: ${NOTIFICATION_API_KEY:-}
+      NOTIFICATION_TENANT_ID: ${NOTIFICATION_TENANT_ID:-dealmind}
+      FILE_SERVICE_URL: http://file-upload-service:3000
+      FILE_SERVICE_HMAC_SECRET: ${FILE_SERVICE_HMAC_SECRET:-}
+      FILE_SERVICE_TENANT_ID: ${FILE_SERVICE_TENANT_ID:-dealmind}
+    networks: [dealmind, core-network]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
-      mailpit: { condition: service_healthy }
     labels:
       # Same origin as the web app: /api/* goes to the API, so session
       # cookies stay first-party.
@@ -236,6 +222,8 @@ services:
     environment:
       # Server-side calls (session checks in layouts) go straight to the API.
       API_INTERNAL_URL: http://api:4000
+      # Traefik sits in front and overwrites client-supplied X-Forwarded-For.
+      TRUSTED_PROXY_COUNT: "1"
     networks: [dealmind]
     depends_on:
       api: { condition: service_healthy }
@@ -252,10 +240,13 @@ networks:
   dealmind:
     name: dealmind
     driver: bridge
+  # Created by the shared EasyDev stacks (IAM, notifications, file uploads).
+  # Only the containerised API (app profile) joins it.
+  core-network:
+    external: true
 
 volumes:
   postgres-data:
   redis-data:
   pgadmin-data:
   redisinsight-data:
-  mailpit-data:

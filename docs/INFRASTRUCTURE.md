@@ -45,6 +45,13 @@ services, databases, schemas or configuration.
 - `maxmemory-policy noeviction` is **required by BullMQ**; evicting keys
   corrupts queues. Cache entries must always set a TTL.
 
+### Email, identity and files
+
+DealMind runs no mail catcher, identity provider or file store. It uses the
+shared EasyDev services in their own stacks on the external `core-network`
+(see [SHARED_SERVICES.md](SHARED_SERVICES.md)). Start those stacks before
+running DealMind; the containerised `api` joins `core-network` to reach them.
+
 ### pgAdmin
 
 `infrastructure/docker/pgadmin/entrypoint.sh` pre-registers a server called

@@ -8,6 +8,8 @@ import {
   type UpdateProfileInput,
   localeSchema,
 } from "@dealmind/shared";
+import type { AuthContext, SessionService } from "../auth/session-service.js";
+import { type IamClient, IamError, splitName } from "../iam/iam-client.js";
 import { toPublicUser, userSelect } from "./user-view.js";
 
 const preferenceSelect = {
@@ -23,7 +25,11 @@ const preferenceSelect = {
  * principal; there is no way to address another user's records.
  */
 export class UserService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly sessions: SessionService,
+    private readonly iam: IamClient,
+  ) {}
 
   async getMe(userId: string): Promise<PublicUser> {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: userSelect });
@@ -31,9 +37,23 @@ export class UserService {
     return toPublicUser(user);
   }
 
-  async updateProfile(userId: string, input: UpdateProfileInput): Promise<PublicUser> {
+  /** The IAM is the source of truth for names: update it first, then the mirror. */
+  async updateProfile(auth: AuthContext, input: UpdateProfileInput): Promise<PublicUser> {
+    const accessToken = await this.sessions.getIamAccessToken(auth.sessionId);
+    try {
+      await this.iam.updateProfile(accessToken, splitName(input.name));
+    } catch (err) {
+      if (err instanceof IamError && err.unavailable) {
+        throw new AppError(
+          ErrorCode.DEPENDENCY_UNAVAILABLE,
+          "The identity service is temporarily unavailable",
+        );
+      }
+      if (err instanceof IamError) throw new AppError(ErrorCode.VALIDATION_FAILED, err.message);
+      throw err;
+    }
     const user = await this.prisma.user.update({
-      where: { id: userId },
+      where: { id: auth.userId },
       data: { name: input.name },
       select: userSelect,
     });

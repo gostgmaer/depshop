@@ -2,18 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cookieNames, csrfCookieOptions, sessionCookieOptions } from "./cookies.js";
 import { CsrfTokens } from "./csrf.js";
 import { LoginThrottle } from "./login-throttle.js";
-import { hashPassword, verifyPassword } from "./password.js";
 import { generateToken, hashToken } from "./tokens.js";
-
-describe("passwords", () => {
-  it("hashes with Argon2id (OWASP parameters) and verifies", async () => {
-    const hash = await hashPassword("correct-horse-42");
-    expect(hash).toMatch(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$/);
-    expect(await verifyPassword(hash, "correct-horse-42")).toBe(true);
-    expect(await verifyPassword(hash, "wrong")).toBe(false);
-    expect(await verifyPassword("not-a-hash", "x")).toBe(false);
-  });
-});
 
 describe("tokens", () => {
   it("generates 256-bit url-safe tokens and stable SHA-256 hashes", () => {

@@ -5,7 +5,14 @@
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { assertOwnedBy, isOwnershipViolation, ownedBy } from "../ownership.js";
-import { createCatalog, createUser, expectPrismaCode, testPrisma, truncateAll } from "./helpers.js";
+import {
+  createCatalog,
+  createUser,
+  expectPrismaCode,
+  iamTokenFields,
+  testPrisma,
+  truncateAll,
+} from "./helpers.js";
 
 const prisma: PrismaClient = testPrisma();
 afterAll(() => prisma.$disconnect());
@@ -144,6 +151,7 @@ describe("deletion semantics", () => {
         tokenHash: `h-${userId}`,
         familyId: userId,
         expiresAt: new Date(Date.now() + 86_400_000),
+        ...iamTokenFields(),
       },
     });
     await prisma.usageRecord.create({ data: { userId, metric: "SEARCH" } });

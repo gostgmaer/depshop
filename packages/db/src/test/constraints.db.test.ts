@@ -6,6 +6,7 @@ import {
   createUser,
   expectCheckViolation,
   expectPrismaCode,
+  iamTokenFields,
   testPrisma,
   truncateAll,
 } from "./helpers.js";
@@ -37,6 +38,12 @@ describe("identity", () => {
     await expectCheckViolation(createUser(prisma, { name: "   " }), "User_name_not_blank_check");
   });
 
+  it("links each local user to exactly one IAM identity", async () => {
+    const iamUserId = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+    await createUser(prisma, { iamUserId });
+    await expectPrismaCode(createUser(prisma, { iamUserId }), "P2002");
+  });
+
   it("allows at most one preference row and one subscription per user", async () => {
     await prisma.userPreference.create({ data: { userId: user.id } });
     await expectPrismaCode(prisma.userPreference.create({ data: { userId: user.id } }), "P2002");
@@ -51,7 +58,13 @@ describe("identity", () => {
   it("requires session expiry after creation", async () => {
     await expectCheckViolation(
       prisma.userSession.create({
-        data: { userId: user.id, tokenHash: "h", familyId: user.id, expiresAt: new Date(0) },
+        data: {
+          userId: user.id,
+          tokenHash: "h",
+          familyId: user.id,
+          expiresAt: new Date(0),
+          ...iamTokenFields(),
+        },
       }),
       "UserSession_expiry_check",
     );
@@ -276,27 +289,5 @@ describe("AI & monetization", () => {
       },
     });
     expect(conv.orderAmountPaise).toBe(9_000_000_000_00n);
-  });
-});
-
-describe("auth tokens", () => {
-  it("stores unique hashes with a valid expiry and usage time", async () => {
-    const base = { userId: user.id, type: "PASSWORD_RESET" as const };
-    const future = new Date(Date.now() + 3_600_000);
-    await prisma.authToken.create({ data: { ...base, tokenHash: "h1", expiresAt: future } });
-    await expectPrismaCode(
-      prisma.authToken.create({ data: { ...base, tokenHash: "h1", expiresAt: future } }),
-      "P2002",
-    );
-    await expectCheckViolation(
-      prisma.authToken.create({ data: { ...base, tokenHash: "h2", expiresAt: new Date(0) } }),
-      "AuthToken_expiry_check",
-    );
-    await expectCheckViolation(
-      prisma.authToken.create({
-        data: { ...base, tokenHash: "h3", expiresAt: future, usedAt: new Date(0) },
-      }),
-      "AuthToken_used_after_created_check",
-    );
   });
 });
