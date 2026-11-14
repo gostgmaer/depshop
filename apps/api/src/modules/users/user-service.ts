@@ -49,7 +49,7 @@ export class UserService {
           "The identity service is temporarily unavailable",
         );
       }
-      if (err instanceof IamError) throw new AppError(ErrorCode.VALIDATION_FAILED, err.message);
+      if (err instanceof IamError) throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
       throw err;
     }
     const user = await this.prisma.user.update({
@@ -76,7 +76,7 @@ export class UserService {
       const found = await this.prisma.shoppingSource.count({ where: { id: { in: ids } } });
       if (found !== ids.length) {
         throw new AppError(
-          ErrorCode.VALIDATION_FAILED,
+          ErrorCode.VALIDATION_ERROR,
           "Unknown shopping source in preferredSourceIds",
         );
       }

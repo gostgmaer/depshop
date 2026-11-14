@@ -27,7 +27,15 @@ const envSchema = z
     TRUST_PROXY: z.string().default("loopback"),
 
     DATABASE_URL: z.string().url(),
-    REDIS_URL: z.string().url().optional(),
+    /** Required: caching, rate limits, login throttling and BullMQ queues. */
+    REDIS_URL: z.string().url(),
+    /** Namespace for every Redis key DealMind writes (cache, rate limits, queues). */
+    REDIS_KEY_PREFIX: z
+      .string()
+      .regex(/^[a-z0-9:_-]{1,40}$/, "lowercase letters, digits, : _ - only")
+      .default("dm"),
+    /** TTL for cached shared catalog reads (categories, product detail). */
+    CATALOG_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
 
     /** Public origin of the web app; used for email links and the Origin allow-list. */
     APP_URL: z.string().url().default("http://localhost:3000"),

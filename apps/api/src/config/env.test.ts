@@ -3,6 +3,7 @@ import { loadEnv } from "./env.js";
 
 const base = {
   DATABASE_URL: "postgresql://u:p@127.0.0.1:5432/db",
+  REDIS_URL: "redis://127.0.0.1:6379",
   SESSION_SECRET: "x".repeat(32),
   TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
   IAM_BASE_URL: "http://127.0.0.1:3304/api/v1/iam/",
@@ -48,6 +49,13 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ ...base, NODE_ENV: "production", COOKIE_SECURE: "false" })).toThrow(
       /COOKIE_SECURE/,
     );
+  });
+
+  it("requires Redis and validates the key prefix", () => {
+    const { REDIS_URL: _r, ...withoutRedis } = base;
+    expect(() => loadEnv(withoutRedis)).toThrow(/REDIS_URL/);
+    expect(loadEnv(base).REDIS_KEY_PREFIX).toBe("dm");
+    expect(() => loadEnv({ ...base, REDIS_KEY_PREFIX: "Bad Prefix!" })).toThrow(/REDIS_KEY_PREFIX/);
   });
 
   it("leaves the notification and file services optional", () => {

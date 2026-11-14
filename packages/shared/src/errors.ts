@@ -1,6 +1,6 @@
 export const ErrorCode = {
   BAD_REQUEST: "BAD_REQUEST",
-  VALIDATION_FAILED: "VALIDATION_FAILED",
+  VALIDATION_ERROR: "VALIDATION_ERROR",
   UNAUTHENTICATED: "UNAUTHENTICATED",
   FORBIDDEN: "FORBIDDEN",
   CSRF_INVALID: "CSRF_INVALID",
@@ -17,7 +17,7 @@ export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 const STATUS: Record<ErrorCode, number> = {
   BAD_REQUEST: 400,
-  VALIDATION_FAILED: 422,
+  VALIDATION_ERROR: 422,
   UNAUTHENTICATED: 401,
   FORBIDDEN: 403,
   CSRF_INVALID: 403,
@@ -59,6 +59,9 @@ export class AppError extends Error {
   }
 }
 
+/** Every API error response: `{ success: false, error, meta: { requestId } }`. */
 export interface ErrorResponseBody {
-  error: { code: ErrorCode; message: string; details?: unknown; requestId?: string };
+  success: false;
+  error: { code: ErrorCode; message: string; details?: unknown };
+  meta: { requestId: string };
 }

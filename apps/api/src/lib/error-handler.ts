@@ -4,6 +4,20 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import { hasZodFastifySchemaValidationErrors } from "fastify-type-provider-zod";
 import { ZodError } from "zod";
 
+/** Prisma connection-level codes: can't reach DB, timeouts, pool exhaustion. */
+const PRISMA_OUTAGE_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024"]);
+/** ioredis messages when Redis is unreachable (offline queue disabled). */
+const REDIS_OUTAGE = /Connection is closed|Stream isn't writeable|ECONNREFUSED|ETIMEDOUT|Reached the max retries/;
+
+export function isInfrastructureOutage(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientInitializationError) return true;
+  if (error instanceof Prisma.PrismaClientKnownRequestError && PRISMA_OUTAGE_CODES.has(error.code)) {
+    return true;
+  }
+  if (error instanceof Prisma.PrismaClientRustPanicError) return true;
+  return error instanceof Error && REDIS_OUTAGE.test(error.message);
+}
+
 function send(
   reply: FastifyReply,
   request: FastifyRequest,
@@ -13,7 +27,9 @@ function send(
   details?: unknown,
 ): FastifyReply {
   const body: ErrorResponseBody = {
-    error: { code, message, requestId: request.id, ...(details === undefined ? {} : { details }) },
+    success: false,
+    error: { code, message, ...(details === undefined ? {} : { details }) },
+    meta: { requestId: request.id },
   };
   return reply.status(status).send(body);
 }
@@ -41,7 +57,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
     }
 
     if (hasZodFastifySchemaValidationErrors(error)) {
-      return send(reply, request, 422, ErrorCode.VALIDATION_FAILED, "Request validation failed", {
+      return send(reply, request, 422, ErrorCode.VALIDATION_ERROR, "Request validation failed", {
         issues: error.validation.map((v) => ({
           path: v.instancePath,
           message: v.message,
@@ -50,9 +66,22 @@ export function registerErrorHandler(app: FastifyInstance): void {
     }
 
     if (error instanceof ZodError) {
-      return send(reply, request, 422, ErrorCode.VALIDATION_FAILED, "Validation failed", {
+      return send(reply, request, 422, ErrorCode.VALIDATION_ERROR, "Validation failed", {
         issues: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
       });
+    }
+
+    // Infrastructure outages: database or Redis unreachable. Logged with
+    // details; clients get a safe, retryable 503 without internals.
+    if (isInfrastructureOutage(error)) {
+      request.log.error({ err: error }, "Dependency unavailable");
+      return send(
+        reply,
+        request,
+        503,
+        ErrorCode.DEPENDENCY_UNAVAILABLE,
+        "Service temporarily unavailable. Please retry shortly.",
+      );
     }
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {

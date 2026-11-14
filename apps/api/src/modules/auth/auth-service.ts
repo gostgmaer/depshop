@@ -86,7 +86,7 @@ export class AuthService {
         throw new AppError(ErrorCode.RATE_LIMITED, "Too many attempts. Try again later.");
       if (e.status === 400 || e.status === 422) {
         // IAM-side validation (e.g. disposable email domain). Not enumeration-sensitive.
-        throw new AppError(ErrorCode.VALIDATION_FAILED, e.message);
+        throw new AppError(ErrorCode.VALIDATION_ERROR, e.message);
       }
       throw e;
     }
@@ -102,7 +102,7 @@ export class AuthService {
     presentedSession: AuthContext | null,
   ): Promise<{ user: PublicUser; session: IssuedSession }> {
     const key = input.email;
-    if (this.throttle.isLocked(key)) {
+    if (await this.throttle.isLocked(key)) {
       throw new AppError(ErrorCode.RATE_LIMITED, "Too many sign-in attempts. Try again later.");
     }
 
@@ -112,7 +112,7 @@ export class AuthService {
     } catch (err) {
       const e = iamFailure(err);
       if (e.status === 401 || e.status === 404) {
-        this.throttle.recordFailure(key);
+        await this.throttle.recordFailure(key);
         throw AppError.unauthenticated(INVALID_CREDENTIALS);
       }
       if (e.status === 429)
@@ -130,7 +130,7 @@ export class AuthService {
       throw AppError.forbidden("This account is suspended");
     }
 
-    this.throttle.recordSuccess(key);
+    await this.throttle.recordSuccess(key);
     if (presentedSession) await this.sessions.revoke(presentedSession.sessionId);
     const session = await this.sessions.create(user.id, client, { tokens: result, claims });
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
