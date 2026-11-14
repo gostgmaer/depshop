@@ -128,22 +128,22 @@ export class PrismaUserStore implements UserStore {
   }
 
   createSession(input: NewSession): Promise<SessionRecord> {
-    return this.prisma.session.create({ data: input, select: sessionSelect });
+    return this.prisma.userSession.create({ data: input, select: sessionSelect });
   }
 
   findSessionByTokenHash(tokenHash: string): Promise<SessionRecord | null> {
-    return this.prisma.session.findUnique({ where: { tokenHash }, select: sessionSelect });
+    return this.prisma.userSession.findUnique({ where: { tokenHash }, select: sessionSelect });
   }
 
   rotateSession(oldSessionId: string, next: NewSession): Promise<SessionRecord | null> {
     return this.prisma.$transaction(async (tx) => {
-      const created = await tx.session.create({ data: next, select: sessionSelect });
-      const revoked = await tx.session.updateMany({
+      const created = await tx.userSession.create({ data: next, select: sessionSelect });
+      const revoked = await tx.userSession.updateMany({
         where: { id: oldSessionId, revokedAt: null },
-        data: { revokedAt: new Date(), replacedBy: created.id },
+        data: { revokedAt: new Date(), replacedById: created.id },
       });
       if (revoked.count !== 1) {
-        await tx.session.delete({ where: { id: created.id } });
+        await tx.userSession.delete({ where: { id: created.id } });
         return null;
       }
       return created;
@@ -151,21 +151,21 @@ export class PrismaUserStore implements UserStore {
   }
 
   async revokeSession(sessionId: string): Promise<void> {
-    await this.prisma.session.updateMany({
+    await this.prisma.userSession.updateMany({
       where: { id: sessionId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }
 
   async revokeSessionFamily(familyId: string): Promise<void> {
-    await this.prisma.session.updateMany({
+    await this.prisma.userSession.updateMany({
       where: { familyId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }
 
   async revokeAllUserSessions(userId: string): Promise<void> {
-    await this.prisma.session.updateMany({
+    await this.prisma.userSession.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });

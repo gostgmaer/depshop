@@ -1,6 +1,9 @@
 import { PrismaClient } from "@prisma/client";
 
 export * from "@prisma/client";
+export * from "./ownership.js";
+export { seedReferenceData, CATEGORY_TREE, SHOPPING_SOURCES } from "./seed-data.js";
+export type { SeedSummary, CategorySeed } from "./seed-data.js";
 
 export interface CreatePrismaOptions {
   url?: string;

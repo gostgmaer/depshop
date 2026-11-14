@@ -20,19 +20,20 @@ Dependencies only point downward: `apps/* → packages/db → packages/shared`.
 
 ## Data ownership
 
-| Global (shared by everyone)                      | User-owned (scoped by `userId`)        |
-| ------------------------------------------------ | -------------------------------------- |
-| Category, Product, ProductVariant                | Session, UserPreference                |
-| ShoppingSource                                   | Search → SearchSourceRun, SearchResult |
-| ProductOffer, PriceSnapshot                      | Watchlist → WatchlistItem              |
-| SubscriptionPlan, AiModelConfig, PlatformSetting | PriceAlert, Notification               |
-| AffiliateClick/Conversion (admin reporting)      | Subscription, UsageRecord, AgentRun    |
+| Global (shared by everyone)                      | User-owned (every row has `userId` FK)                  |
+| ------------------------------------------------ | ------------------------------------------------------- |
+| Category, Product, ProductVariant                | UserSession, UserPreference                             |
+| ShoppingSource, ProductOffer, PriceSnapshot      | Search → SearchSourceRun, SearchResult, AgentRun        |
+| SubscriptionPlan, AiModelConfig, PlatformSetting | Watchlist → WatchlistItem, PriceAlert                   |
+| AffiliateConversion, AuditLog (admin reporting)  | Notification → NotificationDelivery                     |
+|                                                  | Subscription, UsageRecord, BillingEvent, AffiliateClick |
 
 **Ownership rule:** every query on user-owned data filters by the
 authenticated `userId` (taken from the verified access token, never from the
-request body). Child records (e.g. `SearchResult`, `WatchlistItem`) are
-reached only through their owning parent. Catalog rows are never copied per
-user — watchlists and alerts reference shared `ProductVariant`s.
+request body). The database enforces it too: children reference their parent
+through composite `(parentId, userId)` foreign keys, so cross-user attachment
+is impossible. Catalog rows are never copied per user; watchlists and alerts
+reference shared `ProductVariant`s. Details: [DATABASE.md](DATABASE.md).
 
 ## Money
 

@@ -16,13 +16,14 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "migrate:dev": "dotenv -e ../../.env -- prisma migrate dev",
     "migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
     "seed": "dotenv -e ../../.env -- node dist/seed.js",
     "migrate:status": "dotenv -e ../../.env -- prisma migrate status",
     "migrate:reset": "dotenv -e ../../.env -- prisma migrate reset",
-    "studio": "dotenv -e ../../.env -- prisma studio"
+    "studio": "dotenv -e ../../.env -- prisma studio",
+    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts"
   },
   "dependencies": {
     "@dealmind/shared": "workspace:*",

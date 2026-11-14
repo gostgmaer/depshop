@@ -1,15 +1,29 @@
 // DealMind AI — single-platform, multi-user data model.
 //
-// There is NO tenant concept. Data falls into two groups:
-//   * Global (shared by everyone): Category, Product, ProductVariant,
-//     ShoppingSource, ProductOffer, PriceSnapshot, SubscriptionPlan,
-//     AiModelConfig, PlatformSetting, Affiliate* reporting.
-//   * User-owned (every row reachable from a userId, ownership enforced in
-//     every query): Session, UserPreference, Search (+ SearchSourceRun,
-//     SearchResult via the owning Search), Watchlist (+ WatchlistItem),
-//     PriceAlert, Notification, Subscription, UsageRecord, AgentRun.
+// There is NO multi-tenancy: no Tenant, Organization or Membership models and
+// no tenantId / organizationId / membershipId columns. Data falls into:
 //
-// Money is ALWAYS integer paise (Int for per-item prices, BigInt for aggregates).
+//   * GLOBAL (shared by every user): Category, Product, ProductVariant,
+//     ShoppingSource, ProductOffer, PriceSnapshot, SubscriptionPlan,
+//     AffiliateConversion, AiModelConfig, PlatformSetting, AuditLog.
+//
+//   * USER-OWNED: every model carries a non-null `userId` foreign key to User:
+//     UserSession, UserPreference, Search, SearchSourceRun, SearchResult,
+//     Watchlist, WatchlistItem, PriceAlert, Notification, NotificationDelivery,
+//     AgentRun, Subscription, UsageRecord, BillingEvent.
+//     (AffiliateClick.userId is nullable: anonymous visitors can click too.)
+//
+// OWNERSHIP IS ENFORCED BY THE DATABASE. A child of a user-owned parent
+// (e.g. WatchlistItem → Watchlist) references the parent through a composite
+// foreign key (parentId, userId) → parent(id, userId), so a row can never be
+// attached to another user's parent, even if application code is wrong.
+//
+// Conventions:
+//   * Primary keys: UUIDv7 (time-ordered → compact B-tree indexes), native `uuid`.
+//   * Money: integer paise (`Int`; `BigInt` for aggregates). No floats.
+//   * Json columns are PostgreSQL `jsonb`.
+//   * CHECK constraints that Prisma cannot express live in the migration
+//     `*_constraints/migration.sql` and are covered by tests.
 
 generator client {
   provider = "prisma-client-js"
@@ -20,7 +34,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ───────────────────────────── Users & auth ─────────────────────────────
+// ═══════════════════════════════ IDENTITY ═══════════════════════════════
 
 enum UserRole {
   USER
@@ -33,7 +47,8 @@ enum UserStatus {
 }
 
 model User {
-  id              String     @id @default(cuid())
+  id              String     @id @default(uuid(7)) @db.Uuid
+  /// Always stored lower-case (CHECK constraint), so uniqueness is case-insensitive.
   email           String     @unique
   passwordHash    String
   name            String
@@ -44,94 +59,109 @@ model User {
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  sessions        Session[]
-  preference      UserPreference?
-  searches        Search[]
-  watchlists      Watchlist[]
-  priceAlerts     PriceAlert[]
-  notifications   Notification[]
-  subscription    Subscription?
-  usageRecords    UsageRecord[]
-  agentRuns       AgentRun[]
-  affiliateClicks AffiliateClick[]
-  auditLogs       AuditLog[]
+  sessions               UserSession[]
+  preference             UserPreference?
+  searches               Search[]
+  searchSourceRuns       SearchSourceRun[]
+  searchResults          SearchResult[]
+  watchlists             Watchlist[]
+  watchlistItems         WatchlistItem[]
+  priceAlerts            PriceAlert[]
+  notifications          Notification[]
+  notificationDeliveries NotificationDelivery[]
+  agentRuns              AgentRun[]
+  subscription           Subscription?
+  usageRecords           UsageRecord[]
+  affiliateClicks        AffiliateClick[]
+  billingEvents          BillingEvent[]
+  auditLogs              AuditLog[]
+
+  @@index([role])
+  @@index([createdAt])
 }
 
-/// Refresh-token session. Only a SHA-256 hash of the token is stored.
-model Session {
-  id         String    @id @default(cuid())
-  userId     String
-  tokenHash  String    @unique
-  /// Token family for rotation; reuse of a rotated token revokes the family.
-  familyId   String
-  expiresAt  DateTime
-  revokedAt  DateTime?
-  replacedBy String?
-  userAgent  String?
-  ipAddress  String?
-  createdAt  DateTime  @default(now())
+/// Refresh-token session. Only the SHA-256 hash of the token is stored.
+model UserSession {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  userId       String    @db.Uuid
+  tokenHash    String    @unique
+  /// Rotation family: replaying a rotated token revokes the whole family.
+  familyId     String    @db.Uuid
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?   @db.Uuid
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([familyId])
+  @@index([expiresAt])
 }
 
 model UserPreference {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
-  preferredSourceIds String[]
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  userId             String   @unique @db.Uuid
+  preferredSourceIds String[] @db.Uuid
   preferredBrands    String[]
   notifyEmail        Boolean  @default(true)
   notifyInApp        Boolean  @default(true)
   locale             String   @default("en-IN")
+  createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// ───────────────────────────── Global catalog ─────────────────────────────
+// ═══════════════════════════════ CATALOG (global) ═══════════════════════════════
 
 model Category {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid(7)) @db.Uuid
   slug      String   @unique
   name      String
-  parentId  String?
+  parentId  String?  @db.Uuid
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
   children Category[] @relation("CategoryTree")
   products Product[]
+
+  @@index([parentId])
 }
 
 model Product {
-  id          String    @id @default(cuid())
+  id          String    @id @default(uuid(7)) @db.Uuid
   title       String
   brand       String
   model       String?
-  categoryId  String?
+  categoryId  String?   @db.Uuid
   /// Normalized specifications from verified source data (never LLM-generated).
   specs       Json      @default("{}")
   imageUrl    String?
   /// Manufacturer launch date when known; drives "new launches" discovery.
   launchedAt  DateTime?
-  /// Deterministic matching key: normalized brand + model.
+  /// Deterministic matching key derived from normalized brand + model.
   fingerprint String    @unique
   firstSeenAt DateTime  @default(now())
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  category Category?       @relation(fields: [categoryId], references: [id])
+  category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   variants ProductVariant[]
 
   @@index([brand])
   @@index([categoryId])
   @@index([launchedAt])
+  /// Fuzzy title search (pg_trgm).
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_title_trgm_idx")
 }
 
 model ProductVariant {
-  id         String   @id @default(cuid())
-  productId  String
+  id         String   @id @default(uuid(7)) @db.Uuid
+  productId  String   @db.Uuid
   /// Canonical attribute key, e.g. "color=black|ram=8gb|storage=256gb".
   variantKey String
   attributes Json     @default("{}")
@@ -139,13 +169,15 @@ model ProductVariant {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  product       Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
-  offers        ProductOffer[]
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  offers         ProductOffer[]
   watchlistItems WatchlistItem[]
-  priceAlerts   PriceAlert[]
+  priceAlerts    PriceAlert[]
 
   @@unique([productId, variantKey])
 }
+
+// ═══════════════════════════════ SHOPPING (global) ═══════════════════════════════
 
 enum SourceIntegrationKind {
   OFFICIAL_API
@@ -162,24 +194,24 @@ enum SourceHealth {
 }
 
 model ShoppingSource {
-  id                String                @id @default(cuid())
+  id                 String                @id @default(uuid(7)) @db.Uuid
   /// Stable connector code, e.g. "amazon_in", "flipkart".
-  code              String                @unique
-  name              String
-  baseUrl           String
-  integrationKind   SourceIntegrationKind
+  code               String                @unique
+  name               String
+  baseUrl            String
+  integrationKind    SourceIntegrationKind
   /// Disabled by default; enabled only once authorized credentials exist.
-  enabled           Boolean               @default(false)
-  capabilities      Json                  @default("{}")
-  timeoutMs         Int                   @default(8000)
-  rateLimitPerMinute Int                  @default(60)
-  maxRetries        Int                   @default(2)
-  affiliateEnabled  Boolean               @default(false)
-  health            SourceHealth          @default(UNKNOWN)
-  lastHealthCheckAt DateTime?
-  lastHealthError   String?
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
+  enabled            Boolean               @default(false)
+  capabilities       Json                  @default("{}")
+  timeoutMs          Int                   @default(8000)
+  rateLimitPerMinute Int                   @default(60)
+  maxRetries         Int                   @default(2)
+  affiliateEnabled   Boolean               @default(false)
+  health             SourceHealth          @default(UNKNOWN)
+  lastHealthCheckAt  DateTime?
+  lastHealthError    String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
   offers               ProductOffer[]
   searchRuns           SearchSourceRun[]
@@ -196,11 +228,11 @@ enum Availability {
   UNKNOWN
 }
 
-/// A specific listing of a variant on a source. Prices come only from sources.
+/// A listing of a variant on a source. Prices come only from source data.
 model ProductOffer {
-  id           String       @id @default(cuid())
-  variantId    String
-  sourceId     String
+  id           String       @id @default(uuid(7)) @db.Uuid
+  variantId    String       @db.Uuid
+  sourceId     String       @db.Uuid
   externalId   String
   url          String
   title        String
@@ -212,21 +244,24 @@ model ProductOffer {
   lastSeenAt   DateTime     @default(now())
   /// When set, the offer is scheduled for background price tracking.
   trackedUntil DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   variant         ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  source          ShoppingSource   @relation(fields: [sourceId], references: [id])
+  source          ShoppingSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   snapshots       PriceSnapshot[]
   searchResults   SearchResult[]
   affiliateClicks AffiliateClick[]
 
   @@unique([sourceId, externalId])
-  @@index([variantId])
+  @@index([variantId, pricePaise])
   @@index([trackedUntil])
 }
 
+/// Append-only price history.
 model PriceSnapshot {
-  id           String       @id @default(cuid())
-  offerId      String
+  id           String       @id @default(uuid(7)) @db.Uuid
+  offerId      String       @db.Uuid
   pricePaise   Int
   mrpPaise     Int?
   availability Availability
@@ -234,10 +269,10 @@ model PriceSnapshot {
 
   offer ProductOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
-  @@index([offerId, capturedAt])
+  @@index([offerId, capturedAt(sort: Desc)])
 }
 
-// ───────────────────────────── User-owned data ─────────────────────────────
+// ═══════════════════════════════ SEARCH (user-owned) ═══════════════════════════════
 
 enum SearchStatus {
   PENDING
@@ -248,23 +283,25 @@ enum SearchStatus {
 }
 
 model Search {
-  id           String       @id @default(cuid())
-  userId       String
-  query        String
-  /// Structured intent extracted by the AI layer (validated by Zod).
-  intent       Json?
+  id          String       @id @default(uuid(7)) @db.Uuid
+  userId      String       @db.Uuid
+  query       String
+  /// Structured intent extracted by the AI layer (validated by Zod before storage).
+  intent      Json?
   /// Hard filters applied deterministically (price range in paise, brands, specs).
-  filters      Json         @default("{}")
-  status       SearchStatus @default(PENDING)
-  createdAt    DateTime     @default(now())
-  completedAt  DateTime?
+  filters     Json         @default("{}")
+  status      SearchStatus @default(PENDING)
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
 
   user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceRuns SearchSourceRun[]
   results    SearchResult[]
   agentRuns  AgentRun[]
 
-  @@index([userId, createdAt])
+  /// Target of composite ownership foreign keys from child rows.
+  @@unique([id, userId])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 enum SourceRunStatus {
@@ -274,11 +311,12 @@ enum SourceRunStatus {
   SKIPPED
 }
 
-/// Per-source outcome of a search: enables partial results + error reporting.
+/// Per-source outcome of a search: enables partial results and error reporting.
 model SearchSourceRun {
-  id           String          @id @default(cuid())
-  searchId     String
-  sourceId     String
+  id           String          @id @default(uuid(7)) @db.Uuid
+  userId       String          @db.Uuid
+  searchId     String          @db.Uuid
+  sourceId     String          @db.Uuid
   status       SourceRunStatus
   resultCount  Int             @default(0)
   durationMs   Int
@@ -286,31 +324,43 @@ model SearchSourceRun {
   errorMessage String?
   createdAt    DateTime        @default(now())
 
-  search Search         @relation(fields: [searchId], references: [id], onDelete: Cascade)
-  source ShoppingSource @relation(fields: [sourceId], references: [id])
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  search Search         @relation(fields: [searchId, userId], references: [id, userId], onDelete: Cascade)
+  source ShoppingSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
 
-  @@index([searchId])
+  @@unique([searchId, sourceId])
+  @@index([userId])
 }
 
 model SearchResult {
-  id          String  @id @default(cuid())
-  searchId    String
-  offerId     String
-  rank        Int
+  id                 String  @id @default(uuid(7)) @db.Uuid
+  userId             String  @db.Uuid
+  searchId           String  @db.Uuid
+  offerId            String  @db.Uuid
+  /// 1-based position in the deterministic ranking.
+  rank               Int
   /// Deterministic ranking score (higher is better), scaled integer.
-  score       Int
-  explanation String?
+  score              Int
+  /// Price/MRP at search time, so history does not change when offers update.
+  pricePaiseAtSearch Int
+  mrpPaiseAtSearch   Int?
+  explanation        String?
 
-  search Search       @relation(fields: [searchId], references: [id], onDelete: Cascade)
-  offer  ProductOffer @relation(fields: [offerId], references: [id])
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  search Search       @relation(fields: [searchId, userId], references: [id, userId], onDelete: Cascade)
+  offer  ProductOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
   @@unique([searchId, offerId])
-  @@index([searchId, rank])
+  @@unique([searchId, rank])
+  @@index([userId])
+  @@index([offerId])
 }
 
+// ═══════════════════════════════ USER FEATURES (user-owned) ═══════════════════════════════
+
 model Watchlist {
-  id        String   @id @default(cuid())
-  userId    String
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @db.Uuid
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -318,20 +368,26 @@ model Watchlist {
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   items WatchlistItem[]
 
+  @@unique([id, userId])
   @@unique([userId, name])
 }
 
 model WatchlistItem {
-  id          String   @id @default(cuid())
-  watchlistId String
-  variantId   String
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @db.Uuid
+  watchlistId String   @db.Uuid
+  variantId   String   @db.Uuid
   note        String?
   addedAt     DateTime @default(now())
 
-  watchlist Watchlist      @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
-  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  watchlist Watchlist      @relation(fields: [watchlistId, userId], references: [id, userId], onDelete: Cascade)
+  /// Restrict: catalog merges must re-point watchlist items, never drop them silently.
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
 
   @@unique([watchlistId, variantId])
+  @@index([userId])
+  @@index([variantId])
 }
 
 enum AlertStatus {
@@ -341,23 +397,26 @@ enum AlertStatus {
 }
 
 model PriceAlert {
-  id               String      @id @default(cuid())
-  userId           String
-  variantId        String
-  /// Optional: restrict the alert to one source; null = any enabled source.
-  sourceId         String?
-  targetPricePaise Int
-  status           AlertStatus @default(ACTIVE)
-  lastTriggeredAt  DateTime?
+  id                      String      @id @default(uuid(7)) @db.Uuid
+  userId                  String      @db.Uuid
+  variantId               String      @db.Uuid
+  /// Restrict to one source; null = any enabled source.
+  sourceId                String?     @db.Uuid
+  targetPricePaise        Int
+  status                  AlertStatus @default(ACTIVE)
+  lastTriggeredAt         DateTime?
   lastTriggeredPricePaise Int?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
 
   user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  variant ProductVariant  @relation(fields: [variantId], references: [id])
-  source  ShoppingSource? @relation(fields: [sourceId], references: [id])
+  variant ProductVariant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  source  ShoppingSource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
 
-  @@index([userId])
+  /// One alert per user/variant/source. NULL sourceId is also de-duplicated
+  /// (NULLS NOT DISTINCT, applied in the constraints migration).
+  @@unique([userId, variantId, sourceId])
+  /// Alert evaluation scans active alerts for a variant.
   @@index([variantId, status])
 }
 
@@ -369,8 +428,8 @@ enum NotificationType {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
-  userId    String
+  id        String           @id @default(uuid(7)) @db.Uuid
+  userId    String           @db.Uuid
   type      NotificationType
   title     String
   body      String
@@ -378,115 +437,51 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime         @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
 
-  @@index([userId, readAt, createdAt])
+  @@unique([id, userId])
+  @@index([userId, readAt, createdAt(sort: Desc)])
 }
 
-// ───────────────────────────── Monetization ─────────────────────────────
-
-enum PlanCode {
-  FREE
-  PRO
-  BUSINESS
+enum DeliveryChannel {
+  IN_APP
+  EMAIL
+  PUSH
 }
 
-model SubscriptionPlan {
-  code              PlanCode @id
-  name              String
-  monthlyPricePaise Int
-  /// Usage limits, e.g. { "searchesPerDay": 20, "activeAlerts": 5 }.
-  limits            Json
-  active            Boolean  @default(true)
-  updatedAt         DateTime @updatedAt
-
-  subscriptions Subscription[]
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  PAST_DUE
-  CANCELED
-}
-
-/// Subscriptions belong to individual users.
-model Subscription {
-  id                 String             @id @default(cuid())
-  userId             String             @unique
-  planCode           PlanCode           @default(FREE)
-  status             SubscriptionStatus @default(ACTIVE)
-  currentPeriodStart DateTime           @default(now())
-  currentPeriodEnd   DateTime?
-  provider           String?
-  providerRef        String?            @unique
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-
-  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan SubscriptionPlan @relation(fields: [planCode], references: [code])
-}
-
-enum UsageMetric {
-  SEARCH
-  AI_TOKENS
-  ALERT_CREATED
-}
-
-model UsageRecord {
-  id        String      @id @default(cuid())
-  userId    String
-  metric    UsageMetric
-  quantity  Int         @default(1)
-  createdAt DateTime    @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, metric, createdAt])
-}
-
-model AffiliateClick {
-  id        String   @id @default(cuid())
-  /// Opaque reference appended to the affiliate link for attribution.
-  clickRef  String   @unique
-  userId    String?
-  offerId   String
-  sourceId  String
-  ipHash    String?
-  userAgent String?
-  createdAt DateTime @default(now())
-
-  user        User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
-  offer       ProductOffer          @relation(fields: [offerId], references: [id])
-  source      ShoppingSource        @relation(fields: [sourceId], references: [id])
-  conversions AffiliateConversion[]
-
-  @@index([sourceId, createdAt])
-}
-
-enum ConversionStatus {
+enum DeliveryStatus {
   PENDING
-  APPROVED
-  REJECTED
+  SENT
+  FAILED
+  SKIPPED
 }
 
-model AffiliateConversion {
-  id               String           @id @default(cuid())
-  clickId          String?
-  sourceId         String
-  externalOrderRef String
-  orderAmountPaise BigInt
-  commissionPaise  BigInt
-  status           ConversionStatus @default(PENDING)
-  reportedAt       DateTime
-  createdAt        DateTime         @default(now())
+/// One delivery attempt record per channel for a notification.
+model NotificationDelivery {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  userId            String          @db.Uuid
+  notificationId    String          @db.Uuid
+  channel           DeliveryChannel
+  status            DeliveryStatus  @default(PENDING)
+  attempts          Int             @default(0)
+  lastError         String?
+  providerMessageId String?
+  scheduledAt       DateTime        @default(now())
+  sentAt            DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  click  AffiliateClick? @relation(fields: [clickId], references: [id], onDelete: SetNull)
-  source ShoppingSource  @relation(fields: [sourceId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notification Notification @relation(fields: [notificationId, userId], references: [id, userId], onDelete: Cascade)
 
-  @@unique([sourceId, externalOrderRef])
+  @@unique([notificationId, channel])
+  @@index([userId])
+  /// Delivery worker polls pending deliveries in schedule order.
+  @@index([status, scheduledAt])
 }
 
-// ───────────────────────────── AI & platform ─────────────────────────────
+// ═══════════════════════════════ AI (user-owned) ═══════════════════════════════
 
 enum AgentRunStatus {
   RUNNING
@@ -496,9 +491,9 @@ enum AgentRunStatus {
 
 /// Private record of an AI graph execution, owned by the requesting user.
 model AgentRun {
-  id           String         @id @default(cuid())
-  userId       String
-  searchId     String?
+  id           String         @id @default(uuid(7)) @db.Uuid
+  userId       String         @db.Uuid
+  searchId     String?        @db.Uuid
   graph        String
   model        String
   status       AgentRunStatus @default(RUNNING)
@@ -511,9 +506,11 @@ model AgentRun {
   finishedAt   DateTime?
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  search Search? @relation(fields: [searchId], references: [id], onDelete: SetNull)
+  /// Composite FK: a run can only reference a search owned by the same user.
+  search Search? @relation(fields: [searchId, userId], references: [id, userId], onDelete: Cascade)
 
-  @@index([userId, startedAt])
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([searchId])
 }
 
 enum AiPurpose {
@@ -523,26 +520,186 @@ enum AiPurpose {
   RESULT_EXPLANATION
 }
 
+/// Global AI configuration, managed by admins.
 model AiModelConfig {
-  id          String    @id @default(cuid())
+  id          String    @id @default(uuid(7)) @db.Uuid
   purpose     AiPurpose @unique
   provider    String
   model       String
   temperature Float     @default(0)
   maxTokens   Int       @default(1024)
   enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }
+
+// ═══════════════════════════════ MONETIZATION ═══════════════════════════════
+
+enum PlanCode {
+  FREE
+  PRO
+  BUSINESS
+}
+
+/// Global plan catalogue (admin-managed).
+model SubscriptionPlan {
+  code              PlanCode @id
+  name              String
+  monthlyPricePaise Int
+  /// Usage limits, e.g. { "searchesPerDay": 20, "activeAlerts": 5, "watchlists": 2 }.
+  limits            Json
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+/// Subscriptions belong to individual users (one current subscription each).
+model Subscription {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  userId             String             @unique @db.Uuid
+  planCode           PlanCode           @default(FREE)
+  status             SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart DateTime           @default(now())
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean            @default(false)
+  provider           String?
+  providerRef        String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan          SubscriptionPlan @relation(fields: [planCode], references: [code], onDelete: Restrict)
+  billingEvents BillingEvent[]
+
+  @@unique([provider, providerRef])
+  @@index([planCode, status])
+}
+
+enum UsageMetric {
+  SEARCH
+  AI_INPUT_TOKENS
+  AI_OUTPUT_TOKENS
+  ALERT_CREATED
+}
+
+/// Append-only metering, aggregated per period to enforce plan limits.
+model UsageRecord {
+  id         String      @id @default(uuid(7)) @db.Uuid
+  userId     String      @db.Uuid
+  metric     UsageMetric
+  quantity   Int         @default(1)
+  occurredAt DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, metric, occurredAt])
+}
+
+model AffiliateClick {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  /// Opaque reference appended to the affiliate link for attribution.
+  clickRef  String   @unique
+  /// Null for anonymous visitors; set to NULL when a user is deleted so revenue
+  /// reporting survives account deletion.
+  userId    String?  @db.Uuid
+  offerId   String   @db.Uuid
+  sourceId  String   @db.Uuid
+  /// Salted hash only; raw IP addresses are never stored.
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user        User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  offer       ProductOffer          @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  source      ShoppingSource        @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  conversions AffiliateConversion[]
+
+  @@index([userId])
+  @@index([sourceId, createdAt])
+  @@index([offerId])
+}
+
+enum ConversionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Global affiliate revenue reporting, imported from affiliate networks.
+model AffiliateConversion {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  clickId          String?          @db.Uuid
+  sourceId         String           @db.Uuid
+  externalOrderRef String
+  orderAmountPaise BigInt
+  commissionPaise  BigInt
+  status           ConversionStatus @default(PENDING)
+  reportedAt       DateTime
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  click  AffiliateClick? @relation(fields: [clickId], references: [id], onDelete: SetNull)
+  source ShoppingSource  @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceId, externalOrderRef])
+  @@index([clickId])
+}
+
+enum BillingEventType {
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_PLAN_CHANGED
+  SUBSCRIPTION_CANCELED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  REFUND_ISSUED
+}
+
+/// Immutable ledger of billing events from the payment provider.
+/// Restrict on user delete: financial records must be retained, so users with
+/// billing history are anonymised/suspended rather than hard-deleted.
+model BillingEvent {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  userId          String           @db.Uuid
+  subscriptionId  String?          @db.Uuid
+  type            BillingEventType
+  provider        String
+  /// Provider's event id: makes webhook processing idempotent.
+  providerEventId String
+  amountPaise     Int?
+  planCode        PlanCode?
+  payload         Json             @default("{}")
+  occurredAt      DateTime
+  createdAt       DateTime         @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([subscriptionId])
+}
+
+// ═══════════════════════════════ PLATFORM (global) ═══════════════════════════════
 
 model PlatformSetting {
   key       String   @id
   value     Json
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  actorId   String?
+  id        String   @id @default(uuid(7)) @db.Uuid
+  actorId   String?  @db.Uuid
   action    String
   entity    String
   entityId  String?
@@ -552,5 +709,6 @@ model AuditLog {
   actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([entity, entityId])
+  @@index([actorId])
   @@index([createdAt])
 }

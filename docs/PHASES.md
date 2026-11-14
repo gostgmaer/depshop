@@ -8,6 +8,7 @@ those pass.
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | 1   | Foundation: monorepo, tooling, data model, auth, RBAC, errors, API docs, web scaffold, Compose                                                                              | **Done** (see gaps below) |
 | 1.2 | Docker development infrastructure: Postgres + pgvector, Redis (auth, BullMQ-safe), pgAdmin, RedisInsight, health checks, network, volumes, operations docs                  | **Done** (see gaps below) |
+| 1.3 | Database: UUIDv7 ids, UserSession, NotificationDelivery, BillingEvent, userId on every user-owned model, composite ownership FKs, CHECK constraints, seed, DB tests         | **Done** (see gaps below) |
 | 2   | Web auth & account: login/register UI, session handling, profile, preferences API + UI                                                                                      | Not started               |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                            | Not started               |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches  | Not started               |
@@ -36,7 +37,7 @@ those pass.
 
 ### Phase 1 — known gaps (not hidden, carried forward)
 
-1. **Partially closed in 1.2.** Migrations now apply cleanly to real PostgreSQL 17, and `PrismaUserStore` was exercised end to end by a manual smoke test (register, login, refresh rotation, replay revocation, duplicate email). There is still **no automated** DB-backed integration test → add one in Phase 2.
+1. **Closed in 1.3.** Migrations now apply cleanly to real PostgreSQL 17, and `PrismaUserStore` was exercised end to end by a manual smoke test (register, login, refresh rotation, replay revocation, duplicate email). Phase 1.3 added 56 automated DB integration tests (`pnpm test:db`). An automated API-over-real-DB test is still missing (Phase 2).
 2. **Partially closed in 1.2.** The core Compose services are built, run and validated (see INFRASTRUCTURE.md). The `app` profile images (`migrate`, `api`, `web`, `traefik`) are still **not built or run**.
 3. **Access tokens are not checked against user status.** A suspended user's existing access token remains valid until expiry (≤ 15 min); refresh is blocked immediately. Revisit if stricter revocation is needed.
 4. **No email verification or password reset** (schema has `emailVerifiedAt`; flows are not implemented).
@@ -61,3 +62,20 @@ those pass.
 3. **RedisInsight auto-registration needs its EULA accepted.** It is opt-in via `REDISINSIGHT_ACCEPT_EULA` and was **not** accepted during validation. The RedisInsight → Redis connection itself was verified.
 4. **Secrets are plain environment variables** (visible via `docker inspect`). Fine for local development; production needs Docker secrets or a secret manager (Phase 11).
 5. **`app` profile not validated** (see Phase 1 gap 2).
+
+## Phase 1.3 — delivered
+
+- Schema (see [DATABASE.md](DATABASE.md)): all ids are native `uuid` (UUIDv7). `Session` renamed to `UserSession`. New `NotificationDelivery` and `BillingEvent`. `userId` FK on **every** user-owned model, including `SearchResult`, `SearchSourceRun`, `WatchlistItem` and `NotificationDelivery`. Composite `(parentId, userId)` ownership FKs. `SearchResult` snapshots price/MRP at search time. Trigram index on product titles. Explicit `onDelete` semantics (Cascade / SetNull / Restrict).
+- Migrations rebuilt as `extensions` → `init` → `constraints` (36 CHECK constraints + `NULLS NOT DISTINCT` alert uniqueness). Drift check (`prisma migrate diff` against a shadow DB) is empty.
+- Seed: idempotent `seedReferenceData()` (plans, disabled sources, 15-category tree) that preserves admin edits.
+- `@dealmind/db` exports ownership helpers (`ownedBy`, `assertOwnedBy`, `isOwnershipViolation`).
+- API: uses `UserSession`; UUID validation on id params; ownership FK violations map to 404 and other FK violations to 409.
+- Tests: 56 DB integration tests on a dedicated, guarded `*_test` database (`pnpm test:db`), plus 5 unit tests.
+
+### Phase 1.3 — known gaps / deviations
+
+1. **Local dev database not yet migrated.** It still has the pre-1.3 schema. `prisma migrate reset` is destructive, and Prisma blocks AI agents from running it without explicit user consent, which is pending. Until then, `pnpm dev` against the dev DB will fail on the new schema. Run `pnpm --filter @dealmind/db migrate:reset` yourself, or give consent.
+2. **Migration baseline was rebuilt** rather than altered (never deployed anywhere). Any other environment that applied the old migrations must be reset too.
+3. **`test:db` is not part of `pnpm check`**, so `check` still runs without Docker. Run it explicitly, and in CI once CI exists.
+4. **Users with billing history cannot be hard-deleted** (by design). An anonymisation/erasure flow is still to be built (Phase 10).
+5. Ownership helpers exist, but most user-owned features (watchlists, alerts, …) have no API yet. They arrive in Phases 4–9.

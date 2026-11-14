@@ -21,7 +21,7 @@ export const adminUserRoutes: FastifyPluginAsyncZod<{ store: UserStore }> = asyn
         security: [{ bearerAuth: [] }],
         querystring: z.object({
           limit: z.coerce.number().int().min(1).max(100).default(25),
-          cursor: z.string().optional(),
+          cursor: z.string().uuid().optional(),
           q: z.string().trim().min(1).max(100).optional(),
         }),
         response: {
@@ -46,7 +46,7 @@ export const adminUserRoutes: FastifyPluginAsyncZod<{ store: UserStore }> = asyn
         tags: ["admin"],
         summary: "Suspend or reactivate a user",
         security: [{ bearerAuth: [] }],
-        params: z.object({ userId: z.string().min(1) }),
+        params: z.object({ userId: z.string().uuid() }),
         body: z.object({ status: z.enum(["ACTIVE", "SUSPENDED"]) }),
         response: { 200: adminUser },
       },

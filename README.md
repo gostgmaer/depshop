@@ -6,6 +6,7 @@ compare identical products, find genuine discounts, and track prices.
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap & status (including known gaps): [docs/PHASES.md](docs/PHASES.md)
 - Docker infrastructure, operations & troubleshooting: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md)
+- Database schema, ownership model & tests: [docs/DATABASE.md](docs/DATABASE.md)
 - API docs: run the API and open `http://127.0.0.1:4000/docs`
 
 ## Requirements
@@ -42,7 +43,8 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-pnpm check      # all of the above
+pnpm check      # all of the above (no Docker needed)
+pnpm test:db    # database integration tests (needs `pnpm infra:up`)
 ```
 
 ## Making the first admin

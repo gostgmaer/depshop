@@ -218,6 +218,15 @@ describe("authorization", () => {
       payload: { status: "SUSPENDED" },
     });
     expect(self.statusCode).toBe(403);
+
+    // Malformed ids are rejected at the edge, before reaching the database.
+    const malformed = await app.inject({
+      method: "PATCH",
+      url: "/v1/admin/users/not-a-uuid/status",
+      headers,
+      payload: { status: "SUSPENDED" },
+    });
+    expect(malformed.statusCode).toBe(422);
   });
 });
 

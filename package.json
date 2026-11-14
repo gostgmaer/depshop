@@ -24,7 +24,8 @@
     "infra:down": "docker compose --profile tools --profile app down",
     "db:migrate:dev": "pnpm --filter @dealmind/db migrate:dev",
     "db:status": "pnpm --filter @dealmind/db migrate:status",
-    "db:studio": "pnpm --filter @dealmind/db studio"
+    "db:studio": "pnpm --filter @dealmind/db studio",
+    "test:db": "turbo run test:db"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

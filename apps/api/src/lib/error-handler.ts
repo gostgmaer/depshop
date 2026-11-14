@@ -1,4 +1,4 @@
-import { Prisma } from "@dealmind/db";
+import { Prisma, isOwnershipViolation } from "@dealmind/db";
 import { AppError, ErrorCode, type ErrorResponseBody } from "@dealmind/shared";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { hasZodFastifySchemaValidationErrors } from "fastify-type-provider-zod";
@@ -61,6 +61,20 @@ export function registerErrorHandler(app: FastifyInstance): void {
       }
       if (error.code === "P2025") {
         return send(reply, request, 404, ErrorCode.NOT_FOUND, "Resource not found");
+      }
+      if (error.code === "P2003") {
+        // Composite ownership FK: the parent belongs to another user (or does not
+        // exist). Report as not-found so record existence is never leaked.
+        if (isOwnershipViolation(error)) {
+          return send(reply, request, 404, ErrorCode.NOT_FOUND, "Resource not found");
+        }
+        return send(
+          reply,
+          request,
+          409,
+          ErrorCode.CONFLICT,
+          "Resource is referenced by other records",
+        );
       }
     }
 
