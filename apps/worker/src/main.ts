@@ -1,18 +1,32 @@
 /**
- * DealMind background worker. Consumes the shopping-search queue.
+ * DealMind background worker.
+ *  - shopping-search: parallel connector execution, catalog import, results;
+ *  - connector-health: scheduled health checks of every registered connector.
  * Price refresh, alert evaluation and notification delivery consumers arrive
- * with their phases (connectors, alerts, notifications); their jobs are not
- * consumed yet and stay queued.
+ * with their phases; those jobs are not consumed yet.
  */
+import { CatalogImporter, invalidateProductCaches } from "@dealmind/catalog";
+import {
+  HealthMonitor,
+  ParallelSearchExecutor,
+  PrismaSourceConfigProvider,
+  PrismaSourceStatusStore,
+  RedisMetricsStore,
+  RedisRateLimiter,
+  RedisResponseCache,
+  createDefaultRegistry,
+} from "@dealmind/connectors";
 import { createPrismaClient } from "@dealmind/db";
 import { QueueName, redisConnectionFromUrl } from "@dealmind/queue";
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
+import { Redis } from "ioredis";
 import { pino } from "pino";
 import { z } from "zod";
 import { processShoppingSearch } from "./search-processor.js";
 
 const env = z
   .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     DATABASE_URL: z.string().url(),
     REDIS_URL: z.string().url(),
     REDIS_KEY_PREFIX: z
@@ -20,34 +34,112 @@ const env = z
       .regex(/^[a-z0-9:_-]{1,40}$/)
       .default("dm"),
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
+    CONNECTOR_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(6),
+    CONNECTOR_HEALTH_INTERVAL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+    /** Mock connectors (fictional data) — default on outside production; refused in production. */
+    CONNECTORS_ENABLE_MOCKS: z.enum(["true", "false"]).optional(),
+    FLIPKART_AFFILIATE_ID: z.string().optional(),
+    FLIPKART_AFFILIATE_TOKEN: z.string().optional(),
+    AMAZON_CREATORS_CREDENTIAL_ID: z.string().optional(),
+    AMAZON_CREATORS_CREDENTIAL_SECRET: z.string().optional(),
+    AMAZON_ASSOCIATES_PARTNER_TAG: z.string().optional(),
     LOG_LEVEL: z.string().default("info"),
   })
   .parse(process.env);
 
-const log = pino({ level: env.LOG_LEVEL, base: { service: "dealmind-worker" } });
+const allowMocks = env.CONNECTORS_ENABLE_MOCKS
+  ? env.CONNECTORS_ENABLE_MOCKS === "true"
+  : env.NODE_ENV !== "production";
+if (allowMocks && env.NODE_ENV === "production")
+  throw new Error("Mock connectors are not allowed in production");
+
+const log = pino({
+  level: env.LOG_LEVEL,
+  base: { service: "dealmind-worker" },
+  // Credentials are never logged, even by accident.
+  redact: [
+    "*.token",
+    "*.FLIPKART_AFFILIATE_TOKEN",
+    "*.AMAZON_CREATORS_CREDENTIAL_SECRET",
+    "headers",
+  ],
+});
 const prisma = createPrismaClient({ url: env.DATABASE_URL });
+const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2 });
+const prefix = env.REDIS_KEY_PREFIX;
+const onRedisError = (err: unknown) =>
+  log.warn({ err: (err as Error).message }, "redis operation failed");
+
+const registry = createDefaultRegistry(env, { includeMocks: allowMocks });
+const sources = new PrismaSourceConfigProvider(prisma);
+const statusStore = new PrismaSourceStatusStore(prisma);
+const executor = new ParallelSearchExecutor({
+  registry,
+  sources,
+  statusStore,
+  rateLimiter: new RedisRateLimiter(redis, prefix, onRedisError),
+  cache: new RedisResponseCache(redis, prefix, onRedisError),
+  metrics: new RedisMetricsStore(redis, prefix, onRedisError),
+  concurrency: env.CONNECTOR_CONCURRENCY,
+  allowMocks,
+  logger: log,
+});
+const importer = new CatalogImporter(prisma, {
+  onProductsChanged: (ids) => invalidateProductCaches(redis, prefix, ids),
+});
+const monitor = new HealthMonitor(registry, sources, statusStore);
+
+const connection = redisConnectionFromUrl(env.REDIS_URL);
+const bullPrefix = `${prefix}:bull`;
 
 const searchWorker = new Worker(
   QueueName.shoppingSearch,
   async (job) => {
-    const outcome = await processShoppingSearch(prisma, job.data);
+    const outcome = await processShoppingSearch({ prisma, executor, importer }, job.data);
     log.info({ jobId: job.id, outcome }, "shopping search processed");
     return outcome;
   },
-  {
-    connection: redisConnectionFromUrl(env.REDIS_URL),
-    prefix: `${env.REDIS_KEY_PREFIX}:bull`,
-    concurrency: env.WORKER_CONCURRENCY,
+  { connection, prefix: bullPrefix, concurrency: env.WORKER_CONCURRENCY },
+);
+
+const healthQueue = new Queue(QueueName.connectorHealth, { connection, prefix: bullPrefix });
+await healthQueue.upsertJobScheduler(
+  "connector-health",
+  { every: env.CONNECTOR_HEALTH_INTERVAL_SECONDS * 1000 },
+  { name: "check", data: {} },
+);
+const healthWorker = new Worker(
+  QueueName.connectorHealth,
+  async () => {
+    const reports = await monitor.checkAll();
+    log.info(
+      { reports: reports.map((r) => ({ id: r.sourceId, health: r.health })) },
+      "connector health checked",
+    );
+    return reports.length;
   },
+  { connection, prefix: bullPrefix, concurrency: 1 },
 );
-searchWorker.on("failed", (job, err) =>
-  log.error({ jobId: job?.id, err: err.message }, "job failed"),
+
+for (const w of [searchWorker, healthWorker]) {
+  w.on("failed", (job, err) =>
+    log.error({ queue: w.name, jobId: job?.id, err: err.message }, "job failed"),
+  );
+}
+log.info(
+  {
+    queues: [QueueName.shoppingSearch, QueueName.connectorHealth],
+    connectors: registry
+      .list()
+      .map((c) => ({ id: c.id, mock: c.isMock, readiness: c.getReadiness().state })),
+  },
+  "worker started",
 );
-log.info({ queues: [QueueName.shoppingSearch] }, "worker started");
 
 async function shutdown(signal: string): Promise<void> {
   log.info({ signal }, "shutting down");
-  await searchWorker.close();
+  await Promise.all([searchWorker.close(), healthWorker.close(), healthQueue.close()]);
+  redis.disconnect();
   await prisma.$disconnect();
   process.exit(0);
 }

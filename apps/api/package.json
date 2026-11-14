@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@dealmind/catalog": "workspace:*",
+    "@dealmind/connectors": "workspace:*",
     "@dealmind/db": "workspace:*",
     "@dealmind/queue": "workspace:*",
     "@dealmind/shared": "workspace:*",

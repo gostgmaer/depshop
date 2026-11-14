@@ -69,6 +69,11 @@ export const CATEGORY_TREE: CategorySeed[] = [
 /** Slugs renamed since an earlier seed; the row is kept (with its products). */
 export const RENAMED_CATEGORY_SLUGS: Record<string, string> = { mobiles: "smartphones" };
 
+/**
+ * The initial Indian marketplaces. None is ACTIVE: each needs credentials or
+ * marketplace approval first (researched 2026-11, see docs/CONNECTORS.md).
+ * `statusReason` says exactly what is pending. Never put secrets here.
+ */
 export const SHOPPING_SOURCES = [
   {
     slug: "amazon_in",
@@ -76,6 +81,10 @@ export const SHOPPING_SOURCES = [
     domain: "amazon.in",
     baseUrl: "https://www.amazon.in",
     integrationKind: "OFFICIAL_API",
+    status: "PENDING_APPROVAL",
+    statusReason:
+      "Amazon Creators API (successor of PA-API 5.0) requires an approved Amazon.in Associates account and Creators API credentials (OAuth2 client credentials). Region token endpoint and OffersV2 schema must be verified after registration.",
+    rateLimitPerMinute: 60,
   },
   {
     slug: "flipkart",
@@ -83,6 +92,11 @@ export const SHOPPING_SOURCES = [
     domain: "flipkart.com",
     baseUrl: "https://www.flipkart.com",
     integrationKind: "AFFILIATE_FEED",
+    status: "PENDING_CREDENTIALS",
+    statusReason:
+      "Connector implemented against Flipkart Affiliate API 1.0 docs; needs FLIPKART_AFFILIATE_ID and FLIPKART_AFFILIATE_TOKEN from an approved affiliate account, then a verified test.",
+    // Documented limit is 20 calls/second per affiliate; stay well below it.
+    rateLimitPerMinute: 600,
   },
   {
     slug: "croma",
@@ -90,6 +104,10 @@ export const SHOPPING_SOURCES = [
     domain: "croma.com",
     baseUrl: "https://www.croma.com",
     integrationKind: "PARTNER",
+    status: "PENDING_APPROVAL",
+    statusReason:
+      "No public product API or feed found; requires a partner/feed agreement with Croma.",
+    rateLimitPerMinute: 60,
   },
   {
     slug: "reliance_digital",
@@ -97,6 +115,10 @@ export const SHOPPING_SOURCES = [
     domain: "reliancedigital.in",
     baseUrl: "https://www.reliancedigital.in",
     integrationKind: "PARTNER",
+    status: "PENDING_APPROVAL",
+    statusReason:
+      "No public product API or feed found; requires a partner/feed agreement with Reliance Digital.",
+    rateLimitPerMinute: 60,
   },
   {
     slug: "tata_cliq",
@@ -104,6 +126,10 @@ export const SHOPPING_SOURCES = [
     domain: "tatacliq.com",
     baseUrl: "https://www.tatacliq.com",
     integrationKind: "PARTNER",
+    status: "PENDING_APPROVAL",
+    statusReason:
+      "No public product API or feed found (affiliate networks offer links only); requires a partner/feed agreement with Tata CLiQ.",
+    rateLimitPerMinute: 60,
   },
 ] as const;
 
@@ -128,11 +154,24 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<SeedSumma
   }
 
   for (const source of SHOPPING_SOURCES) {
-    await prisma.shoppingSource.upsert({
-      where: { slug: source.slug },
-      // DISABLED until an authorized integration (credentials) exists.
-      create: { ...source, status: "DISABLED" },
-      update: { name: source.name, domain: source.domain, baseUrl: source.baseUrl },
+    const existing = await prisma.shoppingSource.findUnique({ where: { slug: source.slug } });
+    if (!existing) {
+      await prisma.shoppingSource.create({ data: { ...source } });
+      continue;
+    }
+    await prisma.shoppingSource.update({
+      where: { id: existing.id },
+      data: {
+        name: source.name,
+        domain: source.domain,
+        baseUrl: source.baseUrl,
+        statusReason: source.statusReason,
+        // Upgrade the old seeded default (DISABLED, never used) to the researched
+        // pending status; never touch a status an admin or a live connector set.
+        ...(existing.status === "DISABLED" && !existing.lastSuccessAt
+          ? { status: source.status }
+          : {}),
+      },
     });
   }
 

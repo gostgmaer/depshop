@@ -7,11 +7,11 @@ const id = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 describe("job contracts", () => {
   it("derives deterministic job ids (idempotent enqueue)", () => {
     const search = JOBS[QueueName.shoppingSearch];
-    expect(search.jobId({ searchId: id, userId: id })).toBe(`search:${id}`);
+    expect(search.jobId({ searchId: id, userId: id })).toBe(`search.${id}`);
     expect(JOBS[QueueName.priceRefresh].jobId({ offerId: id, slot: "2026-11-14T12:00" })).toBe(
-      `price:${id}:2026-11-14T12:00`,
+      `price.${id}.2026-11-14T12-00`,
     );
-    expect(JOBS[QueueName.notificationDelivery].jobId({ deliveryId: id })).toBe(`delivery:${id}`);
+    expect(JOBS[QueueName.notificationDelivery].jobId({ deliveryId: id })).toBe(`delivery.${id}`);
   });
 
   it("rejects malformed payloads", () => {
@@ -29,5 +29,16 @@ describe("job contracts", () => {
       db: 3,
       maxRetriesPerRequest: null,
     });
+  });
+
+  it("never produces job ids containing : (BullMQ rejects them)", () => {
+    const ids = [
+      JOBS[QueueName.shoppingSearch].jobId({ searchId: id, userId: id }),
+      JOBS[QueueName.priceRefresh].jobId({ offerId: id, slot: "2026-11-14T12:00" }),
+      JOBS[QueueName.alertEvaluation].jobId({ variantId: id, snapshotId: id }),
+      JOBS[QueueName.notificationDelivery].jobId({ deliveryId: id }),
+      JOBS[QueueName.connectorHealth].jobId({}),
+    ];
+    for (const j of ids) expect(j).not.toContain(":");
   });
 });

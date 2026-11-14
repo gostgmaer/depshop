@@ -15,6 +15,7 @@ export const QueueName = {
   priceRefresh: "price-refresh",
   alertEvaluation: "alert-evaluation",
   notificationDelivery: "notification-delivery",
+  connectorHealth: "connector-health",
 } as const;
 export type QueueName = (typeof QueueName)[keyof typeof QueueName];
 
@@ -48,22 +49,38 @@ export const notificationDeliveryJob = z.object({
 });
 export type NotificationDeliveryJob = z.infer<typeof notificationDeliveryJob>;
 
+/** Periodic health check of every registered connector (scheduled by the worker). */
+export const connectorHealthJob = z.object({}).strict();
+export type ConnectorHealthJob = z.infer<typeof connectorHealthJob>;
+
+/**
+ * BullMQ rejects custom job ids containing ":" (its key separator), so parts
+ * are joined with "." and any ":" inside a part (e.g. ISO time slots) becomes "-".
+ */
+export function jobId(...parts: string[]): string {
+  return parts.map((p) => p.replace(/:/g, "-")).join(".");
+}
+
 export const JOBS = {
   [QueueName.shoppingSearch]: {
     schema: shoppingSearchJob,
-    jobId: (p: ShoppingSearchJob) => `search:${p.searchId}`,
+    jobId: (p: ShoppingSearchJob) => jobId("search", p.searchId),
   },
   [QueueName.priceRefresh]: {
     schema: priceRefreshJob,
-    jobId: (p: PriceRefreshJob) => `price:${p.offerId}:${p.slot}`,
+    jobId: (p: PriceRefreshJob) => jobId("price", p.offerId, p.slot),
   },
   [QueueName.alertEvaluation]: {
     schema: alertEvaluationJob,
-    jobId: (p: AlertEvaluationJob) => `alerts:${p.variantId}:${p.snapshotId}`,
+    jobId: (p: AlertEvaluationJob) => jobId("alerts", p.variantId, p.snapshotId),
   },
   [QueueName.notificationDelivery]: {
     schema: notificationDeliveryJob,
-    jobId: (p: NotificationDeliveryJob) => `delivery:${p.deliveryId}`,
+    jobId: (p: NotificationDeliveryJob) => jobId("delivery", p.deliveryId),
+  },
+  [QueueName.connectorHealth]: {
+    schema: connectorHealthJob,
+    jobId: (_p: ConnectorHealthJob) => "connector-health",
   },
 } as const;
 
@@ -72,6 +89,7 @@ export interface JobPayloads {
   [QueueName.priceRefresh]: PriceRefreshJob;
   [QueueName.alertEvaluation]: AlertEvaluationJob;
   [QueueName.notificationDelivery]: NotificationDeliveryJob;
+  [QueueName.connectorHealth]: ConnectorHealthJob;
 }
 
 /** Retries with exponential backoff; completed jobs are kept briefly for dedupe/inspection. */

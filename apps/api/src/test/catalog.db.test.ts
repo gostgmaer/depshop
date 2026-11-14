@@ -10,6 +10,7 @@ import {
   invalidateProductCaches,
   seedSampleCatalog,
 } from "@dealmind/catalog";
+import { RedisMetricsStore } from "@dealmind/connectors";
 import { seedReferenceData } from "@dealmind/db";
 import type { ErrorResponseBody } from "@dealmind/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -428,23 +429,86 @@ describe("shared catalog and caching", () => {
   });
 });
 
-describe("sources", () => {
-  it("lists only active sources and reports every source's status", async () => {
+describe("sources (connector status)", () => {
+  it("lists every source with its honest connector status and reason", async () => {
     await seedSampleCatalog(ctx.prisma, { env: "test" });
-    const active = await data<{ slug: string; isSample: boolean }[]>("/api/v1/sources");
-    expect(active.map((s) => s.slug).sort()).toEqual([SOURCE, "dealmind_sample"].sort());
+    const all = await data<(Json & { slug: string })[]>("/api/v1/sources");
+    const bySlug: Record<string, Json> = Object.fromEntries(all.map((s) => [s.slug, s]));
+    expect(Object.keys(bySlug).sort()).toEqual(
+      [
+        "acme_store",
+        "amazon_in",
+        "croma",
+        "dealmind_sample",
+        "flipkart",
+        "reliance_digital",
+        "tata_cliq",
+      ].sort(),
+    );
+    expect(bySlug.amazon_in).toMatchObject({
+      connectorStatus: "PENDING_APPROVAL",
+      available: false,
+    });
+    expect(bySlug.flipkart).toMatchObject({
+      connectorStatus: "PENDING_CREDENTIALS",
+      available: false,
+    });
+    expect(String(bySlug.croma?.statusReason)).toMatch(/partner/);
+    expect(bySlug.dealmind_sample).toMatchObject({
+      connectorStatus: "ACTIVE",
+      isSample: true,
+      available: true,
+    });
     const status = await data<{ totalSources: number; activeSources: number }>(
       "/api/v1/sources/status",
     );
     expect(status).toMatchObject({ totalSources: 7, activeSources: 2 });
-    expect(await data("/api/v1/sources/amazon_in")).toMatchObject({
-      status: "DISABLED",
+  });
+
+  it("derives DEGRADED/FAILED from health and returns detail by id or slug with metrics, never secrets", async () => {
+    await ctx.prisma.shoppingSource.update({
+      where: { slug: SOURCE },
+      data: { health: "DOWN", lastHealthError: "Circuit open after repeated failures" },
+    });
+    await new RedisMetricsStore(ctx.redis, ctx.prefix).record({
+      sourceId: SOURCE,
+      outcome: "TIMED_OUT",
+      durationMs: 800,
+      resultCount: 0,
+      cached: false,
+      errorCategory: "TIMEOUT",
+      at: new Date(),
+    });
+    const bySlug = await data<Json & { metrics: Json; tuning: Json }>(`/api/v1/sources/${SOURCE}`);
+    expect(bySlug).toMatchObject({
+      connectorStatus: "FAILED",
       available: false,
+      lastHealthError: "Circuit open after repeated failures",
+      tuning: { timeoutMs: 8000, rateLimitPerMinute: 60, maxRetries: 2, cacheTtlSeconds: 300 },
+      metrics: {
+        requests: 1,
+        failures: 1,
+        timeouts: 1,
+        errorsByCategory: { TIMEOUT: 1 },
+        lastErrorCategory: "TIMEOUT",
+      },
     });
-    expect(await data("/api/v1/sources/dealmind_sample")).toMatchObject({
-      isSample: true,
-      domain: "example.com",
+    const byId = await data<Json>(`/api/v1/sources/${String(bySlug.id)}`);
+    expect(byId).toEqual(bySlug);
+    const raw = JSON.stringify(byId).toLowerCase();
+    for (const secret of ["token", "secret", "password", "credential"])
+      expect(raw).not.toContain(secret);
+
+    await ctx.prisma.shoppingSource.update({
+      where: { slug: SOURCE },
+      data: { health: "DEGRADED" },
     });
+    expect(await data(`/api/v1/sources/${SOURCE}`)).toMatchObject({
+      connectorStatus: "DEGRADED",
+      available: true,
+    });
+    await get("/api/v1/sources/nope", 404);
+    expect((await errorOf("/api/v1/sources/Bad-Slug", 422)).code).toBe("VALIDATION_ERROR");
   });
 });
 

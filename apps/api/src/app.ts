@@ -32,6 +32,7 @@ import { AlertService } from "./modules/alerts/alert-service.js";
 import { alertRoutes } from "./modules/alerts/alert-routes.js";
 import { categoryRoutes, productRoutes, sourceRoutes } from "./modules/catalog/catalog-routes.js";
 import { CatalogService } from "./modules/catalog/catalog-service.js";
+import { RedisMetricsStore } from "@dealmind/connectors";
 import { notificationRoutes } from "./modules/notifications/notification-routes.js";
 import { SearchService } from "./modules/search/search-service.js";
 import { searchRoutes } from "./modules/search/search-routes.js";
@@ -245,6 +246,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       history: env.CATALOG_HISTORY_TTL_SECONDS,
     },
     offerStaleAfterMs: env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+    metrics: new RedisMetricsStore(redis, env.REDIS_KEY_PREFIX, (err) =>
+      app.log.warn({ err: (err as Error).message }, "connector metrics unavailable"),
+    ),
   });
   const plans = new PlanService(prisma);
   const search = new SearchService(

@@ -17,6 +17,7 @@
  */
 // Same canonicalization the importer applies (brand filter must match stored brands).
 import { PRODUCT_CACHE_KINDS, normalizeBrand } from "@dealmind/catalog";
+import { type MetricsStore, type SourceMetrics, effectiveStatus } from "@dealmind/connectors";
 import { Prisma, type PrismaClient } from "@dealmind/db";
 import {
   AppError,
@@ -48,6 +49,8 @@ export interface CatalogOptions {
   ttl: CatalogCacheTtls;
   /** Offers not observed for this long are stale (never shown as live). */
   offerStaleAfterMs: number;
+  /** Connector execution metrics (shared Redis store written by the worker). */
+  metrics?: MetricsStore;
   now?: () => Date;
 }
 
@@ -455,6 +458,8 @@ export class CatalogService {
   }
 
   // ── Shopping sources ────────────────────────────────────────────────────
+  // Public status data only: configuration, health and metrics. Credentials
+  // never live in the database, so nothing secret can be selected here.
 
   private readonly sourceSelect = {
     id: true,
@@ -465,57 +470,112 @@ export class CatalogService {
     logoUrl: true,
     integrationKind: true,
     status: true,
+    statusReason: true,
     isSample: true,
     health: true,
     lastHealthCheckAt: true,
+    lastHealthError: true,
+    lastSuccessAt: true,
   } as const;
 
   private sourceView(
     s: Prisma.ShoppingSourceGetPayload<{ select: CatalogService["sourceSelect"] }>,
   ) {
+    const connectorStatus = effectiveStatus(s.status, s.health);
     return {
       ...s,
-      available: s.status === "ACTIVE" && s.health !== "DOWN",
+      connectorStatus,
+      available: connectorStatus === "ACTIVE" || connectorStatus === "DEGRADED",
       lastHealthCheckAt: iso(s.lastHealthCheckAt),
+      lastSuccessAt: iso(s.lastSuccessAt),
     };
   }
 
-  async listActiveSources() {
+  /** Every registered source with its honest status (ACTIVE, PENDING_*, FAILED…). */
+  async listSources() {
     const rows = await this.prisma.shoppingSource.findMany({
-      where: { status: "ACTIVE" },
       orderBy: { name: "asc" },
       select: this.sourceSelect,
     });
     return rows.map((s) => this.sourceView(s));
   }
 
-  async getSource(slug: string) {
-    const s = await this.prisma.shoppingSource.findUnique({
-      where: { slug },
-      select: this.sourceSelect,
+  /** Source detail by id or slug: status, tuning, capabilities and metrics. */
+  async getSource(idOrSlug: string) {
+    const s = await this.prisma.shoppingSource.findFirst({
+      where: UUID_RE.test(idOrSlug) ? { id: idOrSlug } : { slug: idOrSlug },
+      select: {
+        ...this.sourceSelect,
+        timeoutMs: true,
+        rateLimitPerMinute: true,
+        maxRetries: true,
+        cacheTtlSeconds: true,
+        circuitFailureThreshold: true,
+        circuitOpenSeconds: true,
+        capabilities: true,
+      },
     });
     if (!s) throw AppError.notFound("Source");
-    return this.sourceView(s);
+    const {
+      timeoutMs,
+      rateLimitPerMinute,
+      maxRetries,
+      cacheTtlSeconds,
+      circuitFailureThreshold,
+      circuitOpenSeconds,
+      capabilities,
+      ...view
+    } = s;
+    const empty: SourceMetrics = {
+      requests: 0,
+      successes: 0,
+      failures: 0,
+      timeouts: 0,
+      rateLimitEvents: 0,
+      cacheHits: 0,
+      results: 0,
+      latencyMsTotal: 0,
+      averageLatencyMs: null,
+      errorsByCategory: {},
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      lastErrorCategory: null,
+    };
+    const { latencyMsTotal: _total, ...metrics } = this.options.metrics
+      ? await this.options.metrics.read(s.slug)
+      : empty;
+    return {
+      ...this.sourceView(view),
+      tuning: {
+        timeoutMs,
+        rateLimitPerMinute,
+        maxRetries,
+        cacheTtlSeconds,
+        circuitFailureThreshold,
+        circuitOpenSeconds,
+      },
+      capabilities: (capabilities ?? {}) as Record<string, unknown>,
+      metrics,
+    };
   }
 
-  /** Integration status of every registered source (no credentials or config). */
+  /** Integration summary of every registered source (no credentials or config). */
   async sourceStatus() {
-    const rows = await this.prisma.shoppingSource.findMany({
-      orderBy: { name: "asc" },
-      select: this.sourceSelect,
-    });
+    const rows = await this.listSources();
     return {
       totalSources: rows.length,
-      activeSources: rows.filter((s) => s.status === "ACTIVE").length,
-      healthySources: rows.filter((s) => s.status === "ACTIVE" && s.health === "HEALTHY").length,
+      activeSources: rows.filter((s) => s.available).length,
+      healthySources: rows.filter((s) => s.available && s.health === "HEALTHY").length,
       sources: rows.map((s) => ({
         slug: s.slug,
         name: s.name,
         status: s.status,
+        connectorStatus: s.connectorStatus,
+        statusReason: s.statusReason,
         isSample: s.isSample,
         integrationKind: s.integrationKind,
         health: s.health,
-        lastHealthCheckAt: iso(s.lastHealthCheckAt),
+        lastHealthCheckAt: s.lastHealthCheckAt,
       })),
     };
   }

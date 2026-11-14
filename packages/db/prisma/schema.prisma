@@ -238,9 +238,15 @@ enum SourceHealth {
   DOWN
 }
 
+/// Admin/integration status of a source. Runtime health (DEGRADED/FAILED)
+/// is tracked separately in `health` and combined by the API.
 enum SourceStatus {
   /// Authorized integration configured; eligible for searches and imports.
   ACTIVE
+  /// Integration exists or is possible, but credentials are not configured.
+  PENDING_CREDENTIALS
+  /// The marketplace must approve access (partner/affiliate programme) first.
+  PENDING_APPROVAL
   /// No authorized integration (the default).
   DISABLED
   /// Temporarily paused by an admin.
@@ -248,30 +254,40 @@ enum SourceStatus {
 }
 
 model ShoppingSource {
-  id                 String                @id @default(uuid(7)) @db.Uuid
+  id                      String                @id @default(uuid(7)) @db.Uuid
   /// Stable connector key, e.g. "amazon_in", "flipkart".
-  slug               String                @unique
-  name               String
+  slug                    String                @unique
+  name                    String
   /// Registrable domain, e.g. "amazon.in".
-  domain             String
-  baseUrl            String
-  logoUrl            String?
-  integrationKind    SourceIntegrationKind
+  domain                  String
+  baseUrl                 String
+  logoUrl                 String?
+  integrationKind         SourceIntegrationKind
   /// DISABLED by default; ACTIVE only once authorized credentials exist.
-  status             SourceStatus          @default(DISABLED)
-  capabilities       Json                  @default("{}")
-  timeoutMs          Int                   @default(8000)
-  rateLimitPerMinute Int                   @default(60)
-  maxRetries         Int                   @default(2)
-  affiliateEnabled   Boolean               @default(false)
+  status                  SourceStatus          @default(DISABLED)
+  capabilities            Json                  @default("{}")
+  timeoutMs               Int                   @default(8000)
+  rateLimitPerMinute      Int                   @default(60)
+  maxRetries              Int                   @default(2)
+  affiliateEnabled        Boolean               @default(false)
   /// Development sample data only (fictional store, example.com URLs, made-up
   /// prices). Clients must label its offers as sample data, never as real.
-  isSample           Boolean               @default(false)
-  health             SourceHealth          @default(UNKNOWN)
-  lastHealthCheckAt  DateTime?
-  lastHealthError    String?
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  isSample                Boolean               @default(false)
+  health                  SourceHealth          @default(UNKNOWN)
+  lastHealthCheckAt       DateTime?
+  lastHealthError         String?
+  /// Why the source has its status (e.g. which approval is pending). Never secrets.
+  statusReason            String?
+  /// Last successful connector execution (search or health check).
+  lastSuccessAt           DateTime?
+  /// TTL for cached connector responses (seconds; 0 disables).
+  cacheTtlSeconds         Int                   @default(300)
+  /// Consecutive failures that open the circuit breaker.
+  circuitFailureThreshold Int                   @default(5)
+  /// How long an open circuit rejects calls before a half-open probe.
+  circuitOpenSeconds      Int                   @default(60)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
   offers               ProductOffer[]
   searchRuns           SearchSourceRun[]

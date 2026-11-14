@@ -27,7 +27,15 @@ describe("seedReferenceData", () => {
 
     const sources = await prisma.shoppingSource.findMany();
     expect(sources).toHaveLength(5);
-    expect(sources.every((s) => s.status === "DISABLED" && !s.isSample)).toBe(true);
+    // Nothing is ACTIVE: every marketplace awaits credentials or approval.
+    expect(sources.every((s) => s.status !== "ACTIVE" && !s.isSample && s.statusReason)).toBe(true);
+    expect(Object.fromEntries(sources.map((s) => [s.slug, s.status]))).toEqual({
+      amazon_in: "PENDING_APPROVAL",
+      flipkart: "PENDING_CREDENTIALS",
+      croma: "PENDING_APPROVAL",
+      reliance_digital: "PENDING_APPROVAL",
+      tata_cliq: "PENDING_APPROVAL",
+    });
 
     const phones = await prisma.category.findUnique({
       where: { slug: "smartphones" },
@@ -94,5 +102,36 @@ describe("seedReferenceData", () => {
     expect(phones.id).toBe(legacy.id);
     expect(phones.products).toHaveLength(1);
     expect(await prisma.category.findUnique({ where: { slug: "mobiles" } })).toBeNull();
+  });
+
+  it("upgrades an untouched legacy DISABLED source to its researched status, keeps admin choices", async () => {
+    await prisma.shoppingSource.create({
+      data: {
+        slug: "croma",
+        name: "Croma",
+        domain: "croma.com",
+        baseUrl: "https://www.croma.com",
+        integrationKind: "PARTNER",
+        status: "DISABLED",
+      },
+    });
+    await prisma.shoppingSource.create({
+      data: {
+        slug: "flipkart",
+        name: "Flipkart",
+        domain: "flipkart.com",
+        baseUrl: "https://www.flipkart.com",
+        integrationKind: "AFFILIATE_FEED",
+        status: "ACTIVE",
+      },
+    });
+    await seedReferenceData(prisma);
+    const rows = await prisma.shoppingSource.findMany({
+      where: { slug: { in: ["croma", "flipkart"] } },
+    });
+    expect(Object.fromEntries(rows.map((r) => [r.slug, r.status]))).toEqual({
+      croma: "PENDING_APPROVAL",
+      flipkart: "ACTIVE",
+    });
   });
 });

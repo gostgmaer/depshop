@@ -1,0 +1,33 @@
+{
+  "name": "@dealmind/connectors",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
+    "verify:flipkart": "dotenv -e ../../.env -- node dist/verify-flipkart.js"
+  },
+  "dependencies": {
+    "@dealmind/catalog": "workspace:*",
+    "@dealmind/db": "workspace:*",
+    "@dealmind/shared": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "ioredis": "^5.4.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0"
+  }
+}

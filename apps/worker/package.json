@@ -13,10 +13,13 @@
     "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts"
   },
   "dependencies": {
+    "@dealmind/catalog": "workspace:*",
+    "@dealmind/connectors": "workspace:*",
     "@dealmind/db": "workspace:*",
     "@dealmind/queue": "workspace:*",
     "@dealmind/shared": "workspace:*",
     "bullmq": "^5.34.0",
+    "ioredis": "^5.4.2",
     "pino": "^9.6.0",
     "zod": "^3.25.0"
   },

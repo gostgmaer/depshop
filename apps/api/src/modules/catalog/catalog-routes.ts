@@ -13,6 +13,7 @@ import {
   productDetail,
   productListQuery,
   productSummary,
+  sourceDetail,
   sourceStatus,
   sourceView,
   variantView,
@@ -150,11 +151,11 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
     {
       schema: {
         tags: ["sources"],
-        summary: "Active shopping sources",
+        summary: "Every shopping source with its connector status (no credentials)",
         response: { 200: ok(z.array(sourceView)) },
       },
     },
-    async () => catalog.listActiveSources(),
+    async () => catalog.listSources(),
   );
 
   app.get(
@@ -170,15 +171,17 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
   );
 
   app.get(
-    "/:slug",
+    "/:id",
     {
       schema: {
         tags: ["sources"],
-        summary: "Source availability",
-        params: z.object({ slug: z.string().regex(/^[a-z][a-z0-9_]{0,49}$/) }),
-        response: { 200: ok(sourceView) },
+        summary: "Source detail by id or slug: status, tuning, health and metrics",
+        params: z.object({
+          id: z.union([z.string().uuid(), z.string().regex(/^[a-z][a-z0-9_]{0,49}$/)]),
+        }),
+        response: { 200: ok(sourceDetail) },
       },
     },
-    async (req) => catalog.getSource(req.params.slug),
+    async (req) => catalog.getSource(req.params.id),
   );
 };

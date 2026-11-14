@@ -24,7 +24,22 @@ export const matchMethod = z.enum([
   "MANUAL",
   "NEW_PRODUCT",
 ]);
-export const sourceStatusValue = z.enum(["ACTIVE", "DISABLED", "MAINTENANCE"]);
+export const sourceStatusValue = z.enum([
+  "ACTIVE",
+  "PENDING_CREDENTIALS",
+  "PENDING_APPROVAL",
+  "DISABLED",
+  "MAINTENANCE",
+]);
+/** Admin status combined with runtime health (what users and admins see). */
+export const connectorStatusValue = z.enum([
+  "ACTIVE",
+  "PENDING_CREDENTIALS",
+  "PENDING_APPROVAL",
+  "DISABLED",
+  "DEGRADED",
+  "FAILED",
+]);
 
 export const categoryView = z.object({
   id: uuid,
@@ -243,11 +258,47 @@ export const sourceView = z.object({
   logoUrl: z.string().nullable(),
   integrationKind: z.string(),
   status: sourceStatusValue,
+  /** ACTIVE / DEGRADED / FAILED / PENDING_CREDENTIALS / PENDING_APPROVAL / DISABLED. */
+  connectorStatus: connectorStatusValue,
+  /** Why the source has this status (e.g. which approval is pending). */
+  statusReason: z.string().nullable(),
+  /** Mock/sample source with fictional data — never a real marketplace. */
   isSample: z.boolean(),
-  /** Active and not known to be down. */
+  /** Participates in live search (ACTIVE or DEGRADED). */
   available: z.boolean(),
   health: z.enum(["UNKNOWN", "HEALTHY", "DEGRADED", "DOWN"]),
   lastHealthCheckAt: iso.nullable(),
+  lastHealthError: z.string().nullable(),
+  lastSuccessAt: iso.nullable(),
+});
+
+export const sourceMetricsView = z.object({
+  requests: z.number().int(),
+  successes: z.number().int(),
+  failures: z.number().int(),
+  timeouts: z.number().int(),
+  rateLimitEvents: z.number().int(),
+  cacheHits: z.number().int(),
+  results: z.number().int(),
+  averageLatencyMs: z.number().int().nullable(),
+  errorsByCategory: z.record(z.number().int()),
+  lastSuccessAt: iso.nullable(),
+  lastFailureAt: iso.nullable(),
+  lastErrorCategory: z.string().nullable(),
+});
+
+/** Source detail: configuration (never credentials) and execution metrics. */
+export const sourceDetail = sourceView.extend({
+  tuning: z.object({
+    timeoutMs: z.number().int(),
+    rateLimitPerMinute: z.number().int(),
+    maxRetries: z.number().int(),
+    cacheTtlSeconds: z.number().int(),
+    circuitFailureThreshold: z.number().int(),
+    circuitOpenSeconds: z.number().int(),
+  }),
+  capabilities: z.record(z.unknown()),
+  metrics: sourceMetricsView,
 });
 
 export const sourceStatus = z.object({
@@ -259,6 +310,8 @@ export const sourceStatus = z.object({
       slug: z.string(),
       name: z.string(),
       status: sourceStatusValue,
+      connectorStatus: connectorStatusValue,
+      statusReason: z.string().nullable(),
       isSample: z.boolean(),
       integrationKind: z.string(),
       health: z.string(),

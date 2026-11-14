@@ -5,7 +5,7 @@
  * enabling a source without an authorized connector would be meaningless.
  */
 import type { PrismaClient } from "@dealmind/db";
-import { pageQuery, paginationOf } from "@dealmind/shared";
+import { pageQuery, paginationOf, sourceStatusValue } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { iso, ok, page, paginated } from "../../utils/http.js";
@@ -19,7 +19,8 @@ const adminSource = z.object({
   domain: z.string(),
   baseUrl: z.string(),
   integrationKind: z.string(),
-  status: z.enum(["ACTIVE", "DISABLED", "MAINTENANCE"]),
+  status: sourceStatusValue,
+  statusReason: z.string().nullable(),
   isSample: z.boolean(),
   affiliateEnabled: z.boolean(),
   timeoutMs: z.number().int(),
@@ -65,6 +66,7 @@ export const adminPlatformRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }
         baseUrl: s.baseUrl,
         integrationKind: s.integrationKind,
         status: s.status,
+        statusReason: s.statusReason,
         isSample: s.isSample,
         affiliateEnabled: s.affiliateEnabled,
         timeoutMs: s.timeoutMs,
