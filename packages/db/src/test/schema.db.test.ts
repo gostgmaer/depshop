@@ -69,6 +69,7 @@ describe("schema: no multi-tenancy", () => {
         "PriceAlert",
         "PriceSnapshot",
         "Product",
+        "ProductMatchReview",
         "ProductOffer",
         "ProductVariant",
         "Search",
@@ -143,15 +144,14 @@ describe("schema: types and conventions", () => {
     expect(a.id < b.id).toBe(true);
   });
 
-  it("stores every *Paise money column as an integer type", async () => {
+  it("stores every *Paise money column as BIGINT (no 32-bit overflow)", async () => {
     const rows = await prisma.$queryRaw<
       { table_name: string; column_name: string; data_type: string }[]
     >`
       SELECT table_name, column_name, data_type FROM information_schema.columns
       WHERE table_schema = 'public' AND column_name ILIKE '%paise%'`;
     expect(rows.length).toBeGreaterThanOrEqual(12);
-    for (const r of rows)
-      expect(["integer", "bigint"], `${r.table_name}.${r.column_name}`).toContain(r.data_type);
+    for (const r of rows) expect(r.data_type, `${r.table_name}.${r.column_name}`).toBe("bigint");
   });
 
   it("uses jsonb (never json) for JSON columns", async () => {
@@ -161,12 +161,17 @@ describe("schema: types and conventions", () => {
     expect(rows.map((r) => r.data_type)).toEqual(["jsonb"]);
   });
 
-  it("has pg_trgm and pgvector installed, with a trigram index on product titles", async () => {
+  it("has pg_trgm and pgvector installed, with trigram indexes on product names", async () => {
     const ext = await prisma.$queryRaw<{ extname: string }[]>`
       SELECT extname FROM pg_extension WHERE extname IN ('pg_trgm', 'vector') ORDER BY 1`;
     expect(ext.map((e) => e.extname)).toEqual(["pg_trgm", "vector"]);
     const idx = await prisma.$queryRaw<{ indexdef: string }[]>`
-      SELECT indexdef FROM pg_indexes WHERE indexname = 'Product_title_trgm_idx'`;
-    expect(idx[0]?.indexdef).toMatch(/USING gin \(title gin_trgm_ops\)/);
+      SELECT indexdef FROM pg_indexes
+      WHERE indexname IN ('Product_name_trgm_idx', 'Product_normalizedName_trgm_idx')
+      ORDER BY indexname`;
+    expect(idx.map((i) => i.indexdef)).toEqual([
+      expect.stringMatching(/USING gin \(name gin_trgm_ops\)/),
+      expect.stringMatching(/USING gin \("normalizedName" gin_trgm_ops\)/),
+    ]);
   });
 });

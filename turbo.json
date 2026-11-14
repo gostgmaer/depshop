@@ -12,6 +12,9 @@
     "typecheck": {
       "dependsOn": ["^build", "generate"]
     },
+    "@dealmind/web#typecheck": {
+      "dependsOn": ["^build", "@dealmind/web#build"]
+    },
     "lint": {
       "dependsOn": ["^build", "generate"]
     },

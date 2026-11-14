@@ -34,7 +34,10 @@ export class RedisLoginThrottle implements LoginThrottle {
 
   private keys(key: string) {
     const k = encodeURIComponent(key.toLowerCase());
-    return { fails: `${this.prefix}:auth:throttle:fails:${k}`, lock: `${this.prefix}:auth:throttle:lock:${k}` };
+    return {
+      fails: `${this.prefix}:auth:throttle:fails:${k}`,
+      lock: `${this.prefix}:auth:throttle:lock:${k}`,
+    };
   }
 
   /**

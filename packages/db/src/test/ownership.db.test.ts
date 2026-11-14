@@ -59,7 +59,7 @@ describe("composite ownership foreign keys", () => {
         offerId: catalog.offer.id,
         rank: 1,
         score: 100,
-        pricePaiseAtSearch: catalog.offer.pricePaise,
+        pricePaiseAtSearch: catalog.offer.sellingPricePaise,
       },
     });
     expect(isOwnershipViolation(await expectPrismaCode(result, "P2003"))).toBe(true);

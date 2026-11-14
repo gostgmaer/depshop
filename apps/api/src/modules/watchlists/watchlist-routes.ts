@@ -32,7 +32,8 @@ export const watchlistRoutes: FastifyPluginAsyncZod<{ watchlists: WatchlistServi
         response: { 201: ok(watchlistView) },
       },
     },
-    async (req, reply) => reply.status(201).send(await watchlists.create(getAuth(req).userId, req.body.name)),
+    async (req, reply) =>
+      reply.status(201).send(await watchlists.create(getAuth(req).userId, req.body.name)),
   );
 
   app.get(
@@ -110,7 +111,14 @@ export const watchlistRoutes: FastifyPluginAsyncZod<{ watchlists: WatchlistServi
     async (req, reply) =>
       reply
         .status(201)
-        .send(await watchlists.addItem(getAuth(req).userId, req.params.id, req.body.variantId, req.body.note)),
+        .send(
+          await watchlists.addItem(
+            getAuth(req).userId,
+            req.params.id,
+            req.body.variantId,
+            req.body.note,
+          ),
+        ),
   );
 
   app.delete(

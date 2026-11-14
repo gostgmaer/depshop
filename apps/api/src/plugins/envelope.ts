@@ -9,7 +9,9 @@ import fp from "fastify-plugin";
 import { Paginated } from "../utils/http.js";
 
 function isEnveloped(payload: unknown): boolean {
-  return typeof payload === "object" && payload !== null && "success" in payload && "meta" in payload;
+  return (
+    typeof payload === "object" && payload !== null && "success" in payload && "meta" in payload
+  );
 }
 
 export const envelopePlugin = fp(

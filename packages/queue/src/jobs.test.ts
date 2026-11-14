@@ -15,9 +15,9 @@ describe("job contracts", () => {
   });
 
   it("rejects malformed payloads", () => {
-    expect(JOBS[QueueName.shoppingSearch].schema.safeParse({ searchId: "x", userId: id }).success).toBe(
-      false,
-    );
+    expect(
+      JOBS[QueueName.shoppingSearch].schema.safeParse({ searchId: "x", userId: id }).success,
+    ).toBe(false);
     expect(JOBS[QueueName.alertEvaluation].schema.safeParse({ variantId: id }).success).toBe(false);
   });
 

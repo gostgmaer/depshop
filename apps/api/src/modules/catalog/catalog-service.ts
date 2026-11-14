@@ -1,9 +1,22 @@
 /**
  * Global catalog reads: categories, products, variants, offers, price history
- * and shopping sources. This data is shared by all users and never copied per
- * user. Only offers from ENABLED sources are exposed: a disabled source has no
- * authorized integration.
+ * and shopping sources. Shared by all users; never copied per user.
+ *
+ * Offer rules:
+ *  - only offers from ACTIVE sources are exposed (others have no authorized integration);
+ *  - an offer not observed within `offerStaleAfterMs` is stale: it is excluded
+ *    from lowest-price summaries and, when listed on request, flagged `isStale`;
+ *  - offers from a sample source are flagged (`source.isSample`, `sampleData`).
+ *
+ * Caching (Redis, shared `catalog:*` keys, explicit TTLs, invalidated on import):
+ *  - category list ............ ttl.categories
+ *  - product detail (static) .. ttl.product
+ *  - offer summaries & lists .. ttl.offers (short; freshness cut-off is shifted
+ *    by this TTL so a cached value can never show an offer older than the stale limit)
+ *  - price history ............ ttl.history
  */
+// Same canonicalization the importer applies (brand filter must match stored brands).
+import { PRODUCT_CACHE_KINDS, normalizeBrand } from "@dealmind/catalog";
 import { Prisma, type PrismaClient } from "@dealmind/db";
 import {
   AppError,
@@ -13,8 +26,10 @@ import {
   type PageQuery,
   type ProductListQuery,
   type ProductSummary,
+  type VariantView,
   discountBasisPoints,
-  paise,
+  paiseFromDb,
+  paiseFromDbOrNull,
   paginationOf,
 } from "@dealmind/shared";
 import type { CacheService } from "../../lib/cache.js";
@@ -22,29 +37,110 @@ import { type Paginated, iso, paginated } from "../../utils/http.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type CategoryRow = { id: string; slug: string; name: string; parentId: string | null };
+export interface CatalogCacheTtls {
+  categories: number;
+  product: number;
+  offers: number;
+  history: number;
+}
+
+export interface CatalogOptions {
+  ttl: CatalogCacheTtls;
+  /** Offers not observed for this long are stale (never shown as live). */
+  offerStaleAfterMs: number;
+  now?: () => Date;
+}
+
+type CategoryRow = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  parentId: string | null;
+};
+const categorySelect = {
+  id: true,
+  slug: true,
+  name: true,
+  description: true,
+  imageUrl: true,
+  parentId: true,
+} as const;
 const toCategory = (c: CategoryRow): CategoryView => ({
   id: c.id,
   slug: c.slug,
   name: c.name,
+  description: c.description,
+  imageUrl: c.imageUrl,
   parentId: c.parentId,
 });
 
+interface OfferSummary {
+  low: number | null;
+  count: number;
+  inStock: boolean;
+  sampleData: boolean;
+}
+
+type ProductCore = Omit<
+  ProductSummary,
+  "lowestPricePaise" | "offerCount" | "inStock" | "sampleData"
+>;
+
+const IN_STOCK = Prisma.sql`o."stockStatus" IN ('IN_STOCK', 'LIMITED')`;
+
 export class CatalogService {
+  private readonly now: () => Date;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly cache: CacheService,
-    private readonly ttlSeconds: number,
-  ) {}
+    private readonly options: CatalogOptions,
+  ) {
+    this.now = options.now ?? (() => new Date());
+  }
+
+  private cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T> {
+    return ttl > 0 ? this.cache.getOrSet(key, ttl, load) : load();
+  }
+
+  /** Observed-at cut-off for "fresh" offers, shifted by the offer cache TTL. */
+  private freshCutoff(): Date {
+    return new Date(
+      this.now().getTime() - this.options.offerStaleAfterMs + this.options.ttl.offers * 1000,
+    );
+  }
+
+  private isStale(observedAt: string | Date): boolean {
+    return this.now().getTime() - new Date(observedAt).getTime() > this.options.offerStaleAfterMs;
+  }
+
+  // ── Cache invalidation ──────────────────────────────────────────────────
+
+  async invalidateProducts(productIds: string[]): Promise<void> {
+    // Same key scheme as @dealmind/catalog invalidateProductCaches (used by importers).
+    await Promise.all(
+      productIds.flatMap((id) =>
+        PRODUCT_CACHE_KINDS.map((kind) => this.cache.delPrefix(this.cache.catalogKey(kind, id))),
+      ),
+    );
+  }
+
+  invalidateCategories(): Promise<void> {
+    return this.cache.del(this.cache.catalogKey("categories"));
+  }
 
   // ── Categories ──────────────────────────────────────────────────────────
 
+  /** Active categories (inactive ones are hidden from browsing). */
   listCategories(): Promise<CategoryView[]> {
-    return this.cache.getOrSet(this.cache.catalogKey("categories"), this.ttlSeconds, async () =>
+    return this.cached(this.cache.catalogKey("categories"), this.options.ttl.categories, async () =>
       (
         await this.prisma.category.findMany({
+          where: { isActive: true },
           orderBy: [{ name: "asc" }],
-          select: { id: true, slug: true, name: true, parentId: true },
+          select: categorySelect,
         })
       ).map(toCategory),
     );
@@ -56,6 +152,8 @@ export class CatalogService {
     const roots: CategoryNode[] = [];
     for (const node of nodes.values()) {
       const parent = node.parentId ? nodes.get(node.parentId) : undefined;
+      // A child of an inactive category is not reachable from the tree.
+      if (node.parentId && !parent) continue;
       (parent ? parent.children : roots).push(node);
     }
     return roots;
@@ -73,7 +171,9 @@ export class CatalogService {
 
   private async findCategory(idOrSlug: string): Promise<CategoryView> {
     const all = await this.listCategories();
-    const category = all.find((c) => (UUID_RE.test(idOrSlug) ? c.id === idOrSlug : c.slug === idOrSlug));
+    const category = all.find((c) =>
+      UUID_RE.test(idOrSlug) ? c.id === idOrSlug : c.slug === idOrSlug,
+    );
     if (!category) throw AppError.notFound("Category");
     return category;
   }
@@ -87,7 +187,7 @@ export class CatalogService {
       if (breadcrumb.length > 10) break; // defensive against cycles
     }
     const productCount = await this.prisma.product.count({
-      where: { categoryId: { in: await this.subtreeIds(category.id) } },
+      where: { isActive: true, categoryId: { in: await this.subtreeIds(category.id) } },
     });
     return {
       ...category,
@@ -100,49 +200,87 @@ export class CatalogService {
   // ── Products ────────────────────────────────────────────────────────────
 
   async listProducts(q: ProductListQuery): Promise<Paginated<ProductSummary>> {
-    const conds: Prisma.Sql[] = [Prisma.sql`TRUE`];
+    const conds: Prisma.Sql[] = [Prisma.sql`p."isActive"`];
     if (q.category) {
       const category = await this.findCategory(q.category);
       const ids = await this.subtreeIds(category.id);
-      conds.push(Prisma.sql`p."categoryId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})`);
+      conds.push(
+        Prisma.sql`p."categoryId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})`,
+      );
     }
-    if (q.brand) conds.push(Prisma.sql`lower(p.brand) = lower(${q.brand})`);
-    if (q.launchedAfter) conds.push(Prisma.sql`p."launchedAt" >= ${q.launchedAfter}`);
+    if (q.brand) conds.push(Prisma.sql`lower(p.brand) = lower(${normalizeBrand(q.brand)})`);
+    if (q.launchedAfter) conds.push(Prisma.sql`p."launchDate" >= ${q.launchedAfter}`);
+    if (q.launchedBefore) conds.push(Prisma.sql`p."launchDate" <= ${q.launchedBefore}`);
     if (q.q) {
       const like = `%${q.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       conds.push(
-        Prisma.sql`(p.title ILIKE ${like} OR p.brand ILIKE ${like} OR p.model ILIKE ${like}
-                   OR similarity(p.title, ${q.q}) > 0.3)`,
+        Prisma.sql`(p.name ILIKE ${like} OR p.brand ILIKE ${like} OR p."modelNumber" ILIKE ${like}
+                   OR p."normalizedName" % lower(${q.q}))`,
       );
+    }
+    if (q.spec && Object.keys(q.spec).length) {
+      // One variant must satisfy every filter, each either on that variant's
+      // attributes or on the product's specifications. Numbers match by JSONB
+      // containment (GIN index), text case-insensitively.
+      const perKey = Object.entries(q.spec).map(([key, value]) => {
+        const json = JSON.stringify({ [key]: value });
+        return Prisma.sql`(p.specifications @> ${json}::jsonb OR v.attributes @> ${json}::jsonb
+          OR lower(v.attributes ->> ${key}) = lower(${String(value)})
+          OR lower(p.specifications ->> ${key}) = lower(${String(value)}))`;
+      });
+      conds.push(Prisma.sql`EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p.id
+        AND ${Prisma.join(perKey, " AND ")})`);
     }
     if (q.minPricePaise != null) conds.push(Prisma.sql`lp.low >= ${q.minPricePaise}`);
     if (q.maxPricePaise != null) conds.push(Prisma.sql`lp.low <= ${q.maxPricePaise}`);
+    if (q.inStock === true) conds.push(Prisma.sql`COALESCE(lp.in_stock, false)`);
 
     const order = (() => {
       switch (q.sort) {
         case "newest":
-          return Prisma.sql`p."launchedAt" DESC NULLS LAST, p."createdAt" DESC`;
+          return Prisma.sql`p."launchDate" DESC NULLS LAST, p."createdAt" DESC`;
         case "price_asc":
           return Prisma.sql`lp.low ASC NULLS LAST`;
         case "price_desc":
           return Prisma.sql`lp.low DESC NULLS LAST`;
-        case "title":
-          return Prisma.sql`p.title ASC`;
+        case "name":
+          return Prisma.sql`lower(p.name) ASC, p.name ASC`;
         default:
-          return q.q ? Prisma.sql`similarity(p.title, ${q.q}) DESC` : Prisma.sql`p."createdAt" DESC`;
+          return q.q
+            ? Prisma.sql`similarity(p."normalizedName", lower(${q.q})) DESC`
+            : Prisma.sql`p."createdAt" DESC`;
       }
     })();
 
-    const rows = await this.prisma.$queryRaw<{ id: string; low: number | null; cnt: number; total: bigint }[]>`
-      WITH lp AS (
-        SELECT v."productId", MIN(o."pricePaise")::int AS low, COUNT(o.id)::int AS cnt
-        FROM "ProductVariant" v
-        JOIN "ProductOffer" o ON o."variantId" = v.id
-        JOIN "ShoppingSource" s ON s.id = o."sourceId" AND s.enabled
-        GROUP BY v."productId"
-      )
-      SELECT p.id, lp.low, COALESCE(lp.cnt, 0)::int AS cnt, COUNT(*) OVER () AS total
-      FROM "Product" p LEFT JOIN lp ON lp."productId" = p.id
+    const cutoff = this.freshCutoff();
+    const aggregates = Prisma.sql`MIN(o."sellingPricePaise") AS low, COUNT(o.id)::int AS cnt,
+      BOOL_OR(${IN_STOCK}) AS in_stock, BOOL_AND(s."isSample") AS all_sample
+      FROM "ProductOffer" o
+      JOIN "ShoppingSource" s ON s.id = o."sourceId" AND s.status = 'ACTIVE'`;
+    // Plan choice (EXPLAIN ANALYZE, docs/CATALOG.md): with a selective filter a
+    // per-product LATERAL lookup on (productId, sellingPricePaise) is fastest;
+    // over the whole catalog a single aggregate pass wins.
+    const selective = Boolean(
+      q.category || q.brand || q.q || q.spec || q.launchedAfter || q.launchedBefore,
+    );
+    const offersJoin = selective
+      ? Prisma.sql`LEFT JOIN LATERAL (SELECT ${aggregates}
+          WHERE o."productId" = p.id AND o."observedAt" >= ${cutoff}) lp ON true`
+      : Prisma.sql`LEFT JOIN (SELECT o."productId", ${aggregates}
+          WHERE o."observedAt" >= ${cutoff} GROUP BY o."productId") lp ON lp."productId" = p.id`;
+    const rows = await this.prisma.$queryRaw<
+      {
+        id: string;
+        low: bigint | null;
+        cnt: number;
+        in_stock: boolean | null;
+        all_sample: boolean | null;
+        total: bigint;
+      }[]
+    >`
+      SELECT p.id, lp.low, COALESCE(lp.cnt, 0)::int AS cnt, lp.in_stock, lp.all_sample,
+             COUNT(*) OVER () AS total
+      FROM "Product" p ${offersJoin}
       WHERE ${Prisma.join(conds, " AND ")}
       ORDER BY ${order}, p.id
       LIMIT ${q.pageSize} OFFSET ${(q.page - 1) * q.pageSize}`;
@@ -150,196 +288,231 @@ export class CatalogService {
     const total = Number(rows[0]?.total ?? 0);
     const products = await this.prisma.product.findMany({
       where: { id: { in: rows.map((r) => r.id) } },
-      include: { category: { select: { id: true, slug: true, name: true, parentId: true } } },
+      include: { category: { select: categorySelect } },
     });
     const byId = new Map(products.map((p) => [p.id, p]));
     const items = rows.flatMap((r) => {
       const p = byId.get(r.id);
-      return p ? [this.summary(p, r.low, r.cnt)] : [];
+      return p
+        ? [
+            {
+              ...productCore(p),
+              lowestPricePaise: paiseFromDbOrNull(r.low),
+              offerCount: r.cnt,
+              inStock: r.in_stock ?? false,
+              sampleData: r.all_sample ?? false,
+            },
+          ]
+        : [];
     });
     return paginated(items, paginationOf(q as PageQuery, total));
   }
 
-  private summary(
-    p: {
-      id: string;
-      title: string;
-      brand: string;
-      model: string | null;
-      imageUrl: string | null;
-      launchedAt: Date | null;
-      category: CategoryRow | null;
-    },
-    low: number | null,
-    offerCount: number,
-  ): ProductSummary {
-    return {
-      id: p.id,
-      title: p.title,
-      brand: p.brand,
-      model: p.model,
-      imageUrl: p.imageUrl,
-      category: p.category ? toCategory(p.category) : null,
-      launchedAt: iso(p.launchedAt),
-      lowestPricePaise: low,
-      offerCount,
-    };
+  private offerSummary(productId: string): Promise<OfferSummary> {
+    return this.cached(
+      this.cache.catalogKey("offer-summary", productId),
+      this.options.ttl.offers,
+      async () => {
+        const [row] = await this.prisma.$queryRaw<
+          {
+            low: bigint | null;
+            cnt: number;
+            in_stock: boolean | null;
+            all_sample: boolean | null;
+          }[]
+        >`
+        SELECT MIN(o."sellingPricePaise") AS low, COUNT(o.id)::int AS cnt,
+               BOOL_OR(${IN_STOCK}) AS in_stock, BOOL_AND(s."isSample") AS all_sample
+        FROM "ProductOffer" o
+        JOIN "ShoppingSource" s ON s.id = o."sourceId" AND s.status = 'ACTIVE'
+        WHERE o."productId" = ${productId}::uuid AND o."observedAt" >= ${this.freshCutoff()}`;
+        return {
+          low: paiseFromDbOrNull(row?.low ?? null),
+          count: row?.cnt ?? 0,
+          inStock: row?.in_stock ?? false,
+          sampleData: row?.all_sample ?? false,
+        };
+      },
+    );
   }
 
-  private async lowestPrice(productId: string): Promise<{ low: number | null; count: number }> {
-    const agg = await this.prisma.productOffer.aggregate({
-      where: { variant: { productId }, source: { enabled: true } },
-      _min: { pricePaise: true },
-      _count: { _all: true },
-    });
-    return { low: agg._min.pricePaise, count: agg._count._all };
-  }
-
-  async getProduct(id: string) {
-    return this.cache.getOrSet(this.cache.catalogKey("product", id), this.ttlSeconds, async () => {
-      const p = await this.prisma.product.findUnique({
-        where: { id },
+  private productStatic(id: string) {
+    return this.cached(this.cache.catalogKey("product", id), this.options.ttl.product, async () => {
+      const p = await this.prisma.product.findFirst({
+        where: { id, isActive: true },
         include: {
-          category: { select: { id: true, slug: true, name: true, parentId: true } },
+          category: { select: categorySelect },
           variants: { orderBy: { variantKey: "asc" } },
         },
       });
       if (!p) throw AppError.notFound("Product");
-      const { low, count } = await this.lowestPrice(id);
       return {
-        ...this.summary(p, low, count),
-        specs: (p.specs ?? {}) as Record<string, unknown>,
-        variants: p.variants.map((v) => ({
-          id: v.id,
-          variantKey: v.variantKey,
-          attributes: (v.attributes ?? {}) as Record<string, unknown>,
-          gtin: v.gtin,
-        })),
+        ...productCore(p),
+        description: p.description,
+        manufacturer: p.manufacturer,
+        gtin: p.gtin,
+        ean: p.ean,
+        upc: p.upc,
+        specifications: (p.specifications ?? {}) as Record<string, unknown>,
+        variants: p.variants.map(toVariantView),
       };
     });
   }
 
-  async getVariants(productId: string) {
-    return (await this.getProduct(productId)).variants;
-  }
-
-  async getOffers(productId: string, variantId?: string): Promise<OfferView[]> {
-    await this.assertProduct(productId);
-    const offers = await this.prisma.productOffer.findMany({
-      where: {
-        variant: { productId },
-        ...(variantId ? { variantId } : {}),
-        source: { enabled: true },
-      },
-      include: { source: { select: { id: true, code: true, name: true } } },
-      orderBy: [{ pricePaise: "asc" }, { id: "asc" }],
-      take: 200,
-    });
-    return offers.map((o) => toOfferView(o));
-  }
-
-  async getPriceHistory(productId: string, days: number, variantId?: string) {
-    await this.assertProduct(productId);
-    const to = new Date();
-    const from = new Date(to.getTime() - days * 86_400_000);
-    const snapshots = await this.prisma.priceSnapshot.findMany({
-      where: {
-        capturedAt: { gte: from },
-        offer: {
-          variant: { productId },
-          ...(variantId ? { variantId } : {}),
-          source: { enabled: true },
-        },
-      },
-      include: { offer: { select: { id: true, source: { select: { code: true } } } } },
-      orderBy: { capturedAt: "asc" },
-      take: 5_000,
-    });
-    const prices = snapshots.map((s) => s.pricePaise);
+  async getProduct(id: string) {
+    const [detail, summary] = await Promise.all([this.productStatic(id), this.offerSummary(id)]);
     return {
-      productId,
-      from: from.toISOString(),
-      to: to.toISOString(),
-      points: snapshots.map((s) => ({
-        offerId: s.offer.id,
-        sourceCode: s.offer.source.code,
-        pricePaise: s.pricePaise,
-        mrpPaise: s.mrpPaise,
-        availability: s.availability,
-        capturedAt: s.capturedAt.toISOString(),
-      })),
-      lowestPricePaise: prices.length ? Math.min(...prices) : null,
-      highestPricePaise: prices.length ? Math.max(...prices) : null,
+      ...detail,
+      lowestPricePaise: summary.low,
+      offerCount: summary.count,
+      inStock: summary.inStock,
+      sampleData: summary.sampleData,
     };
   }
 
-  private async assertProduct(id: string): Promise<void> {
-    const exists = await this.prisma.product.count({ where: { id } });
-    if (!exists) throw AppError.notFound("Product");
+  async getVariants(productId: string): Promise<VariantView[]> {
+    return (await this.productStatic(productId)).variants;
+  }
+
+  async getOffers(
+    productId: string,
+    opts: { variantId?: string; includeStale?: boolean } = {},
+  ): Promise<OfferView[]> {
+    await this.productStatic(productId); // 404 for unknown/inactive products
+    const key = this.cache.catalogKey(
+      "offers",
+      productId,
+      opts.variantId ?? "all",
+      opts.includeStale ? "stale" : "fresh",
+    );
+    const offers = await this.cached(key, this.options.ttl.offers, async () => {
+      const rows = await this.prisma.productOffer.findMany({
+        where: {
+          productId,
+          ...(opts.variantId ? { variantId: opts.variantId } : {}),
+          ...(opts.includeStale ? {} : { observedAt: { gte: this.freshCutoff() } }),
+          source: { status: "ACTIVE" },
+        },
+        include: { source: { select: { id: true, slug: true, name: true, isSample: true } } },
+        orderBy: [{ sellingPricePaise: "asc" }, { id: "asc" }],
+        take: 200,
+      });
+      return rows.map((o) => toOfferView(o, false));
+    });
+    // Staleness is evaluated at read time, never frozen into the cache.
+    return offers.map((o) => ({ ...o, isStale: this.isStale(o.observedAt) }));
+  }
+
+  async getPriceHistory(
+    productId: string,
+    q: { days: number; variantId?: string; source?: string },
+  ) {
+    await this.productStatic(productId);
+    const key = this.cache.catalogKey(
+      "history",
+      productId,
+      q.variantId ?? "all",
+      q.source ?? "all",
+      q.days,
+    );
+    return this.cached(key, this.options.ttl.history, async () => {
+      const to = this.now();
+      const from = new Date(to.getTime() - q.days * 86_400_000);
+      const snapshots = await this.prisma.priceSnapshot.findMany({
+        where: {
+          observedAt: { gte: from },
+          offer: {
+            productId,
+            ...(q.variantId ? { variantId: q.variantId } : {}),
+            source: { status: "ACTIVE", ...(q.source ? { slug: q.source } : {}) },
+          },
+        },
+        include: {
+          offer: { select: { id: true, variantId: true, source: { select: { slug: true } } } },
+        },
+        orderBy: { observedAt: "asc" },
+        take: 5_000,
+      });
+      const prices = snapshots.map((s) => paiseFromDb(s.sellingPricePaise));
+      return {
+        productId,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        points: snapshots.map((s) => ({
+          offerId: s.offer.id,
+          variantId: s.offer.variantId,
+          sourceSlug: s.offer.source.slug,
+          mrpPaise: paiseFromDbOrNull(s.mrpPaise),
+          sellingPricePaise: paiseFromDb(s.sellingPricePaise),
+          shippingPaise: paiseFromDbOrNull(s.shippingPaise),
+          stockStatus: s.stockStatus,
+          observedAt: s.observedAt.toISOString(),
+        })),
+        lowestPricePaise: prices.length ? Math.min(...prices) : null,
+        highestPricePaise: prices.length ? Math.max(...prices) : null,
+      };
+    });
   }
 
   // ── Shopping sources ────────────────────────────────────────────────────
 
-  private sourceView(s: {
-    id: string;
-    code: string;
-    name: string;
-    baseUrl: string;
-    integrationKind: string;
-    enabled: boolean;
-    health: "UNKNOWN" | "HEALTHY" | "DEGRADED" | "DOWN";
-    lastHealthCheckAt: Date | null;
-  }) {
-    return {
-      id: s.id,
-      code: s.code,
-      name: s.name,
-      baseUrl: s.baseUrl,
-      integrationKind: s.integrationKind,
-      enabled: s.enabled,
-      available: s.enabled && s.health !== "DOWN",
-      health: s.health,
-      lastHealthCheckAt: iso(s.lastHealthCheckAt),
-    };
-  }
-
   private readonly sourceSelect = {
     id: true,
-    code: true,
+    slug: true,
     name: true,
+    domain: true,
     baseUrl: true,
+    logoUrl: true,
     integrationKind: true,
-    enabled: true,
+    status: true,
+    isSample: true,
     health: true,
     lastHealthCheckAt: true,
   } as const;
 
-  async listEnabledSources() {
+  private sourceView(
+    s: Prisma.ShoppingSourceGetPayload<{ select: CatalogService["sourceSelect"] }>,
+  ) {
+    return {
+      ...s,
+      available: s.status === "ACTIVE" && s.health !== "DOWN",
+      lastHealthCheckAt: iso(s.lastHealthCheckAt),
+    };
+  }
+
+  async listActiveSources() {
     const rows = await this.prisma.shoppingSource.findMany({
-      where: { enabled: true },
+      where: { status: "ACTIVE" },
       orderBy: { name: "asc" },
       select: this.sourceSelect,
     });
     return rows.map((s) => this.sourceView(s));
   }
 
-  async getSource(code: string) {
-    const s = await this.prisma.shoppingSource.findUnique({ where: { code }, select: this.sourceSelect });
+  async getSource(slug: string) {
+    const s = await this.prisma.shoppingSource.findUnique({
+      where: { slug },
+      select: this.sourceSelect,
+    });
     if (!s) throw AppError.notFound("Source");
     return this.sourceView(s);
   }
 
   /** Integration status of every registered source (no credentials or config). */
   async sourceStatus() {
-    const rows = await this.prisma.shoppingSource.findMany({ orderBy: { name: "asc" }, select: this.sourceSelect });
+    const rows = await this.prisma.shoppingSource.findMany({
+      orderBy: { name: "asc" },
+      select: this.sourceSelect,
+    });
     return {
       totalSources: rows.length,
-      enabledSources: rows.filter((s) => s.enabled).length,
-      healthySources: rows.filter((s) => s.enabled && s.health === "HEALTHY").length,
+      activeSources: rows.filter((s) => s.status === "ACTIVE").length,
+      healthySources: rows.filter((s) => s.status === "ACTIVE" && s.health === "HEALTHY").length,
       sources: rows.map((s) => ({
-        code: s.code,
+        slug: s.slug,
         name: s.name,
-        enabled: s.enabled,
+        status: s.status,
+        isSample: s.isSample,
         integrationKind: s.integrationKind,
         health: s.health,
         lastHealthCheckAt: iso(s.lastHealthCheckAt),
@@ -348,29 +521,69 @@ export class CatalogService {
   }
 }
 
-export function toOfferView(o: {
+function productCore(p: {
   id: string;
-  variantId: string;
-  title: string;
-  url: string;
-  sellerName: string | null;
-  pricePaise: number;
-  mrpPaise: number | null;
-  availability: string;
-  lastSeenAt: Date;
-  source: { id: string; code: string; name: string };
-}): OfferView {
+  name: string;
+  brand: string;
+  modelNumber: string | null;
+  imageUrl: string | null;
+  launchDate: Date | null;
+  category: CategoryRow | null;
+}): ProductCore {
+  return {
+    id: p.id,
+    name: p.name,
+    brand: p.brand,
+    modelNumber: p.modelNumber,
+    imageUrl: p.imageUrl,
+    category: p.category ? toCategory(p.category) : null,
+    launchDate: iso(p.launchDate),
+  };
+}
+
+export function toVariantView(v: {
+  id: string;
+  variantKey: string;
+  attributes: Prisma.JsonValue;
+  sku: string | null;
+  gtin: string | null;
+}): VariantView {
+  return {
+    id: v.id,
+    variantKey: v.variantKey,
+    attributes: (v.attributes ?? {}) as Record<string, unknown>,
+    sku: v.sku,
+    gtin: v.gtin,
+  };
+}
+
+export function toOfferView(
+  o: Prisma.ProductOfferGetPayload<object> & {
+    source: { id: string; slug: string; name: string; isSample: boolean };
+  },
+  isStale: boolean,
+): OfferView {
+  const selling = paiseFromDb(o.sellingPricePaise);
+  const mrp = paiseFromDbOrNull(o.mrpPaise);
   return {
     id: o.id,
+    productId: o.productId,
     variantId: o.variantId,
     source: o.source,
     title: o.title,
-    url: o.url,
+    productUrl: o.productUrl,
     sellerName: o.sellerName,
-    pricePaise: o.pricePaise,
-    mrpPaise: o.mrpPaise,
-    discountBasisPoints: discountBasisPoints(paise(o.pricePaise), o.mrpPaise == null ? null : paise(o.mrpPaise)),
-    availability: o.availability,
-    lastSeenAt: o.lastSeenAt.toISOString(),
+    mrpPaise: mrp,
+    sellingPricePaise: selling,
+    shippingPaise: paiseFromDbOrNull(o.shippingPaise),
+    currency: "INR",
+    discountBasisPoints: discountBasisPoints(selling, mrp),
+    stockStatus: o.stockStatus,
+    offerConditions: (o.offerConditions ?? {}) as Record<string, unknown>,
+    observedAt: o.observedAt.toISOString(),
+    sourceUpdatedAt: iso(o.sourceUpdatedAt),
+    isStale,
+    matchMethod: o.matchMethod,
+    matchConfidence: o.matchConfidence,
   };
 }

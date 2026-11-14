@@ -7,11 +7,15 @@ import { ZodError } from "zod";
 /** Prisma connection-level codes: can't reach DB, timeouts, pool exhaustion. */
 const PRISMA_OUTAGE_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024"]);
 /** ioredis messages when Redis is unreachable (offline queue disabled). */
-const REDIS_OUTAGE = /Connection is closed|Stream isn't writeable|ECONNREFUSED|ETIMEDOUT|Reached the max retries/;
+const REDIS_OUTAGE =
+  /Connection is closed|Stream isn't writeable|ECONNREFUSED|ETIMEDOUT|Reached the max retries/;
 
 export function isInfrastructureOutage(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientInitializationError) return true;
-  if (error instanceof Prisma.PrismaClientKnownRequestError && PRISMA_OUTAGE_CODES.has(error.code)) {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    PRISMA_OUTAGE_CODES.has(error.code)
+  ) {
     return true;
   }
   if (error instanceof Prisma.PrismaClientRustPanicError) return true;

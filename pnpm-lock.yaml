@@ -41,6 +41,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@dealmind/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@dealmind/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -185,6 +188,22 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.15
+
+  packages/catalog:
+    dependencies:
+      '@dealmind/db':
+        specifier: workspace:*
+        version: link:../db
+      '@dealmind/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      dotenv-cli:
+        specifier: ^8.0.0
+        version: 8.0.0
 
   packages/db:
     dependencies:

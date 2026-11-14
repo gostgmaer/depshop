@@ -140,7 +140,7 @@ describe("2. duplicate registration", () => {
     const first = await agent.post("/api/v1/auth/register", body);
     const second = await agent.post("/api/v1/auth/register", { ...body, name: "Attacker" });
     expect(second.statusCode).toBe(first.statusCode);
-    expect(second.json()).toEqual(first.json()); // the IAM's 409 is not revealed
+    expect(second.json<{ data: unknown }>().data).toEqual(first.json<{ data: unknown }>().data); // the IAM's 409 is not revealed
     expect(ctx.iam.users.size).toBe(1);
     expect(ctx.iam.users.get("dup@example.com")?.firstName).toBe("Dup");
   });
@@ -174,7 +174,7 @@ describe("3. login", () => {
     // The IAM login response contains passwordHash/twoFactorSecret and tokens:
     // none of it may reach the browser.
     expect(res.body).not.toMatch(/passwordHash|twoFactorSecret|accessToken|refreshToken|\$2b\$/);
-    expect(res.json<MeResponse>().user).toMatchObject({
+    expect(res.json<{ data: MeResponse }>().data.user).toMatchObject({
       email: "login@example.com",
       name: "Login User",
       role: "USER",
@@ -344,7 +344,9 @@ describe("6. expired and revoked sessions", () => {
 describe("7. email verification", () => {
   it("verifies via the IAM token, reflects it for the signed-in user, and is single-use", async () => {
     const { agent } = await signUp(ctx, "verify@example.com", { verify: false });
-    expect((await agent.get("/api/v1/auth/me")).json<MeResponse>().user.emailVerified).toBe(false);
+    expect(
+      (await agent.get("/api/v1/auth/me")).json<{ data: MeResponse }>().data.user.emailVerified,
+    ).toBe(false);
 
     const first = tokenFromIam(ctx.iam, "verify@example.com", "verify");
     expect((await agent.post("/api/v1/auth/resend-verification")).statusCode).toBe(200);
@@ -353,7 +355,9 @@ describe("7. email verification", () => {
     expect((await agent.post("/api/v1/auth/verify-email", { token: first })).statusCode).toBe(400);
 
     expect((await agent.post("/api/v1/auth/verify-email", { token: second })).statusCode).toBe(200);
-    expect((await agent.get("/api/v1/auth/me")).json<MeResponse>().user.emailVerified).toBe(true);
+    expect(
+      (await agent.get("/api/v1/auth/me")).json<{ data: MeResponse }>().data.user.emailVerified,
+    ).toBe(true);
     const reused = await agent.post("/api/v1/auth/verify-email", { token: second });
     expect(reused.statusCode).toBe(400);
     expect(errorOf(reused).message).toMatch(/invalid or has expired/);
@@ -369,7 +373,7 @@ describe("8. password reset & change", () => {
       email: "ghost@example.com",
     });
     expect([known.statusCode, unknown.statusCode]).toEqual([202, 202]);
-    expect(known.json()).toEqual(unknown.json());
+    expect(known.json<{ data: unknown }>().data).toEqual(unknown.json<{ data: unknown }>().data);
     expect(ctx.iam.lastResetToken.has("known@example.com")).toBe(true);
     expect(ctx.iam.lastResetToken.has("ghost@example.com")).toBe(false);
   });
@@ -484,7 +488,7 @@ describe("10. USER versus ADMIN", () => {
     expect((await user.get("/api/v1/admin/users")).statusCode).toBe(403);
     const list = await admin.get("/api/v1/admin/users");
     expect(list.statusCode).toBe(200);
-    expect(list.json<{ items: unknown[] }>().items).toHaveLength(2);
+    expect(list.json<{ data: { items: unknown[] } }>().data.items).toHaveLength(2);
   });
 
   it("never infers privileges from client-provided data", async () => {
@@ -539,7 +543,8 @@ describe("11. cross-user private data", () => {
       where: { userId: aliceId, revokedAt: null },
     });
 
-    const bobsView = (await bob.get("/api/v1/auth/sessions")).json<SessionsResponse>();
+    const bobsView = (await bob.get("/api/v1/auth/sessions")).json<{ data: SessionsResponse }>()
+      .data;
     expect(bobsView.sessions.map((s) => s.id)).not.toContain(aliceSession.id);
     expect((await bob.delete(`/api/v1/auth/sessions/${aliceSession.id}`)).statusCode).toBe(404);
     expect((await alice.get("/api/v1/auth/me")).statusCode).toBe(200);
@@ -565,7 +570,7 @@ describe("11. cross-user private data", () => {
     ).toBe(200);
 
     const renamed = await alice.patch("/api/v1/users/me", { name: "Alice Bhatt" });
-    expect(renamed.json<MeResponse>().user.name).toBe("Alice Bhatt");
+    expect(renamed.json<{ data: MeResponse }>().data.user.name).toBe("Alice Bhatt");
     expect(ctx.iam.users.get("alice2@example.com")).toMatchObject({
       firstName: "Alice",
       lastName: "Bhatt",
@@ -589,7 +594,7 @@ describe("12. session revocation", () => {
 
     const res = await laptop.get("/api/v1/auth/sessions");
     expect(res.body).not.toMatch(/tokenHash|familyId|iam|dm_session/i);
-    const { sessions } = res.json<SessionsResponse>();
+    const { sessions } = res.json<{ data: SessionsResponse }>().data;
     expect(sessions).toHaveLength(2);
     const other = sessions.find((s) => !s.current);
     const otherRow = await ctx.prisma.userSession.findUniqueOrThrow({
@@ -605,7 +610,9 @@ describe("12. session revocation", () => {
 
   it("revoking the current session signs this browser out", async () => {
     const { agent } = await signUp(ctx, "self@example.com");
-    const { sessions } = (await agent.get("/api/v1/auth/sessions")).json<SessionsResponse>();
+    const { sessions } = (await agent.get("/api/v1/auth/sessions")).json<{
+      data: SessionsResponse;
+    }>().data;
     const current = sessions.find((s) => s.current);
     expect((await agent.delete(`/api/v1/auth/sessions/${current?.id}`)).statusCode).toBe(204);
     expect(agent.cookie("dm_session")).toBeUndefined();
@@ -693,7 +700,9 @@ describe("CSRF & origin protection", () => {
 describe("preferences", () => {
   it("returns defaults and validates updates", async () => {
     const { agent } = await signUp(ctx, "prefs@example.com");
-    expect((await agent.get("/api/v1/users/me/preferences")).json()).toEqual({
+    expect(
+      (await agent.get("/api/v1/users/me/preferences")).json<{ data: unknown }>().data,
+    ).toEqual({
       preferredSourceIds: [],
       preferredBrands: [],
       notifyEmail: true,
@@ -708,7 +717,10 @@ describe("preferences", () => {
       preferredBrands: ["Samsung", "Apple", "Samsung"],
       locale: "hi-IN",
     });
-    expect(ok.json()).toMatchObject({ preferredBrands: ["Samsung", "Apple"], locale: "hi-IN" });
+    expect(ok.json<{ data: unknown }>().data).toMatchObject({
+      preferredBrands: ["Samsung", "Apple"],
+      locale: "hi-IN",
+    });
   });
 });
 

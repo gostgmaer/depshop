@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cookieNames, csrfCookieOptions, sessionCookieOptions } from "./cookies.js";
 import { CsrfTokens } from "./csrf.js";
-import { LoginThrottle } from "./login-throttle.js";
+import { MemoryLoginThrottle } from "./login-throttle.js";
 import { generateToken, hashToken } from "./tokens.js";
 
 describe("tokens", () => {
@@ -46,28 +46,34 @@ describe("cookies", () => {
   });
 });
 
-describe("LoginThrottle", () => {
-  it("locks after N failures within the window and unlocks after the lock period", () => {
+describe("MemoryLoginThrottle", () => {
+  it("locks after N failures within the window and unlocks after the lock period", async () => {
     let now = 0;
-    const t = new LoginThrottle({ maxFailures: 3, windowMs: 1_000, lockMs: 5_000, now: () => now });
-    t.recordFailure("a");
-    t.recordFailure("a");
-    expect(t.isLocked("a")).toBe(false);
-    t.recordFailure("a");
-    expect(t.isLocked("a")).toBe(true);
-    expect(t.isLocked("b")).toBe(false);
+    const t = new MemoryLoginThrottle(
+      { maxFailures: 3, windowMs: 1_000, lockMs: 5_000 },
+      () => now,
+    );
+    await t.recordFailure("a");
+    await t.recordFailure("a");
+    expect(await t.isLocked("a")).toBe(false);
+    await t.recordFailure("a");
+    expect(await t.isLocked("a")).toBe(true);
+    expect(await t.isLocked("b")).toBe(false);
     now = 5_001;
-    expect(t.isLocked("a")).toBe(false);
+    expect(await t.isLocked("a")).toBe(false);
   });
-  it("forgets failures outside the window and after success", () => {
+  it("forgets failures outside the window and after success", async () => {
     let now = 0;
-    const t = new LoginThrottle({ maxFailures: 2, windowMs: 1_000, lockMs: 5_000, now: () => now });
-    t.recordFailure("a");
+    const t = new MemoryLoginThrottle(
+      { maxFailures: 2, windowMs: 1_000, lockMs: 5_000 },
+      () => now,
+    );
+    await t.recordFailure("a");
     now = 2_000;
-    t.recordFailure("a");
-    expect(t.isLocked("a")).toBe(false);
-    t.recordSuccess("a");
-    t.recordFailure("a");
-    expect(t.isLocked("a")).toBe(false);
+    await t.recordFailure("a");
+    expect(await t.isLocked("a")).toBe(false);
+    await t.recordSuccess("a");
+    await t.recordFailure("a");
+    expect(await t.isLocked("a")).toBe(false);
   });
 });

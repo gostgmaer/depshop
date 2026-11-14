@@ -4,7 +4,14 @@
  * back to the default catalogue if a row is missing or malformed.
  */
 import type { PrismaClient } from "@dealmind/db";
-import { AppError, DEFAULT_PLANS, ErrorCode, PlanCode, type PlanView } from "@dealmind/shared";
+import {
+  AppError,
+  DEFAULT_PLANS,
+  ErrorCode,
+  PlanCode,
+  type PlanView,
+  paiseFromDb,
+} from "@dealmind/shared";
 import { z } from "zod";
 import { iso } from "../../utils/http.js";
 
@@ -21,12 +28,17 @@ const DAY_MS = 86_400_000;
 export class PlanService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  private toPlanView(row: { code: PlanCode; name: string; monthlyPricePaise: number; limits: unknown }): PlanView {
+  private toPlanView(row: {
+    code: PlanCode;
+    name: string;
+    monthlyPricePaise: bigint;
+    limits: unknown;
+  }): PlanView {
     const parsed = limitsSchema.safeParse(row.limits);
     return {
       code: row.code,
       name: row.name,
-      monthlyPricePaise: row.monthlyPricePaise,
+      monthlyPricePaise: paiseFromDb(row.monthlyPricePaise),
       limits: parsed.success ? parsed.data : DEFAULT_PLANS[row.code].limits,
     };
   }
@@ -41,7 +53,10 @@ export class PlanService {
 
   /** The caller's subscription; users without one are on FREE. */
   async getSubscription(userId: string) {
-    const sub = await this.prisma.subscription.findUnique({ where: { userId }, include: { plan: true } });
+    const sub = await this.prisma.subscription.findUnique({
+      where: { userId },
+      include: { plan: true },
+    });
     if (!sub) {
       const free = DEFAULT_PLANS.FREE;
       return {
@@ -110,13 +125,19 @@ export class PlanService {
           ? await this.prisma.priceAlert.count({ where: { userId, status: "ACTIVE" } })
           : await this.prisma.watchlist.count({ where: { userId } });
     if (used >= limits[limit]) {
-      const label = { searchesPerDay: "daily searches", activeAlerts: "active alerts", watchlists: "watchlists" }[
-        limit
-      ];
-      throw new AppError(ErrorCode.USAGE_LIMIT_EXCEEDED, `Your plan allows ${limits[limit]} ${label}. Upgrade to add more.`, {
-        limit,
-        allowed: limits[limit],
-      });
+      const label = {
+        searchesPerDay: "daily searches",
+        activeAlerts: "active alerts",
+        watchlists: "watchlists",
+      }[limit];
+      throw new AppError(
+        ErrorCode.USAGE_LIMIT_EXCEEDED,
+        `Your plan allows ${limits[limit]} ${label}. Upgrade to add more.`,
+        {
+          limit,
+          allowed: limits[limit],
+        },
+      );
     }
   }
 }

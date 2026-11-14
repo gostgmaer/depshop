@@ -9,7 +9,15 @@
  */
 import type { PrismaClient } from "@dealmind/db";
 import { type JobQueues, QueueName } from "@dealmind/queue";
-import { AppError, type CreateSearchInput, ErrorCode, type PageQuery, paginationOf } from "@dealmind/shared";
+import {
+  AppError,
+  type CreateSearchInput,
+  ErrorCode,
+  type PageQuery,
+  paginationOf,
+  paiseFromDb,
+  paiseFromDbOrNull,
+} from "@dealmind/shared";
 import type { FastifyBaseLogger } from "fastify";
 import type { CacheService } from "../../lib/cache.js";
 import { iso, paginated } from "../../utils/http.js";
@@ -48,6 +56,7 @@ export class SearchService {
     private readonly plans: PlanService,
     private readonly cache: CacheService,
     private readonly log: Pick<FastifyBaseLogger, "error">,
+    private readonly offerStaleAfterMs = 24 * 3_600_000,
   ) {}
 
   async create(userId: string, input: CreateSearchInput) {
@@ -67,7 +76,10 @@ export class SearchService {
         where: { id: search.id },
         data: { status: "FAILED", completedAt: new Date() },
       });
-      throw new AppError(ErrorCode.DEPENDENCY_UNAVAILABLE, "Search could not be started. Please retry shortly.");
+      throw new AppError(
+        ErrorCode.DEPENDENCY_UNAVAILABLE,
+        "Search could not be started. Please retry shortly.",
+      );
     }
     return toSearchView(search);
   }
@@ -94,7 +106,7 @@ export class SearchService {
         _count: { select: { results: true } },
         sourceRuns: {
           orderBy: { createdAt: "asc" },
-          include: { source: { select: { id: true, code: true, name: true } } },
+          include: { source: { select: { id: true, slug: true, name: true, isSample: true } } },
         },
       },
     });
@@ -133,10 +145,8 @@ export class SearchService {
         include: {
           offer: {
             include: {
-              source: { select: { id: true, code: true, name: true } },
-              variant: {
-                select: { product: { select: { id: true, title: true, brand: true, imageUrl: true } } },
-              },
+              source: { select: { id: true, slug: true, name: true, isSample: true } },
+              product: { select: { id: true, name: true, brand: true, imageUrl: true } },
             },
           },
         },
@@ -146,10 +156,10 @@ export class SearchService {
           rank: r.rank,
           score: r.score,
           explanation: r.explanation,
-          pricePaiseAtSearch: r.pricePaiseAtSearch,
-          mrpPaiseAtSearch: r.mrpPaiseAtSearch,
-          offer: toOfferView(r.offer),
-          product: r.offer.variant.product,
+          pricePaiseAtSearch: paiseFromDb(r.pricePaiseAtSearch),
+          mrpPaiseAtSearch: paiseFromDbOrNull(r.mrpPaiseAtSearch),
+          offer: toOfferView(r.offer, false),
+          product: r.offer.product,
         })),
         pagination: paginationOf(q, search._count.results),
       };
@@ -162,6 +172,17 @@ export class SearchService {
           load,
         )
       : await load();
-    return paginated(page.items, page.pagination);
+    // Staleness is evaluated now, never frozen into the cache.
+    const now = Date.now();
+    return paginated(
+      page.items.map((item) => ({
+        ...item,
+        offer: {
+          ...item.offer,
+          isStale: now - new Date(item.offer.observedAt).getTime() > this.offerStaleAfterMs,
+        },
+      })),
+      page.pagination,
+    );
   }
 }

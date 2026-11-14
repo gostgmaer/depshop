@@ -6,6 +6,7 @@ import {
   categoryDetail,
   categoryNode,
   categoryView,
+  offerQuery,
   offerView,
   priceHistory,
   priceHistoryQuery,
@@ -113,28 +114,31 @@ export const productRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> =
     {
       schema: {
         tags: ["catalog"],
-        summary: "Marketplace offers from enabled sources, cheapest first",
+        summary: "Offers from active sources, cheapest first (fresh only unless includeStale=true)",
         params: idParam,
-        querystring: z.object({ variantId: z.string().uuid().optional() }).strict(),
+        querystring: offerQuery,
         response: { 200: ok(z.array(offerView)) },
       },
     },
-    async (req) => catalog.getOffers(req.params.id, req.query.variantId),
+    async (req) => catalog.getOffers(req.params.id, req.query),
   );
 
-  app.get(
-    "/:id/price-history",
-    {
-      schema: {
-        tags: ["catalog"],
-        summary: "Price snapshots over time (default 90 days)",
-        params: idParam,
-        querystring: priceHistoryQuery,
-        response: { 200: ok(priceHistory) },
+  // "/history" is canonical; "/price-history" is kept as an alias for existing clients.
+  for (const path of ["/:id/history", "/:id/price-history"]) {
+    app.get(
+      path,
+      {
+        schema: {
+          tags: ["catalog"],
+          summary: "Append-only price history from active sources (default 90 days)",
+          params: idParam,
+          querystring: priceHistoryQuery,
+          response: { 200: ok(priceHistory) },
+        },
       },
-    },
-    async (req) => catalog.getPriceHistory(req.params.id, req.query.days, req.query.variantId),
-  );
+      async (req) => catalog.getPriceHistory(req.params.id, req.query),
+    );
+  }
 };
 
 export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
@@ -146,11 +150,11 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
     {
       schema: {
         tags: ["sources"],
-        summary: "Enabled shopping sources",
+        summary: "Active shopping sources",
         response: { 200: ok(z.array(sourceView)) },
       },
     },
-    async () => catalog.listEnabledSources(),
+    async () => catalog.listActiveSources(),
   );
 
   app.get(
@@ -166,15 +170,15 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
   );
 
   app.get(
-    "/:code",
+    "/:slug",
     {
       schema: {
         tags: ["sources"],
         summary: "Source availability",
-        params: z.object({ code: z.string().regex(/^[a-z][a-z0-9_]{0,49}$/) }),
+        params: z.object({ slug: z.string().regex(/^[a-z][a-z0-9_]{0,49}$/) }),
         response: { 200: ok(sourceView) },
       },
     },
-    async (req) => catalog.getSource(req.params.code),
+    async (req) => catalog.getSource(req.params.slug),
   );
 };

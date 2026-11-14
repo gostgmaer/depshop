@@ -14,10 +14,24 @@ const iso = z.string();
 
 // ── Catalog (global, shared by every user) ────────────────────────────────
 
+export const stockStatus = z.enum(["IN_STOCK", "LIMITED", "OUT_OF_STOCK", "PREORDER", "UNKNOWN"]);
+export type StockStatusValue = z.infer<typeof stockStatus>;
+export const matchMethod = z.enum([
+  "IDENTIFIER",
+  "MODEL_NUMBER",
+  "NORMALIZED_TITLE",
+  "FUZZY_TITLE",
+  "MANUAL",
+  "NEW_PRODUCT",
+]);
+export const sourceStatusValue = z.enum(["ACTIVE", "DISABLED", "MAINTENANCE"]);
+
 export const categoryView = z.object({
   id: uuid,
   slug: z.string(),
   name: z.string(),
+  description: z.string().nullable(),
+  imageUrl: z.string().nullable(),
   parentId: uuid.nullable(),
 });
 export type CategoryView = z.infer<typeof categoryView>;
@@ -31,39 +45,87 @@ export const categoryDetail = categoryView.extend({
   /** Root-first path, ending with this category. */
   breadcrumb: z.array(categoryView),
   children: z.array(categoryView),
+  /** Active products in this category and all of its descendants. */
   productCount: z.number().int(),
 });
 
-export const productSort = z.enum(["relevance", "newest", "price_asc", "price_desc", "title"]);
+export const productSort = z.enum(["relevance", "newest", "price_asc", "price_desc", "name"]);
+
+/** Specification filter keys (variant attributes / product specifications). */
+const specKey = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/, "Invalid specification key");
+const specValue = z.string().trim().min(1).max(60);
+
+/**
+ * `spec=ram_gb:8&spec=storage_gb:256&spec=color_family:black`. Numeric values
+ * match numerically; text values case-insensitively (normalized lower-case).
+ */
+export const specFilters = z
+  .union([z.string(), z.array(z.string()).max(10)])
+  .transform((v, ctx) => {
+    const out: Record<string, string | number> = {};
+    for (const raw of Array.isArray(v) ? v : [v]) {
+      const i = raw.indexOf(":");
+      const key = specKey.safeParse(raw.slice(0, i));
+      const value = specValue.safeParse(raw.slice(i + 1));
+      if (i < 1 || !key.success || !value.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Invalid spec filter "${raw}" (use key:value)`,
+        });
+        return z.NEVER;
+      }
+      const text = value.data.toLowerCase();
+      out[key.data] = /^\d+(\.\d+)?$/.test(text) ? Number(text) : text;
+    }
+    return out;
+  });
 
 export const productListQuery = pageQuery
   .extend({
     q: z.string().trim().min(2).max(200).optional(),
-    category: z.string().trim().min(1).max(100).optional(), // slug
+    category: z.string().trim().min(1).max(100).optional(), // slug (includes descendants)
     brand: z.string().trim().min(1).max(100).optional(),
     minPricePaise: z.coerce.number().int().nonnegative().optional(),
     maxPricePaise: z.coerce.number().int().nonnegative().optional(),
     launchedAfter: z.coerce.date().optional(),
+    launchedBefore: z.coerce.date().optional(),
+    /** Only products with a fresh in-stock (or limited) offer from an active source. */
+    inStock: z
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
+      .optional(),
+    spec: specFilters.optional(),
     sort: productSort.default("relevance"),
   })
   .strict()
-  .refine((v) => v.minPricePaise == null || v.maxPricePaise == null || v.minPricePaise <= v.maxPricePaise, {
-    message: "minPricePaise must be <= maxPricePaise",
-    path: ["minPricePaise"],
+  .refine(
+    (v) => v.minPricePaise == null || v.maxPricePaise == null || v.minPricePaise <= v.maxPricePaise,
+    {
+      message: "minPricePaise must be <= maxPricePaise",
+      path: ["minPricePaise"],
+    },
+  )
+  .refine((v) => !v.launchedAfter || !v.launchedBefore || v.launchedAfter <= v.launchedBefore, {
+    message: "launchedAfter must be <= launchedBefore",
+    path: ["launchedAfter"],
   });
 export type ProductListQuery = z.infer<typeof productListQuery>;
 
 export const productSummary = z.object({
   id: uuid,
-  title: z.string(),
+  name: z.string(),
   brand: z.string(),
-  model: z.string().nullable(),
+  modelNumber: z.string().nullable(),
   imageUrl: z.string().nullable(),
   category: categoryView.nullable(),
-  launchedAt: iso.nullable(),
-  /** Lowest current price across offers from enabled sources, if any. */
+  launchDate: iso.nullable(),
+  /** Lowest price among fresh offers from active sources; null when none. */
   lowestPricePaise: paise.nullable(),
+  /** Fresh offers from active sources. */
   offerCount: z.number().int(),
+  inStock: z.boolean(),
+  /** True when every counted offer comes from development sample data. */
+  sampleData: z.boolean(),
 });
 export type ProductSummary = z.infer<typeof productSummary>;
 
@@ -71,46 +133,94 @@ export const variantView = z.object({
   id: uuid,
   variantKey: z.string(),
   attributes: z.record(z.unknown()),
+  sku: z.string().nullable(),
   gtin: z.string().nullable(),
 });
+export type VariantView = z.infer<typeof variantView>;
 
 export const productDetail = productSummary.extend({
-  specs: z.record(z.unknown()),
+  description: z.string().nullable(),
+  manufacturer: z.string().nullable(),
+  gtin: z.string().nullable(),
+  ean: z.string().nullable(),
+  upc: z.string().nullable(),
+  specifications: z.record(z.unknown()),
   variants: z.array(variantView),
 });
 
-export const sourceRef = z.object({ id: uuid, code: z.string(), name: z.string() });
+/** Minimal product reference embedded in user-owned views. */
+export const productRef = z.object({
+  id: uuid,
+  name: z.string(),
+  brand: z.string(),
+  imageUrl: z.string().nullable(),
+});
+
+export const sourceRef = z.object({
+  id: uuid,
+  slug: z.string(),
+  name: z.string(),
+  /** Development sample data (fictional store): never a real offer. */
+  isSample: z.boolean(),
+});
+
+export const offerQuery = z
+  .object({
+    variantId: uuid.optional(),
+    /** Include offers not observed recently (flagged `isStale`). Default false. */
+    includeStale: z
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
+      .default("false"),
+  })
+  .strict();
 
 export const offerView = z.object({
   id: uuid,
+  productId: uuid,
   variantId: uuid,
   source: sourceRef,
+  /** Marketplace title, verbatim. */
   title: z.string(),
-  url: z.string(),
+  productUrl: z.string(),
   sellerName: z.string().nullable(),
-  pricePaise: paise,
   mrpPaise: paise.nullable(),
+  sellingPricePaise: paise,
+  shippingPaise: paise.nullable(),
+  currency: z.literal("INR"),
   /** Deterministic discount vs MRP in basis points (0 when no genuine discount). */
   discountBasisPoints: z.number().int(),
-  availability: z.string(),
-  lastSeenAt: iso,
+  stockStatus,
+  offerConditions: z.record(z.unknown()),
+  observedAt: iso,
+  sourceUpdatedAt: iso.nullable(),
+  /** Not observed within the freshness window: shown as last-known, never as live. */
+  isStale: z.boolean(),
+  matchMethod,
+  matchConfidence: z.number().int(),
 });
 export type OfferView = z.infer<typeof offerView>;
 
 export const priceHistoryQuery = z
   .object({
     variantId: uuid.optional(),
+    source: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]*$/)
+      .optional(), // source slug
     days: z.coerce.number().int().min(1).max(365).default(90),
   })
   .strict();
 
 export const pricePoint = z.object({
   offerId: uuid,
-  sourceCode: z.string(),
-  pricePaise: paise,
+  variantId: uuid,
+  sourceSlug: z.string(),
   mrpPaise: paise.nullable(),
-  availability: z.string(),
-  capturedAt: iso,
+  sellingPricePaise: paise,
+  shippingPaise: paise.nullable(),
+  stockStatus,
+  observedAt: iso,
 });
 
 export const priceHistory = z.object({
@@ -126,12 +236,15 @@ export const priceHistory = z.object({
 
 export const sourceView = z.object({
   id: uuid,
-  code: z.string(),
+  slug: z.string(),
   name: z.string(),
+  domain: z.string(),
   baseUrl: z.string(),
+  logoUrl: z.string().nullable(),
   integrationKind: z.string(),
-  enabled: z.boolean(),
-  /** Enabled and not known to be down. */
+  status: sourceStatusValue,
+  isSample: z.boolean(),
+  /** Active and not known to be down. */
   available: z.boolean(),
   health: z.enum(["UNKNOWN", "HEALTHY", "DEGRADED", "DOWN"]),
   lastHealthCheckAt: iso.nullable(),
@@ -139,13 +252,14 @@ export const sourceView = z.object({
 
 export const sourceStatus = z.object({
   totalSources: z.number().int(),
-  enabledSources: z.number().int(),
+  activeSources: z.number().int(),
   healthySources: z.number().int(),
   sources: z.array(
     z.object({
-      code: z.string(),
+      slug: z.string(),
       name: z.string(),
-      enabled: z.boolean(),
+      status: sourceStatusValue,
+      isSample: z.boolean(),
       integrationKind: z.string(),
       health: z.string(),
       lastHealthCheckAt: iso.nullable(),
@@ -161,13 +275,19 @@ export const searchFilters = z
     maxPricePaise: paise.optional(),
     brands: z.array(z.string().trim().min(1).max(50)).max(20).optional(),
     category: z.string().trim().min(1).max(100).optional(),
-    sourceCodes: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).max(20).optional(),
+    sourceSlugs: z
+      .array(z.string().regex(/^[a-z][a-z0-9_]*$/))
+      .max(20)
+      .optional(),
   })
   .strict()
-  .refine((v) => v.minPricePaise == null || v.maxPricePaise == null || v.minPricePaise <= v.maxPricePaise, {
-    message: "minPricePaise must be <= maxPricePaise",
-    path: ["minPricePaise"],
-  });
+  .refine(
+    (v) => v.minPricePaise == null || v.maxPricePaise == null || v.minPricePaise <= v.maxPricePaise,
+    {
+      message: "minPricePaise must be <= maxPricePaise",
+      path: ["minPricePaise"],
+    },
+  );
 
 export const createSearchInput = z
   .object({
@@ -208,7 +328,7 @@ export const searchResultView = z.object({
   pricePaiseAtSearch: paise,
   mrpPaiseAtSearch: paise.nullable(),
   offer: offerView,
-  product: z.object({ id: uuid, title: z.string(), brand: z.string(), imageUrl: z.string().nullable() }),
+  product: productRef,
 });
 
 // ── Watchlists (user-owned) ───────────────────────────────────────────────
@@ -233,7 +353,7 @@ export const watchlistItemView = z.object({
   note: z.string().nullable(),
   addedAt: iso,
   variant: variantView,
-  product: z.object({ id: uuid, title: z.string(), brand: z.string(), imageUrl: z.string().nullable() }),
+  product: productRef,
   lowestPricePaise: paise.nullable(),
 });
 
@@ -247,7 +367,7 @@ export const createAlertInput = z
   .object({
     variantId: uuid,
     targetPricePaise: z.number().int().positive(),
-    /** Restrict to one source; omit for "any enabled source". */
+    /** Restrict to one source; omit for "any active source". */
     sourceId: uuid.optional(),
   })
   .strict();
@@ -268,7 +388,7 @@ export const alertView = z.object({
   targetPricePaise: paise,
   source: sourceRef.nullable(),
   variant: variantView,
-  product: z.object({ id: uuid, title: z.string(), brand: z.string() }),
+  product: productRef,
   lastTriggeredAt: iso.nullable(),
   lastTriggeredPricePaise: paise.nullable(),
   createdAt: iso,
@@ -278,7 +398,12 @@ export const alertView = z.object({
 // ── Notifications (user-owned) ────────────────────────────────────────────
 
 export const notificationListQuery = pageQuery
-  .extend({ unread: z.enum(["true", "false"]).transform((v) => v === "true").optional() })
+  .extend({
+    unread: z
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
+      .optional(),
+  })
   .strict();
 
 export const notificationView = z.object({

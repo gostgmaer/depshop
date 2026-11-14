@@ -30,7 +30,10 @@ const view = (n: Row) => ({
   createdAt: n.createdAt.toISOString(),
 });
 
-export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }> = async (app, { prisma }) => {
+export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }> = async (
+  app,
+  { prisma },
+) => {
   app.addHook("preHandler", app.requireAuth);
 
   app.get(
@@ -71,7 +74,11 @@ export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }>
         response: { 200: ok(z.object({ unread: z.number().int() })) },
       },
     },
-    async (req) => ({ unread: await prisma.notification.count({ where: { userId: getAuth(req).userId, readAt: null } }) }),
+    async (req) => ({
+      unread: await prisma.notification.count({
+        where: { userId: getAuth(req).userId, readAt: null },
+      }),
+    }),
   );
 
   app.post(
@@ -87,10 +94,17 @@ export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }>
     },
     async (req) => {
       const userId = getAuth(req).userId;
-      const existing = await prisma.notification.findFirst({ where: { id: req.params.id, userId } });
+      const existing = await prisma.notification.findFirst({
+        where: { id: req.params.id, userId },
+      });
       if (!existing) throw AppError.notFound("Notification");
       if (existing.readAt) return view(existing);
-      return view(await prisma.notification.update({ where: { id: existing.id }, data: { readAt: new Date() } }));
+      return view(
+        await prisma.notification.update({
+          where: { id: existing.id },
+          data: { readAt: new Date() },
+        }),
+      );
     },
   );
 

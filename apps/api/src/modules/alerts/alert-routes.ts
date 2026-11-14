@@ -8,7 +8,10 @@ import type { AlertService } from "./alert-service.js";
 const security = [{ sessionCookie: [] }];
 const idParam = z.object({ id: z.string().uuid() });
 
-export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = async (app, { alerts }) => {
+export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = async (
+  app,
+  { alerts },
+) => {
   app.addHook("preHandler", app.requireAuth);
 
   app.post(
@@ -22,7 +25,8 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
         response: { 201: ok(alertView) },
       },
     },
-    async (req, reply) => reply.status(201).send(await alerts.create(getAuth(req).userId, req.body)),
+    async (req, reply) =>
+      reply.status(201).send(await alerts.create(getAuth(req).userId, req.body)),
   );
 
   app.get(
@@ -42,7 +46,13 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
   app.get(
     "/:id",
     {
-      schema: { tags: ["alerts"], summary: "One alert", security, params: idParam, response: { 200: ok(alertView) } },
+      schema: {
+        tags: ["alerts"],
+        summary: "One alert",
+        security,
+        params: idParam,
+        response: { 200: ok(alertView) },
+      },
     },
     async (req) => alerts.get(getAuth(req).userId, req.params.id),
   );
@@ -65,7 +75,13 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
   app.post(
     "/:id/pause",
     {
-      schema: { tags: ["alerts"], summary: "Pause an alert", security, params: idParam, response: { 200: ok(alertView) } },
+      schema: {
+        tags: ["alerts"],
+        summary: "Pause an alert",
+        security,
+        params: idParam,
+        response: { 200: ok(alertView) },
+      },
     },
     async (req) => alerts.pause(getAuth(req).userId, req.params.id),
   );
@@ -73,7 +89,13 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
   app.post(
     "/:id/resume",
     {
-      schema: { tags: ["alerts"], summary: "Resume an alert", security, params: idParam, response: { 200: ok(alertView) } },
+      schema: {
+        tags: ["alerts"],
+        summary: "Resume an alert",
+        security,
+        params: idParam,
+        response: { 200: ok(alertView) },
+      },
     },
     async (req) => alerts.resume(getAuth(req).userId, req.params.id),
   );
@@ -81,7 +103,13 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
   app.delete(
     "/:id",
     {
-      schema: { tags: ["alerts"], summary: "Delete an alert", security, params: idParam, response: { 204: z.null() } },
+      schema: {
+        tags: ["alerts"],
+        summary: "Delete an alert",
+        security,
+        params: idParam,
+        response: { 204: z.null() },
+      },
     },
     async (req, reply) => {
       await alerts.remove(getAuth(req).userId, req.params.id);

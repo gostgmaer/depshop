@@ -4,7 +4,7 @@
  * (nothing in localStorage). The only cookie read here is the CSRF token,
  * which is designed to be readable and is copied into the x-csrf-token header.
  */
-import { CSRF_HEADER, type ErrorResponseBody } from "@dealmind/shared";
+import { CSRF_HEADER, type ErrorResponseBody, type SuccessBody } from "@dealmind/shared";
 
 const CSRF_COOKIES = ["__Host-dm_csrf", "dm_csrf"];
 
@@ -39,8 +39,8 @@ function csrfFromCookie(): string | undefined {
 
 async function fetchCsrfToken(): Promise<string> {
   const res = await fetch("/api/v1/auth/csrf", { credentials: "same-origin", cache: "no-store" });
-  const data = (await res.json()) as { csrfToken: string };
-  return data.csrfToken;
+  const body = (await res.json()) as SuccessBody<{ csrfToken: string }>;
+  return body.data.csrfToken;
 }
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
@@ -66,10 +66,12 @@ export async function api<T>(
   });
 
   if (res.status === 204) return undefined as T;
-  const data = (await res.json().catch(() => null)) as (T & Partial<ErrorResponseBody>) | null;
-  if (res.ok) return data as T;
+  const payload = (await res.json().catch(() => null)) as
+    (Partial<SuccessBody<T>> & Partial<ErrorResponseBody>) | null;
+  // Success responses are enveloped: { success: true, data, meta }.
+  if (res.ok) return payload?.data as T;
 
-  const error = data?.error;
+  const error = payload?.error;
   // A stale CSRF cookie (e.g. secret rotated): fetch a fresh token and retry once.
   if (error?.code === "CSRF_INVALID" && !retried) {
     await fetchCsrfToken();

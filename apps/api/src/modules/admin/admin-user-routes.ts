@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@dealmind/db";
 import { AppError, UserRole, UserStatus, publicUser } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
+import { ok } from "../../utils/http.js";
 import { z } from "zod";
 import { getAuth } from "../../plugins/auth.js";
 import type { SessionService } from "../auth/session-service.js";
@@ -36,7 +37,7 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
           q: z.string().trim().min(1).max(100).optional(),
         }),
         response: {
-          200: z.object({ items: z.array(adminUser), nextCursor: z.string().nullable() }),
+          200: ok(z.object({ items: z.array(adminUser), nextCursor: z.string().nullable() })),
         },
       },
     },
@@ -74,7 +75,7 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
         security,
         params: z.object({ userId: z.string().uuid() }),
         body: z.object({ status: UserStatus }).strict(),
-        response: { 200: adminUser },
+        response: { 200: ok(adminUser) },
       },
     },
     async (req) => {
@@ -109,7 +110,7 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
         security,
         params: z.object({ userId: z.string().uuid() }),
         body: z.object({ role: UserRole }).strict(),
-        response: { 200: adminUser },
+        response: { 200: ok(adminUser) },
       },
     },
     async (req) => {

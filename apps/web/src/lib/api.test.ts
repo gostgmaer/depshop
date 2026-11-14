@@ -15,7 +15,14 @@ function stubBrowser(cookie: string, responses: Response[]) {
 }
 
 const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  new Response(
+    JSON.stringify(
+      status < 300
+        ? { success: true, data: body, meta: { requestId: "r1" } }
+        : { success: false, ...(body as object), meta: { requestId: "r1" } },
+    ),
+    { status, headers: { "content-type": "application/json" } },
+  );
 
 describe("safeNextPath", () => {
   it.each([

@@ -84,3 +84,19 @@ export function formatBasisPoints(bp: BasisPoints): string {
   const frac = bp % 100;
   return frac === 0 ? `${whole}%` : `${whole}.${String(frac).padStart(2, "0")}%`;
 }
+
+/**
+ * Converts a database BIGINT paise value to a JSON-safe paise number.
+ * Throws instead of silently losing precision (> 2^53 paise is ~₹90 lakh crore).
+ */
+export function paiseFromDb(value: bigint | number): Paise {
+  if (typeof value === "number") return paise(value);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < 0n) {
+    throw new MoneyError(`Paise value out of safe range: ${value}`);
+  }
+  return paise(Number(value));
+}
+
+export function paiseFromDbOrNull(value: bigint | number | null | undefined): Paise | null {
+  return value == null ? null : paiseFromDb(value);
+}

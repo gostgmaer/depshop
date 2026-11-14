@@ -47,6 +47,21 @@ export class CacheService {
     return value;
   }
 
+  /** Deletes `prefix` and every key under `prefix:*` (SCAN, never KEYS). */
+  async delPrefix(prefix: string): Promise<void> {
+    try {
+      let cursor = "0";
+      do {
+        const [next, keys] = await this.redis.scan(cursor, "MATCH", `${prefix}:*`, "COUNT", 200);
+        cursor = next;
+        if (keys.length) await this.redis.del(...keys);
+      } while (cursor !== "0");
+      await this.redis.del(prefix);
+    } catch (err) {
+      this.log.warn({ err: (err as Error).message, prefix }, "cache prefix delete failed");
+    }
+  }
+
   async del(...keys: string[]): Promise<void> {
     if (keys.length === 0) return;
     try {

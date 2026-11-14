@@ -3,20 +3,29 @@
  * prices runs in apps/worker (alert-evaluation jobs, Phase 7); this service
  * manages alert lifecycle. All queries are scoped by the authenticated userId.
  */
-import { type PrismaClient, isUniqueViolation } from "@dealmind/db";
-import { AppError, ErrorCode, type PageQuery, paginationOf } from "@dealmind/shared";
+import { type Prisma, type PrismaClient, isUniqueViolation } from "@dealmind/db";
+import {
+  AppError,
+  ErrorCode,
+  type PageQuery,
+  paginationOf,
+  paiseFromDb,
+  paiseFromDbOrNull,
+} from "@dealmind/shared";
 import { iso, paginated } from "../../utils/http.js";
+import { toVariantView } from "../catalog/catalog-service.js";
 import type { PlanService } from "../subscriptions/plan-service.js";
 
 const include = {
-  source: { select: { id: true, code: true, name: true } },
+  source: { select: { id: true, slug: true, name: true, isSample: true } },
   variant: {
     select: {
       id: true,
       variantKey: true,
       attributes: true,
+      sku: true,
       gtin: true,
-      product: { select: { id: true, title: true, brand: true } },
+      product: { select: { id: true, name: true, brand: true, imageUrl: true } },
     },
   },
 } as const;
@@ -24,18 +33,19 @@ const include = {
 type AlertRow = {
   id: string;
   status: "ACTIVE" | "TRIGGERED" | "PAUSED";
-  targetPricePaise: number;
+  targetPricePaise: bigint;
   lastTriggeredAt: Date | null;
-  lastTriggeredPricePaise: number | null;
+  lastTriggeredPricePaise: bigint | null;
   createdAt: Date;
   updatedAt: Date;
-  source: { id: string; code: string; name: string } | null;
+  source: { id: string; slug: string; name: string; isSample: boolean } | null;
   variant: {
     id: string;
     variantKey: string;
-    attributes: unknown;
+    attributes: Prisma.JsonValue;
+    sku: string | null;
     gtin: string | null;
-    product: { id: string; title: string; brand: string };
+    product: { id: string; name: string; brand: string; imageUrl: string | null };
   };
 };
 
@@ -51,17 +61,12 @@ export class AlertService {
     return {
       id: a.id,
       status: a.status,
-      targetPricePaise: a.targetPricePaise,
+      targetPricePaise: paiseFromDb(a.targetPricePaise),
       source: a.source,
-      variant: {
-        id: a.variant.id,
-        variantKey: a.variant.variantKey,
-        attributes: (a.variant.attributes ?? {}) as Record<string, unknown>,
-        gtin: a.variant.gtin,
-      },
+      variant: toVariantView(a.variant),
       product: a.variant.product,
       lastTriggeredAt: iso(a.lastTriggeredAt),
-      lastTriggeredPricePaise: a.lastTriggeredPricePaise,
+      lastTriggeredPricePaise: paiseFromDbOrNull(a.lastTriggeredPricePaise),
       createdAt: a.createdAt.toISOString(),
       updatedAt: a.updatedAt.toISOString(),
     };
@@ -75,12 +80,19 @@ export class AlertService {
 
   private async assertSource(sourceId: string | null | undefined): Promise<void> {
     if (!sourceId) return;
-    const src = await this.prisma.shoppingSource.findUnique({ where: { id: sourceId }, select: { enabled: true } });
+    const src = await this.prisma.shoppingSource.findUnique({
+      where: { id: sourceId },
+      select: { status: true },
+    });
     if (!src) throw AppError.notFound("Source");
-    if (!src.enabled) throw new AppError(ErrorCode.VALIDATION_ERROR, "Alerts can only target enabled sources");
+    if (src.status !== "ACTIVE")
+      throw new AppError(ErrorCode.VALIDATION_ERROR, "Alerts can only target active sources");
   }
 
-  async create(userId: string, input: { variantId: string; targetPricePaise: number; sourceId?: string | undefined }) {
+  async create(
+    userId: string,
+    input: { variantId: string; targetPricePaise: number; sourceId?: string | undefined },
+  ) {
     await this.plans.assertWithinLimit(userId, "activeAlerts");
     if (!(await this.prisma.productVariant.count({ where: { id: input.variantId } }))) {
       throw AppError.notFound("Product variant");
@@ -91,7 +103,7 @@ export class AlertService {
         data: {
           userId,
           variantId: input.variantId,
-          targetPricePaise: input.targetPricePaise,
+          targetPricePaise: BigInt(input.targetPricePaise),
           sourceId: input.sourceId ?? null,
         },
         include,
@@ -104,7 +116,10 @@ export class AlertService {
     }
   }
 
-  async list(userId: string, q: PageQuery & { status?: "ACTIVE" | "TRIGGERED" | "PAUSED" | undefined }) {
+  async list(
+    userId: string,
+    q: PageQuery & { status?: "ACTIVE" | "TRIGGERED" | "PAUSED" | undefined },
+  ) {
     const where = { userId, ...(q.status ? { status: q.status } : {}) };
     const [rows, total] = await Promise.all([
       this.prisma.priceAlert.findMany({
@@ -126,14 +141,20 @@ export class AlertService {
     return this.view(await this.owned(userId, id));
   }
 
-  async update(userId: string, id: string, input: { targetPricePaise?: number | undefined; sourceId?: string | null | undefined }) {
+  async update(
+    userId: string,
+    id: string,
+    input: { targetPricePaise?: number | undefined; sourceId?: string | null | undefined },
+  ) {
     await this.owned(userId, id);
     await this.assertSource(input.sourceId);
     try {
       await this.prisma.priceAlert.update({
         where: { id },
         data: {
-          ...(input.targetPricePaise === undefined ? {} : { targetPricePaise: input.targetPricePaise }),
+          ...(input.targetPricePaise === undefined
+            ? {}
+            : { targetPricePaise: BigInt(input.targetPricePaise) }),
           ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }),
         },
       });

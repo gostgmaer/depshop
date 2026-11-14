@@ -137,12 +137,16 @@ model UserPreference {
 // ═══════════════════════════════ CATALOG (global) ═══════════════════════════════
 
 model Category {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  slug      String   @unique
-  name      String
-  parentId  String?  @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid(7)) @db.Uuid
+  slug        String   @unique
+  name        String
+  description String?
+  imageUrl    String?
+  parentId    String?  @db.Uuid
+  /// Inactive categories are hidden from browsing but keep their products.
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
   children Category[] @relation("CategoryTree")
@@ -151,39 +155,56 @@ model Category {
   @@index([parentId])
 }
 
+/// A canonical product, shared by every user. Identifiers are unique only when
+/// present (NULLs never collide). Specifications come only from verified
+/// source data and are never generated.
 model Product {
-  id          String    @id @default(uuid(7)) @db.Uuid
-  title       String
-  brand       String
-  model       String?
-  categoryId  String?   @db.Uuid
-  /// Normalized specifications from verified source data (never LLM-generated).
-  specs       Json      @default("{}")
-  imageUrl    String?
-  /// Manufacturer launch date when known; drives "new launches" discovery.
-  launchedAt  DateTime?
-  /// Deterministic matching key derived from normalized brand + model.
-  fingerprint String    @unique
-  firstSeenAt DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(uuid(7)) @db.Uuid
+  categoryId     String?   @db.Uuid
+  /// Display name (canonical).
+  name           String
+  /// Lower-cased, punctuation-free form of `name`, used for matching.
+  normalizedName String
+  /// Canonical brand (see @dealmind/catalog normalizeBrand).
+  brand          String
+  description    String?
+  manufacturer   String?
+  /// Manufacturer model / part number as published.
+  modelNumber    String?
+  gtin           String?   @unique
+  ean            String?   @unique
+  upc            String?   @unique
+  specifications Json      @default("{}")
+  launchDate     DateTime?
+  imageUrl       String?
+  isActive       Boolean   @default(true)
+  /// Deterministic key: canonical brand + normalized model number (when known).
+  fingerprint    String?   @unique
+  firstSeenAt    DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  category Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   variants ProductVariant[]
+  offers   ProductOffer[]
+  reviews  ProductMatchReview[]
 
   @@index([brand])
-  @@index([categoryId])
-  @@index([launchedAt])
-  /// Fuzzy title search (pg_trgm).
-  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_title_trgm_idx")
+  @@index([categoryId, isActive])
+  @@index([launchDate])
+  /// Fuzzy title search (pg_trgm) on the display name and the normalized name.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_name_trgm_idx")
+  @@index([normalizedName(ops: raw("gin_trgm_ops"))], type: Gin, map: "Product_normalizedName_trgm_idx")
 }
 
 model ProductVariant {
   id         String   @id @default(uuid(7)) @db.Uuid
   productId  String   @db.Uuid
-  /// Canonical attribute key, e.g. "color=black|ram=8gb|storage=256gb".
+  /// Canonical attribute key, e.g. "color=black|ram=8gb|storage=128gb".
+  /// Different RAM/storage/capacity/colour never share a key.
   variantKey String
   attributes Json     @default("{}")
+  sku        String?
   gtin       String?  @unique
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -194,6 +215,11 @@ model ProductVariant {
   priceAlerts    PriceAlert[]
 
   @@unique([productId, variantKey])
+  /// Target of the offer's composite FK (variantId, productId).
+  @@unique([id, productId])
+  /// Specification filters use JSONB containment (attributes @> {...}).
+  @@index([attributes(ops: JsonbPathOps)], type: Gin, map: "ProductVariant_attributes_gin_idx")
+  @@index([sku])
 }
 
 // ═══════════════════════════════ SHOPPING (global) ═══════════════════════════════
@@ -212,20 +238,35 @@ enum SourceHealth {
   DOWN
 }
 
+enum SourceStatus {
+  /// Authorized integration configured; eligible for searches and imports.
+  ACTIVE
+  /// No authorized integration (the default).
+  DISABLED
+  /// Temporarily paused by an admin.
+  MAINTENANCE
+}
+
 model ShoppingSource {
   id                 String                @id @default(uuid(7)) @db.Uuid
-  /// Stable connector code, e.g. "amazon_in", "flipkart".
-  code               String                @unique
+  /// Stable connector key, e.g. "amazon_in", "flipkart".
+  slug               String                @unique
   name               String
+  /// Registrable domain, e.g. "amazon.in".
+  domain             String
   baseUrl            String
+  logoUrl            String?
   integrationKind    SourceIntegrationKind
-  /// Disabled by default; enabled only once authorized credentials exist.
-  enabled            Boolean               @default(false)
+  /// DISABLED by default; ACTIVE only once authorized credentials exist.
+  status             SourceStatus          @default(DISABLED)
   capabilities       Json                  @default("{}")
   timeoutMs          Int                   @default(8000)
   rateLimitPerMinute Int                   @default(60)
   maxRetries         Int                   @default(2)
   affiliateEnabled   Boolean               @default(false)
+  /// Development sample data only (fictional store, example.com URLs, made-up
+  /// prices). Clients must label its offers as sample data, never as real.
+  isSample           Boolean               @default(false)
   health             SourceHealth          @default(UNKNOWN)
   lastHealthCheckAt  DateTime?
   lastHealthError    String?
@@ -237,9 +278,12 @@ model ShoppingSource {
   priceAlerts          PriceAlert[]
   affiliateClicks      AffiliateClick[]
   affiliateConversions AffiliateConversion[]
+  matchReviews         ProductMatchReview[]
+
+  @@index([status])
 }
 
-enum Availability {
+enum StockStatus {
   IN_STOCK
   LIMITED
   OUT_OF_STOCK
@@ -247,48 +291,107 @@ enum Availability {
   UNKNOWN
 }
 
+/// How an incoming listing was matched to the catalog.
+enum MatchMethod {
+  IDENTIFIER
+  MODEL_NUMBER
+  NORMALIZED_TITLE
+  FUZZY_TITLE
+  MANUAL
+  NEW_PRODUCT
+}
+
 /// A listing of a variant on a source. Prices come only from source data.
 model ProductOffer {
-  id           String       @id @default(uuid(7)) @db.Uuid
-  variantId    String       @db.Uuid
-  sourceId     String       @db.Uuid
-  externalId   String
-  url          String
-  title        String
-  sellerName   String?
-  pricePaise   Int
-  mrpPaise     Int?
-  availability Availability @default(UNKNOWN)
-  firstSeenAt  DateTime     @default(now())
-  lastSeenAt   DateTime     @default(now())
+  id                String      @id @default(uuid(7)) @db.Uuid
+  /// Denormalized for lookups; must equal the variant's product (composite FK).
+  productId         String      @db.Uuid
+  variantId         String      @db.Uuid
+  sourceId          String      @db.Uuid
+  externalId        String
+  productUrl        String
+  /// Original marketplace title, preserved verbatim.
+  title             String
+  sellerName        String?
+  mrpPaise          BigInt?
+  sellingPricePaise BigInt
+  shippingPaise     BigInt?
+  stockStatus       StockStatus @default(UNKNOWN)
+  /// ISO 4217; DealMind is INR-only (CHECK constraint).
+  currency          String      @default("INR") @db.Char(3)
+  /// Source-specific terms (bank offers, exchange, EMI), as published.
+  offerConditions   Json        @default("{}")
+  /// When the source says it last updated the listing (if provided).
+  sourceUpdatedAt   DateTime?
+  /// When DealMind last observed the listing.
+  observedAt        DateTime    @default(now())
+  firstSeenAt       DateTime    @default(now())
   /// When set, the offer is scheduled for background price tracking.
-  trackedUntil DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  trackedUntil      DateTime?
+  matchMethod       MatchMethod @default(MANUAL)
+  /// Matching confidence in basis points (0–10000).
+  matchConfidence   Int         @default(10000)
+  /// Signals that justified the match (identifier, model number, similarity…).
+  matchEvidence     Json        @default("{}")
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
-  variant         ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant         ProductVariant   @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
   source          ShoppingSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   snapshots       PriceSnapshot[]
   searchResults   SearchResult[]
   affiliateClicks AffiliateClick[]
 
   @@unique([sourceId, externalId])
-  @@index([variantId, pricePaise])
+  @@index([variantId, sellingPricePaise])
+  @@index([productId, sellingPricePaise])
   @@index([trackedUntil])
 }
 
-/// Append-only price history.
+/// Append-only price history (UPDATEs are rejected by a database trigger).
 model PriceSnapshot {
-  id           String       @id @default(uuid(7)) @db.Uuid
-  offerId      String       @db.Uuid
-  pricePaise   Int
-  mrpPaise     Int?
-  availability Availability
-  capturedAt   DateTime     @default(now())
+  id                String      @id @default(uuid(7)) @db.Uuid
+  offerId           String      @db.Uuid
+  mrpPaise          BigInt?
+  sellingPricePaise BigInt
+  shippingPaise     BigInt?
+  stockStatus       StockStatus
+  observedAt        DateTime    @default(now())
 
   offer ProductOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
-  @@index([offerId, capturedAt(sort: Desc)])
+  @@index([offerId, observedAt(sort: Desc)])
+}
+
+enum MatchReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// An incoming listing whose catalog match was uncertain. Held for manual
+/// review instead of being merged (or duplicated) automatically.
+model ProductMatchReview {
+  id                 String            @id @default(uuid(7)) @db.Uuid
+  sourceId           String            @db.Uuid
+  externalId         String
+  /// The validated, normalized listing as received (for replay on approval).
+  listing            Json
+  candidateProductId String?           @db.Uuid
+  confidence         Int
+  method             MatchMethod
+  evidence           Json              @default("{}")
+  status             MatchReviewStatus @default(PENDING)
+  reviewedAt         DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  source           ShoppingSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  candidateProduct Product?       @relation(fields: [candidateProductId], references: [id], onDelete: SetNull)
+
+  @@unique([sourceId, externalId])
+  @@index([status, createdAt])
 }
 
 // ═══════════════════════════════ SEARCH (user-owned) ═══════════════════════════════
@@ -361,8 +464,8 @@ model SearchResult {
   /// Deterministic ranking score (higher is better), scaled integer.
   score              Int
   /// Price/MRP at search time, so history does not change when offers update.
-  pricePaiseAtSearch Int
-  mrpPaiseAtSearch   Int?
+  pricePaiseAtSearch BigInt
+  mrpPaiseAtSearch   BigInt?
   explanation        String?
 
   user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -421,10 +524,10 @@ model PriceAlert {
   variantId               String      @db.Uuid
   /// Restrict to one source; null = any enabled source.
   sourceId                String?     @db.Uuid
-  targetPricePaise        Int
+  targetPricePaise        BigInt
   status                  AlertStatus @default(ACTIVE)
   lastTriggeredAt         DateTime?
-  lastTriggeredPricePaise Int?
+  lastTriggeredPricePaise BigInt?
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
@@ -564,7 +667,7 @@ enum PlanCode {
 model SubscriptionPlan {
   code              PlanCode @id
   name              String
-  monthlyPricePaise Int
+  monthlyPricePaise BigInt
   /// Usage limits, e.g. { "searchesPerDay": 20, "activeAlerts": 5, "watchlists": 2 }.
   limits            Json
   active            Boolean  @default(true)
@@ -693,7 +796,7 @@ model BillingEvent {
   provider        String
   /// Provider's event id: makes webhook processing idempotent.
   providerEventId String
-  amountPaise     Int?
+  amountPaise     BigInt?
   planCode        PlanCode?
   payload         Json             @default("{}")
   occurredAt      DateTime

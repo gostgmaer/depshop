@@ -72,48 +72,102 @@ describe("identity", () => {
 });
 
 describe("catalog & shopping", () => {
-  it("rejects negative prices and MRPs in offers and snapshots", async () => {
-    const base = {
-      variantId: catalog.variant.id,
-      sourceId: catalog.source.id,
-      url: "https://example.test/x",
-      title: "x",
-    };
+  const offerBase = () => ({
+    productId: catalog.product.id,
+    variantId: catalog.variant.id,
+    sourceId: catalog.source.id,
+    productUrl: "https://example.test/x",
+    title: "x",
+  });
+
+  it("rejects negative prices, MRPs and shipping in offers and snapshots", async () => {
+    const base = offerBase();
     await expectCheckViolation(
-      prisma.productOffer.create({ data: { ...base, externalId: "n1", pricePaise: -1 } }),
+      prisma.productOffer.create({ data: { ...base, externalId: "n1", sellingPricePaise: -1n } }),
       "ProductOffer_price_check",
     );
     await expectCheckViolation(
       prisma.productOffer.create({
-        data: { ...base, externalId: "n2", pricePaise: 100, mrpPaise: -5 },
+        data: { ...base, externalId: "n2", sellingPricePaise: 100n, mrpPaise: -5n },
       }),
       "ProductOffer_mrp_check",
     );
     await expectCheckViolation(
+      prisma.productOffer.create({
+        data: { ...base, externalId: "n3", sellingPricePaise: 100n, shippingPaise: -1n },
+      }),
+      "ProductOffer_shipping_check",
+    );
+    await expectCheckViolation(
       prisma.priceSnapshot.create({
-        data: { offerId: catalog.offer.id, pricePaise: -1, availability: "IN_STOCK" },
+        data: { offerId: catalog.offer.id, sellingPricePaise: -1n, stockStatus: "IN_STOCK" },
       }),
       "PriceSnapshot_price_check",
     );
     // A free item (0 paise) is valid.
     await expect(
-      prisma.productOffer.create({ data: { ...base, externalId: "free", pricePaise: 0 } }),
+      prisma.productOffer.create({ data: { ...base, externalId: "free", sellingPricePaise: 0n } }),
     ).resolves.toBeDefined();
+  });
+
+  it("stores prices above the 32-bit range as BIGINT paise", async () => {
+    // ₹2.5 crore = 2_500_000_000 paise > 2^31-1.
+    const offer = await prisma.productOffer.create({
+      data: { ...offerBase(), externalId: "big", sellingPricePaise: 2_500_000_000n },
+    });
+    expect(offer.sellingPricePaise).toBe(2_500_000_000n);
+  });
+
+  it("is INR-only, with confidence in basis points and object-shaped conditions", async () => {
+    const base = offerBase();
+    await expectCheckViolation(
+      prisma.productOffer.create({
+        data: { ...base, externalId: "usd", sellingPricePaise: 1n, currency: "USD" },
+      }),
+      "ProductOffer_currency_check",
+    );
+    await expectCheckViolation(
+      prisma.productOffer.create({
+        data: { ...base, externalId: "conf", sellingPricePaise: 1n, matchConfidence: 10_001 },
+      }),
+      "ProductOffer_match_confidence_check",
+    );
+    await expectCheckViolation(
+      prisma.productOffer.create({
+        data: { ...base, externalId: "cond", sellingPricePaise: 1n, offerConditions: [1] },
+      }),
+      "ProductOffer_conditions_object_check",
+    );
   });
 
   it("rejects non-http offer URLs (no javascript:/data: links)", async () => {
     await expectCheckViolation(
       prisma.productOffer.create({
         data: {
-          variantId: catalog.variant.id,
-          sourceId: catalog.source.id,
+          ...offerBase(),
           externalId: "js",
-          url: "javascript:alert(1)",
-          title: "x",
-          pricePaise: 1,
+          productUrl: "javascript:alert(1)",
+          sellingPricePaise: 1n,
         },
       }),
       "ProductOffer_url_check",
+    );
+  });
+
+  it("requires an offer's product to be its variant's product (composite FK)", async () => {
+    const other = await prisma.product.create({
+      data: { name: "Other", normalizedName: "other", brand: "Acme" },
+    });
+    await expectPrismaCode(
+      prisma.productOffer.create({
+        data: {
+          ...offerBase(),
+          productId: other.id,
+          externalId: "mismatch",
+          sellingPricePaise: 1n,
+        },
+      }),
+      "P2003",
     );
   });
 
@@ -121,12 +175,10 @@ describe("catalog & shopping", () => {
     await expectPrismaCode(
       prisma.productOffer.create({
         data: {
-          variantId: catalog.variant.id,
-          sourceId: catalog.source.id,
+          ...offerBase(),
           externalId: catalog.offer.externalId,
-          url: "https://example.test/dup",
-          title: "dup",
-          pricePaise: 1,
+          productUrl: "https://example.test/dup",
+          sellingPricePaise: 1n,
         },
       }),
       "P2002",
@@ -139,29 +191,76 @@ describe("catalog & shopping", () => {
     );
   });
 
-  it("validates source tuning and code format", async () => {
-    const base = { name: "S", baseUrl: "https://s.test", integrationKind: "PARTNER" as const };
+  it("keeps price history append-only (UPDATE rejected, INSERT allowed)", async () => {
+    const snap = await prisma.priceSnapshot.create({
+      data: { offerId: catalog.offer.id, sellingPricePaise: 100n, stockStatus: "IN_STOCK" },
+    });
+    const error = await prisma.priceSnapshot
+      .update({ where: { id: snap.id }, data: { sellingPricePaise: 1n } })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(String((error as Error | undefined)?.message)).toContain("append-only");
+    const row = await prisma.priceSnapshot.findUniqueOrThrow({ where: { id: snap.id } });
+    expect(row.sellingPricePaise).toBe(100n);
+  });
+
+  it("validates source slug, domain and tuning", async () => {
+    const base = {
+      name: "S",
+      domain: "s.test",
+      baseUrl: "https://s.test",
+      integrationKind: "PARTNER" as const,
+    };
     await expectCheckViolation(
-      prisma.shoppingSource.create({ data: { ...base, code: "bad code" } }),
-      "ShoppingSource_code_format_check",
+      prisma.shoppingSource.create({ data: { ...base, slug: "bad slug" } }),
+      "ShoppingSource_slug_format_check",
     );
     await expectCheckViolation(
-      prisma.shoppingSource.create({ data: { ...base, code: "s1", timeoutMs: 10 } }),
+      prisma.shoppingSource.create({ data: { ...base, slug: "s0", domain: "https://s.test/" } }),
+      "ShoppingSource_domain_check",
+    );
+    await expectCheckViolation(
+      prisma.shoppingSource.create({ data: { ...base, slug: "s1", timeoutMs: 10 } }),
       "ShoppingSource_timeout_check",
     );
     await expectCheckViolation(
-      prisma.shoppingSource.create({ data: { ...base, code: "s2", maxRetries: 50 } }),
+      prisma.shoppingSource.create({ data: { ...base, slug: "s2", maxRetries: 50 } }),
       "ShoppingSource_retries_check",
     );
   });
 
-  it("requires specs/attributes to be JSON objects", async () => {
+  it("validates product names, identifiers and JSON shapes", async () => {
+    const base = { normalizedName: "t", brand: "b" };
     await expectCheckViolation(
-      prisma.product.create({
-        data: { title: "t", brand: "b", fingerprint: "fp-arr", specs: [1, 2] },
-      }),
+      prisma.product.create({ data: { ...base, name: "t", specifications: [1, 2] } }),
       "Product_specs_object_check",
     );
+    await expectCheckViolation(
+      prisma.product.create({ data: { ...base, name: "   " } }),
+      "Product_name_not_blank_check",
+    );
+    await expectCheckViolation(
+      prisma.product.create({ data: { ...base, name: "t", gtin: "12AB" } }),
+      "Product_gtin_format_check",
+    );
+    await expectCheckViolation(
+      prisma.product.create({ data: { ...base, name: "t", ean: "123" } }),
+      "Product_ean_format_check",
+    );
+    await expectCheckViolation(
+      prisma.product.create({ data: { ...base, name: "t", upc: "1234567890123" } }),
+      "Product_upc_format_check",
+    );
+    // Identifiers are unique when present; many products may have none.
+    await prisma.product.create({ data: { ...base, name: "a", ean: "8901234567890" } });
+    await expectPrismaCode(
+      prisma.product.create({ data: { ...base, name: "b", ean: "8901234567890" } }),
+      "P2002",
+    );
+    await prisma.product.create({ data: { ...base, name: "c" } });
+    await prisma.product.create({ data: { ...base, name: "d" } });
   });
 
   it("prevents a category from being its own parent", async () => {

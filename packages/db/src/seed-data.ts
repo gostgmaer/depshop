@@ -1,9 +1,10 @@
 /**
  * Global reference data. Seeding is idempotent and never overwrites values an
- * admin may have changed (plan prices/limits, source enablement and tuning).
+ * admin may have changed (plan prices/limits, source status and tuning).
  *
- * Deliberately NOT seeded: products, variants, offers, prices or users.
- * Catalog and price data may only come from authorized shopping sources.
+ * Deliberately NOT seeded here: products, variants, offers, prices or users.
+ * Real catalog and price data may only come from authorized shopping sources.
+ * Illustrative development data lives in `sample-data.ts` (dev-only, labeled).
  */
 import { DEFAULT_PLANS } from "@dealmind/shared";
 import type { PrismaClient } from "@prisma/client";
@@ -19,7 +20,7 @@ export const CATEGORY_TREE: CategorySeed[] = [
     slug: "electronics",
     name: "Electronics",
     children: [
-      { slug: "mobiles", name: "Mobile Phones" },
+      { slug: "smartphones", name: "Smartphones" },
       { slug: "laptops", name: "Laptops" },
       { slug: "tablets", name: "Tablets" },
       { slug: "televisions", name: "Televisions" },
@@ -31,40 +32,76 @@ export const CATEGORY_TREE: CategorySeed[] = [
     ],
   },
   {
-    slug: "home-appliances",
-    name: "Home Appliances",
+    slug: "fashion",
+    name: "Fashion",
     children: [
-      { slug: "refrigerators", name: "Refrigerators" },
-      { slug: "washing-machines", name: "Washing Machines" },
-      { slug: "air-conditioners", name: "Air Conditioners" },
-      { slug: "kitchen-appliances", name: "Kitchen Appliances" },
+      { slug: "mens-clothing", name: "Men's Clothing" },
+      { slug: "womens-clothing", name: "Women's Clothing" },
+      { slug: "footwear", name: "Footwear" },
+      { slug: "watches", name: "Watches" },
     ],
   },
+  {
+    slug: "home-kitchen",
+    name: "Home and Kitchen",
+    children: [
+      {
+        slug: "home-appliances",
+        name: "Home Appliances",
+        children: [
+          { slug: "refrigerators", name: "Refrigerators" },
+          { slug: "washing-machines", name: "Washing Machines" },
+          { slug: "air-conditioners", name: "Air Conditioners" },
+        ],
+      },
+      { slug: "kitchen-appliances", name: "Kitchen Appliances" },
+      { slug: "furniture", name: "Furniture" },
+      { slug: "home-decor", name: "Home Decor" },
+    ],
+  },
+  { slug: "beauty-personal-care", name: "Beauty and Personal Care" },
+  { slug: "sports-fitness", name: "Sports and Fitness" },
+  { slug: "books", name: "Books" },
+  { slug: "grocery", name: "Grocery" },
+  { slug: "automotive", name: "Automotive" },
 ];
+
+/** Slugs renamed since an earlier seed; the row is kept (with its products). */
+export const RENAMED_CATEGORY_SLUGS: Record<string, string> = { mobiles: "smartphones" };
 
 export const SHOPPING_SOURCES = [
   {
-    code: "amazon_in",
+    slug: "amazon_in",
     name: "Amazon India",
+    domain: "amazon.in",
     baseUrl: "https://www.amazon.in",
     integrationKind: "OFFICIAL_API",
   },
   {
-    code: "flipkart",
+    slug: "flipkart",
     name: "Flipkart",
+    domain: "flipkart.com",
     baseUrl: "https://www.flipkart.com",
     integrationKind: "AFFILIATE_FEED",
   },
-  { code: "croma", name: "Croma", baseUrl: "https://www.croma.com", integrationKind: "PARTNER" },
   {
-    code: "reliance_digital",
+    slug: "croma",
+    name: "Croma",
+    domain: "croma.com",
+    baseUrl: "https://www.croma.com",
+    integrationKind: "PARTNER",
+  },
+  {
+    slug: "reliance_digital",
     name: "Reliance Digital",
+    domain: "reliancedigital.in",
     baseUrl: "https://www.reliancedigital.in",
     integrationKind: "PARTNER",
   },
   {
-    code: "tata_cliq",
+    slug: "tata_cliq",
     name: "Tata CLiQ",
+    domain: "tatacliq.com",
     baseUrl: "https://www.tatacliq.com",
     integrationKind: "PARTNER",
   },
@@ -74,6 +111,10 @@ export interface SeedSummary {
   plans: number;
   sources: number;
   categories: number;
+}
+
+export function countCategories(nodes: CategorySeed[] = CATEGORY_TREE): number {
+  return nodes.reduce((n, c) => n + 1 + countCategories(c.children ?? []), 0);
 }
 
 export async function seedReferenceData(prisma: PrismaClient): Promise<SeedSummary> {
@@ -88,10 +129,20 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<SeedSumma
 
   for (const source of SHOPPING_SOURCES) {
     await prisma.shoppingSource.upsert({
-      where: { code: source.code },
-      create: { ...source, enabled: false }, // enabled only once real credentials exist
-      update: { name: source.name, baseUrl: source.baseUrl },
+      where: { slug: source.slug },
+      // DISABLED until an authorized integration (credentials) exists.
+      create: { ...source, status: "DISABLED" },
+      update: { name: source.name, domain: source.domain, baseUrl: source.baseUrl },
     });
+  }
+
+  for (const [from, to] of Object.entries(RENAMED_CATEGORY_SLUGS)) {
+    const [old, current] = await Promise.all([
+      prisma.category.findUnique({ where: { slug: from } }),
+      prisma.category.findUnique({ where: { slug: to } }),
+    ]);
+    if (old && !current)
+      await prisma.category.update({ where: { id: old.id }, data: { slug: to } });
   }
 
   let categories = 0;

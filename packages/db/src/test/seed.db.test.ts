@@ -1,13 +1,13 @@
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { CATEGORY_TREE, SHOPPING_SOURCES, seedReferenceData } from "../seed-data.js";
+import { SHOPPING_SOURCES, countCategories, seedReferenceData } from "../seed-data.js";
 import { testPrisma, truncateAll } from "./helpers.js";
 
 const prisma: PrismaClient = testPrisma();
 afterAll(() => prisma.$disconnect());
 beforeEach(() => truncateAll(prisma));
 
-const categoryCount = CATEGORY_TREE.reduce((n, c) => n + 1 + (c.children?.length ?? 0), 0);
+const categoryCount = countCategories();
 
 describe("seedReferenceData", () => {
   it("seeds plans, disabled sources and the category tree, and nothing else", async () => {
@@ -20,20 +20,37 @@ describe("seedReferenceData", () => {
 
     const plans = await prisma.subscriptionPlan.findMany({ orderBy: { monthlyPricePaise: "asc" } });
     expect(plans.map((p) => [p.code, p.monthlyPricePaise])).toEqual([
-      ["FREE", 0],
-      ["PRO", 19_900],
-      ["BUSINESS", 99_900],
+      ["FREE", 0n],
+      ["PRO", 19_900n],
+      ["BUSINESS", 99_900n],
     ]);
 
     const sources = await prisma.shoppingSource.findMany();
     expect(sources).toHaveLength(5);
-    expect(sources.every((s) => !s.enabled)).toBe(true);
+    expect(sources.every((s) => s.status === "DISABLED" && !s.isSample)).toBe(true);
 
-    const mobiles = await prisma.category.findUnique({
-      where: { slug: "mobiles" },
+    const phones = await prisma.category.findUnique({
+      where: { slug: "smartphones" },
       include: { parent: true },
     });
-    expect(mobiles?.parent?.slug).toBe("electronics");
+    expect(phones?.parent?.slug).toBe("electronics");
+    const fridges = await prisma.category.findUnique({
+      where: { slug: "refrigerators" },
+      include: { parent: { include: { parent: true } } },
+    });
+    expect(fridges?.parent?.parent?.slug).toBe("home-kitchen");
+    for (const slug of [
+      "fashion",
+      "mens-clothing",
+      "womens-clothing",
+      "beauty-personal-care",
+      "sports-fitness",
+      "books",
+      "grocery",
+      "automotive",
+    ]) {
+      expect(await prisma.category.findUnique({ where: { slug } }), slug).not.toBeNull();
+    }
 
     // No catalog, price or user data is ever seeded.
     expect(await prisma.product.count()).toBe(0);
@@ -44,21 +61,38 @@ describe("seedReferenceData", () => {
   it("is idempotent and preserves admin changes", async () => {
     await seedReferenceData(prisma);
     await prisma.shoppingSource.update({
-      where: { code: "flipkart" },
-      data: { enabled: true, timeoutMs: 5_000 },
+      where: { slug: "flipkart" },
+      data: { status: "MAINTENANCE", timeoutMs: 5_000 },
     });
     await prisma.subscriptionPlan.update({
       where: { code: "PRO" },
-      data: { monthlyPricePaise: 14_900 },
+      data: { monthlyPricePaise: 14_900n },
     });
 
     await seedReferenceData(prisma);
 
     expect(await prisma.shoppingSource.count()).toBe(5);
     expect(await prisma.category.count()).toBe(categoryCount);
-    const flipkart = await prisma.shoppingSource.findUniqueOrThrow({ where: { code: "flipkart" } });
-    expect([flipkart.enabled, flipkart.timeoutMs]).toEqual([true, 5_000]);
+    const flipkart = await prisma.shoppingSource.findUniqueOrThrow({ where: { slug: "flipkart" } });
+    expect([flipkart.status, flipkart.timeoutMs]).toEqual(["MAINTENANCE", 5_000]);
     const pro = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: "PRO" } });
-    expect(pro.monthlyPricePaise).toBe(14_900);
+    expect(pro.monthlyPricePaise).toBe(14_900n);
+  });
+
+  it("renames a legacy category slug in place, keeping its products", async () => {
+    const legacy = await prisma.category.create({
+      data: { slug: "mobiles", name: "Mobile Phones" },
+    });
+    await prisma.product.create({
+      data: { name: "P", normalizedName: "p", brand: "B", categoryId: legacy.id },
+    });
+    await seedReferenceData(prisma);
+    const phones = await prisma.category.findUniqueOrThrow({
+      where: { slug: "smartphones" },
+      include: { products: true },
+    });
+    expect(phones.id).toBe(legacy.id);
+    expect(phones.products).toHaveLength(1);
+    expect(await prisma.category.findUnique({ where: { slug: "mobiles" } })).toBeNull();
   });
 });

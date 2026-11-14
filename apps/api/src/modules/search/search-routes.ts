@@ -15,7 +15,10 @@ import type { SearchService } from "./search-service.js";
 const security = [{ sessionCookie: [] }];
 const idParam = z.object({ id: z.string().uuid() });
 
-export const searchRoutes: FastifyPluginAsyncZod<{ search: SearchService }> = async (app, { search }) => {
+export const searchRoutes: FastifyPluginAsyncZod<{ search: SearchService }> = async (
+  app,
+  { search },
+) => {
   app.addHook("preHandler", app.requireAuth);
 
   app.post(
@@ -31,7 +34,8 @@ export const searchRoutes: FastifyPluginAsyncZod<{ search: SearchService }> = as
         response: { 202: ok(searchView) },
       },
     },
-    async (req, reply) => reply.status(202).send(await search.create(getAuth(req).userId, req.body)),
+    async (req, reply) =>
+      reply.status(202).send(await search.create(getAuth(req).userId, req.body)),
   );
 
   app.get(

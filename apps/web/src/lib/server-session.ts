@@ -1,4 +1,4 @@
-import type { MeResponse, PublicUser } from "@dealmind/shared";
+import type { MeResponse, PublicUser, SuccessBody } from "@dealmind/shared";
 import { cookies } from "next/headers";
 
 const API_URL = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4000";
@@ -20,7 +20,7 @@ export async function getServerUser(): Promise<PublicUser | null> {
       cache: "no-store",
     });
     if (!res.ok) return null;
-    return ((await res.json()) as MeResponse).user;
+    return ((await res.json()) as SuccessBody<MeResponse>).data.user;
   } catch {
     return null;
   }

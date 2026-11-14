@@ -10,6 +10,7 @@ import {
   verifyEmailInput,
 } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
+import { ok } from "../../utils/http.js";
 import { z } from "zod";
 import { clientInfo, getAuth } from "../../plugins/auth.js";
 import type { UserService } from "../users/user-service.js";
@@ -55,7 +56,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
       schema: {
         tags: ["auth"],
         summary: "Issue a CSRF token (also set as a cookie); send it as x-csrf-token",
-        response: { 200: z.object({ csrfToken: z.string() }) },
+        response: { 200: ok(z.object({ csrfToken: z.string() })) },
       },
     },
     async (_req, reply) => ({ csrfToken: app.issueCsrfToken(reply) }),
@@ -69,7 +70,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Create an account (responds identically whether or not the email exists)",
         body: registerInput,
-        response: { 202: messageResponse },
+        response: { 202: ok(messageResponse) },
       },
     },
     async (req, reply) => {
@@ -86,7 +87,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Sign in; sets a new HttpOnly session cookie",
         body: loginInput,
-        response: { 200: meResponse },
+        response: { 200: ok(meResponse) },
       },
     },
     async (req, reply) => {
@@ -125,7 +126,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "The signed-in user",
         security,
-        response: { 200: meResponse },
+        response: { 200: ok(meResponse) },
       },
     },
     async (req) => ({ user: await users.getMe(getAuth(req).userId) }),
@@ -139,7 +140,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Confirm an email address with the token from the verification email",
         body: verifyEmailInput,
-        response: { 200: messageResponse },
+        response: { 200: ok(messageResponse) },
       },
     },
     async (req) => {
@@ -157,7 +158,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Send a new verification email to the signed-in user",
         security,
-        response: { 200: messageResponse },
+        response: { 200: ok(messageResponse) },
       },
     },
     async (req) => {
@@ -179,7 +180,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Request a password-reset email (responds identically for unknown emails)",
         body: forgotPasswordInput,
-        response: { 202: messageResponse },
+        response: { 202: ok(messageResponse) },
       },
     },
     async (req, reply) => {
@@ -196,7 +197,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "Set a new password with a reset token; signs out all sessions",
         body: resetPasswordInput,
-        response: { 200: messageResponse },
+        response: { 200: ok(messageResponse) },
       },
     },
     async (req, reply) => {
@@ -216,7 +217,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         summary: "Change password; signs out other sessions and rotates this one",
         security,
         body: changePasswordInput,
-        response: { 200: messageResponse },
+        response: { 200: ok(messageResponse) },
       },
     },
     async (req, reply) => {
@@ -240,7 +241,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
         tags: ["auth"],
         summary: "List your active sessions",
         security,
-        response: { 200: sessionsResponse },
+        response: { 200: ok(sessionsResponse) },
       },
     },
     async (req) => {

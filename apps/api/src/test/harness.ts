@@ -2,7 +2,9 @@ import { randomBytes } from "node:crypto";
 import { createPrismaClient, type PrismaClient } from "@dealmind/db";
 import { resolveTestDatabaseUrl, truncateAll } from "@dealmind/db/testing";
 import { CSRF_HEADER } from "@dealmind/shared";
+import { JobQueues, redisConnectionFromUrl } from "@dealmind/queue";
 import type { FastifyInstance } from "fastify";
+import { Redis } from "ioredis";
 import { type AppDeps, buildApp } from "../app.js";
 import { loadEnv } from "../config/env.js";
 import { FAKE_IAM_BASE, FakeIam } from "./fake-iam.js";
@@ -12,10 +14,31 @@ export const APP_ORIGIN = "http://localhost:3000";
 export const PASSWORD = "Correct-horse-42!";
 export const TOKEN_KEY = randomBytes(32).toString("base64");
 
+/** Real local Redis (from .env); every test app uses its own key prefix. */
+export function testRedisUrl(): string {
+  const url = process.env.REDIS_URL;
+  if (!url) throw new Error("API DB tests need REDIS_URL (see .env.example); run `pnpm infra:up`");
+  return url;
+}
+
+/** Deletes every key under a prefix (SCAN, never KEYS/FLUSH). */
+export async function deleteRedisPrefix(redis: Redis, prefix: string): Promise<void> {
+  let cursor = "0";
+  do {
+    const [next, keys] = await redis.scan(cursor, "MATCH", `${prefix}:*`, "COUNT", 500);
+    cursor = next;
+    if (keys.length) await redis.del(...keys);
+  } while (cursor !== "0");
+}
+
 export interface TestContext {
   app: FastifyInstance;
   prisma: PrismaClient;
   iam: FakeIam;
+  redis: Redis;
+  jobs: JobQueues;
+  /** Unique Redis key prefix of this test app. */
+  prefix: string;
   close: () => Promise<void>;
 }
 
@@ -26,6 +49,7 @@ export async function createTestApp(
   iam?: FakeIam,
 ): Promise<TestContext> {
   const url = resolveTestDatabaseUrl();
+  const prefix = `dmtest:${randomBytes(6).toString("hex")}`;
   const fakeIam = iam ?? (await FakeIam.create());
   // DealMind is a registered application in the IAM (admin setup), so its
   // APP_URL is accepted as the base for emailed links.
@@ -38,9 +62,21 @@ export async function createTestApp(
     APP_URL: APP_ORIGIN,
     API_DOCS_ENABLED: "false",
     IAM_BASE_URL: FAKE_IAM_BASE,
+    REDIS_URL: testRedisUrl(),
+    REDIS_KEY_PREFIX: prefix,
     ...envOverrides,
   });
   const prisma = createPrismaClient({ url });
+  const redisUrl = testRedisUrl();
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, enableOfflineQueue: false });
+  await new Promise<void>((resolve, reject) => {
+    redis.once("ready", () => resolve());
+    redis.once("error", reject);
+  });
+  const jobs = new JobQueues({
+    connection: redisConnectionFromUrl(redisUrl),
+    prefix: `${prefix}:bull`,
+  });
   const app = await buildApp({
     env,
     prisma,
@@ -55,13 +91,21 @@ export async function createTestApp(
     },
     loginThrottle: { maxFailures: 5, windowMs: 60_000, lockMs: 60_000 },
     sessionTouchIntervalMs: 0,
+    globalRateLimit: 10_000,
+    redis,
+    jobs,
     ...depOverrides,
   });
   return {
     app,
     prisma,
     iam: fakeIam,
+    redis,
+    jobs,
+    prefix,
     close: async () => {
+      // Clean this app's keys first; app.close() then quits the client.
+      await deleteRedisPrefix(redis, prefix).catch(() => undefined);
       await app.close();
       await prisma.$disconnect();
     },

@@ -26,7 +26,9 @@ pnpm infra:up           # Postgres (+pgvector) and Redis; wait for "healthy" in 
 pnpm db:generate
 pnpm --filter @dealmind/db build
 pnpm db:migrate         # applies prisma/migrations
-pnpm db:seed            # plans + shopping sources (all disabled)
+pnpm db:seed            # plans + shopping sources (all disabled) + category tree
+pnpm --filter @dealmind/catalog build && pnpm --filter @dealmind/catalog seed:sample
+                        # optional, dev only: labeled SAMPLE catalog (fake prices, example.com)
 pnpm dev                # API on :4000, web on :3000 (this machine: PORT=3100, see below)
 ```
 

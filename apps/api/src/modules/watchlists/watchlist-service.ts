@@ -4,8 +4,9 @@
  * enforces ownership with the composite FK (watchlistId, userId).
  */
 import { type PrismaClient, isUniqueViolation } from "@dealmind/db";
-import { AppError, type PageQuery, paginationOf } from "@dealmind/shared";
+import { AppError, type PageQuery, paginationOf, paiseFromDb } from "@dealmind/shared";
 import { paginated } from "../../utils/http.js";
+import { toVariantView } from "../catalog/catalog-service.js";
 import type { PlanService } from "../subscriptions/plan-service.js";
 
 const itemInclude = {
@@ -14,8 +15,9 @@ const itemInclude = {
       id: true,
       variantKey: true,
       attributes: true,
+      sku: true,
       gtin: true,
-      product: { select: { id: true, title: true, brand: true, imageUrl: true } },
+      product: { select: { id: true, name: true, brand: true, imageUrl: true } },
     },
   },
 } as const;
@@ -24,9 +26,17 @@ export class WatchlistService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly plans: PlanService,
+    /** Offers not observed for this long are excluded from lowest prices. */
+    private readonly offerStaleAfterMs = 24 * 3_600_000,
   ) {}
 
-  private view(w: { id: string; name: string; createdAt: Date; updatedAt: Date; _count: { items: number } }) {
+  private view(w: {
+    id: string;
+    name: string;
+    createdAt: Date;
+    updatedAt: Date;
+    _count: { items: number };
+  }) {
     return {
       id: w.id,
       name: w.name,
@@ -54,7 +64,8 @@ export class WatchlistService {
       });
       return this.view(w);
     } catch (err) {
-      if (isUniqueViolation(err)) throw AppError.conflict("You already have a watchlist with this name");
+      if (isUniqueViolation(err))
+        throw AppError.conflict("You already have a watchlist with this name");
       throw err;
     }
   }
@@ -91,12 +102,7 @@ export class WatchlistService {
         id: i.id,
         note: i.note,
         addedAt: i.addedAt.toISOString(),
-        variant: {
-          id: i.variant.id,
-          variantKey: i.variant.variantKey,
-          attributes: (i.variant.attributes ?? {}) as Record<string, unknown>,
-          gtin: i.variant.gtin,
-        },
+        variant: toVariantView(i.variant),
         product: i.variant.product,
         lowestPricePaise: lows.get(i.variant.id) ?? null,
       })),
@@ -107,10 +113,19 @@ export class WatchlistService {
     if (variantIds.length === 0) return new Map();
     const rows = await this.prisma.productOffer.groupBy({
       by: ["variantId"],
-      where: { variantId: { in: variantIds }, source: { enabled: true } },
-      _min: { pricePaise: true },
+      where: {
+        variantId: { in: variantIds },
+        source: { status: "ACTIVE" },
+        observedAt: { gte: new Date(Date.now() - this.offerStaleAfterMs) },
+      },
+      _min: { sellingPricePaise: true },
     });
-    return new Map(rows.flatMap((r) => (r._min.pricePaise == null ? [] : [[r.variantId, r._min.pricePaise]])));
+    return new Map(
+      rows.flatMap((r) => {
+        const low = r._min?.sellingPricePaise;
+        return low == null ? [] : [[r.variantId, paiseFromDb(low)] as const];
+      }),
+    );
   }
 
   async rename(userId: string, id: string, name: string) {
@@ -118,7 +133,8 @@ export class WatchlistService {
     try {
       await this.prisma.watchlist.update({ where: { id }, data: { name } });
     } catch (err) {
-      if (isUniqueViolation(err)) throw AppError.conflict("You already have a watchlist with this name");
+      if (isUniqueViolation(err))
+        throw AppError.conflict("You already have a watchlist with this name");
       throw err;
     }
     return this.view(await this.owned(userId, id));
@@ -138,14 +154,17 @@ export class WatchlistService {
         data: { userId, watchlistId, variantId, note: note ?? null },
       });
     } catch (err) {
-      if (isUniqueViolation(err)) throw AppError.conflict("This product is already in the watchlist");
+      if (isUniqueViolation(err))
+        throw AppError.conflict("This product is already in the watchlist");
       throw err;
     }
     return this.get(userId, watchlistId);
   }
 
   async removeItem(userId: string, watchlistId: string, itemId: string): Promise<void> {
-    const res = await this.prisma.watchlistItem.deleteMany({ where: { id: itemId, watchlistId, userId } });
+    const res = await this.prisma.watchlistItem.deleteMany({
+      where: { id: itemId, watchlistId, userId },
+    });
     if (res.count === 0) throw AppError.notFound("Watchlist item");
   }
 }

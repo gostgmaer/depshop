@@ -4,23 +4,25 @@ Each phase ends with: typecheck → lint → test → production build → docs 
 explicit report of incomplete work. Status is only marked **Done** when all of
 those pass.
 
-| #   | Phase                                                                                                                                                                          | Status                    |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
-| 1   | Foundation: monorepo, tooling, data model, auth, RBAC, errors, API docs, web scaffold, Compose                                                                                 | **Done** (see gaps below) |
-| 1.2 | Docker development infrastructure: Postgres + pgvector, Redis (auth, BullMQ-safe), pgAdmin, RedisInsight, health checks, network, volumes, operations docs                     | **Done** (see gaps below) |
-| 1.3 | Database: UUIDv7 ids, UserSession, NotificationDelivery, BillingEvent, userId on every user-owned model, composite ownership FKs, CHECK constraints, seed, DB tests            | **Done** (see gaps below) |
-| 1.4 | Individual user authentication: cookie sessions, CSRF, email verification, password reset/change, session management, profile & preferences, RBAC middleware, Mailpit, auth UI | **Done** (see gaps below) |
-| 1.5 | Shared EasyDev services: identity via the shared IAM (BFF), notification and file-upload SDK adapters; DealMind's own password/email/Mailpit code removed                      | **Done** (see gaps below) |
-| 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                    | Partially done (1.4)      |
-| 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                               | Not started               |
-| 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches     | Not started               |
-| 5   | AI layer (LangGraph.js): intent extraction, planning, source selection, orchestration, evaluation, explanation; structured outputs; configurable provider; AgentRun records    | Not started               |
-| 6   | Search & comparison UI, new-launch discovery                                                                                                                                   | Not started               |
-| 7   | Price tracking: BullMQ scheduled jobs, per-source rate limits, price snapshots, alert evaluation, notifications                                                                | Not started               |
-| 8   | Watchlists, alerts & notifications UI                                                                                                                                          | Not started               |
-| 9   | Monetization: plans, usage limits & metering, affiliate links, click attribution, conversion/commission reporting                                                              | Not started               |
-| 10  | Admin console: users, catalog, connectors, AI model config, platform settings, subscriptions, affiliate & usage analytics, job monitoring                                      | Not started               |
-| 11  | Observability & hardening: OpenTelemetry, Sentry, production Traefik (TLS), slim images, security review, load testing                                                         | Not started               |
+| #   | Phase                                                                                                                                                                                              | Status                    |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 1   | Foundation: monorepo, tooling, data model, auth, RBAC, errors, API docs, web scaffold, Compose                                                                                                     | **Done** (see gaps below) |
+| 1.2 | Docker development infrastructure: Postgres + pgvector, Redis (auth, BullMQ-safe), pgAdmin, RedisInsight, health checks, network, volumes, operations docs                                         | **Done** (see gaps below) |
+| 1.3 | Database: UUIDv7 ids, UserSession, NotificationDelivery, BillingEvent, userId on every user-owned model, composite ownership FKs, CHECK constraints, seed, DB tests                                | **Done** (see gaps below) |
+| 1.4 | Individual user authentication: cookie sessions, CSRF, email verification, password reset/change, session management, profile & preferences, RBAC middleware, Mailpit, auth UI                     | **Done** (see gaps below) |
+| 1.5 | Shared EasyDev services: identity via the shared IAM (BFF), notification and file-upload SDK adapters; DealMind's own password/email/Mailpit code removed                                          | **Done** (see gaps below) |
+| 2.1 | Fastify API foundation: response envelope, modules (catalog, search, watchlists, alerts, notifications, subscriptions, admin), Redis cache/rate limits, BullMQ job contracts, `/health` + `/ready` | Partially done (see gaps) |
+| 2.2 | Product catalog & data management: catalog model refinement (BIGINT paise), normalization, matching/dedup, import/upsert, catalog APIs, caching, seed + sample data, query plans                   | **Done** (see gaps below) |
+| 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                                        | Partially done (1.4)      |
+| 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                                                   | Not started               |
+| 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches                         | Not started               |
+| 5   | AI layer (LangGraph.js): intent extraction, planning, source selection, orchestration, evaluation, explanation; structured outputs; configurable provider; AgentRun records                        | Not started               |
+| 6   | Search & comparison UI, new-launch discovery                                                                                                                                                       | Not started               |
+| 7   | Price tracking: BullMQ scheduled jobs, per-source rate limits, price snapshots, alert evaluation, notifications                                                                                    | Not started               |
+| 8   | Watchlists, alerts & notifications UI                                                                                                                                                              | Not started               |
+| 9   | Monetization: plans, usage limits & metering, affiliate links, click attribution, conversion/commission reporting                                                                                  | Not started               |
+| 10  | Admin console: users, catalog, connectors, AI model config, platform settings, subscriptions, affiliate & usage analytics, job monitoring                                                          | Not started               |
+| 11  | Observability & hardening: OpenTelemetry, Sentry, production Traefik (TLS), slim images, security review, load testing                                                                             | Not started               |
 
 ## Phase 1 — delivered
 
@@ -129,3 +131,63 @@ See [SHARED_SERVICES.md](SHARED_SERVICES.md) and [AUTH.md](AUTH.md).
 5. **IAM security issues** (password hash in the login response; unscoped `tenant:user_add`; reuse revocation not clearing the session cache; others) were reported, not fixed. See SHARED_SERVICES.md.
 6. **Local dev database still on an old schema** (consent to reset pending since Phase 1.3). All validation used the `*_test` databases.
 7. **Notification and file adapters are wired but unused** until Phase 7 (price alerts) and the admin catalog.
+
+## Phase 2.1 — Fastify API foundation (partially delivered)
+
+**Delivered:**
+
+- Envelope `{success, data, meta:{requestId, pagination?}}` and the error envelope.
+- Modules: users, categories, products, sources, search (async via BullMQ, 202), watchlists, alerts, notifications, subscriptions, and admin.
+- Redis read-through cache with namespaced keys, Redis-backed rate limits and login throttle.
+- Typed job contracts with deterministic job ids (`@dealmind/queue`).
+- `/health`, `/ready`, and infrastructure outages mapped to 503.
+
+The minimal worker (`apps/worker`, shopping-search consumer) was added in Phase 2.2.
+
+**Still open:**
+
+- Dedicated integration tests for search enqueue, watchlists, alerts, notifications, subscriptions and admin modules. Only auth (46 tests) and catalog (17 tests) have API suites.
+- Price-refresh, alert-evaluation and notification-delivery consumers.
+- OpenTelemetry preparation.
+
+## Phase 2.2 — Product catalog & data management (delivered)
+
+See [CATALOG.md](CATALOG.md).
+
+- **Schema:**
+  - Catalog models refined to the spec fields; every money column is BIGINT paise.
+  - `ProductMatchReview` added for uncertain matches.
+  - Price history is append-only, enforced by a trigger and tested.
+  - Composite FK keeps an offer's product equal to its variant's product.
+  - Hand-written migration with no data loss; drift check empty.
+- **`@dealmind/catalog`:**
+  - Deterministic normalization: brands, model numbers, barcodes with check digits, RAM/storage/capacity units, colours, titles.
+  - Matcher: identifier → model number → normalized name → pg_trgm, with generation/qualifier/model-number guards, configurable thresholds and stored evidence.
+  - Transactional importer: per-brand advisory lock, duplicate-offer prevention, change-driven snapshots, enrich-never-overwrite, manual review resolution.
+  - Cache key scheme and invalidation helpers.
+- **API:**
+  - Category and product endpoints with filters (category subtree, canonical brand, price, stock, launch date, specification), sorting and pagination.
+  - `/products/:id/history`.
+  - Offer freshness: stale offers are never shown as live; sample data is flagged.
+  - Per-kind cache TTLs with invalidation, and a Redis-outage fallback.
+  - Admin match-review queue.
+- **Seed data:** 28-category Indian tree; marketplaces stay DISABLED; dev-only sample catalog that is clearly labeled and refuses to run in production.
+- **Query plans:** EXPLAIN ANALYZE on 50k products / 300k offers; the listing query now picks LATERAL vs aggregate by filter selectivity.
+- **Worker:** minimal `apps/worker` consumes shopping-search jobs. With no connectors yet, it records `SKIPPED`/`NO_CONNECTOR` runs and completes with zero results.
+- **Tests:**
+  - db: 62
+  - catalog: 16 unit + 24 DB
+  - api: 63 DB (46 auth + 17 catalog) + 21 unit
+  - worker: 2 DB
+  - shared: 31; queue: 3; web: 14
+  - `pnpm check`: 29/29 tasks green
+
+- **Build pipeline fix:** `@dealmind/web#typecheck` now runs after `@dealmind/web#build`. `next build` rewrites `.next/types`, which `tsc` includes, so running them concurrently failed intermittently. Verified with an uncached `pnpm check --force` (29/29).
+
+### Phase 2.2 — known gaps
+
+1. **No real marketplace data:** no connectors exist yet (Phase 3), so matching thresholds aren't calibrated on real listings, and there's no semantic matching.
+2. **Barcodes are stored on variants;** product-level identifiers are only for curated data.
+3. **Product listing isn't cached.** A denormalized offer summary is the planned scale step.
+4. **No admin UI** for the review queue, and no admin catalog editing (which must invalidate caches when it's added).
+5. **Local dev database still needs a reset** (consent pending since Phase 1.3). All validation used `*_test` databases and a scratch DB.

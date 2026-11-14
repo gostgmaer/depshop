@@ -16,8 +16,34 @@ import type { Env } from "./config/env.js";
 import { cookieNames } from "./lib/cookies.js";
 import { CsrfTokens } from "./lib/csrf.js";
 import { registerErrorHandler } from "./lib/error-handler.js";
-import { LoginThrottle, type LoginThrottleOptions } from "./lib/login-throttle.js";
+import {
+  type JobQueues,
+  JobQueues as JobQueuesImpl,
+  redisConnectionFromUrl,
+} from "@dealmind/queue";
+import type { Redis } from "ioredis";
+import { CacheService } from "./lib/cache.js";
+import {
+  type LoginThrottle,
+  type LoginThrottleOptions,
+  RedisLoginThrottle,
+} from "./lib/login-throttle.js";
+import { AlertService } from "./modules/alerts/alert-service.js";
+import { alertRoutes } from "./modules/alerts/alert-routes.js";
+import { categoryRoutes, productRoutes, sourceRoutes } from "./modules/catalog/catalog-routes.js";
+import { CatalogService } from "./modules/catalog/catalog-service.js";
+import { notificationRoutes } from "./modules/notifications/notification-routes.js";
+import { SearchService } from "./modules/search/search-service.js";
+import { searchRoutes } from "./modules/search/search-routes.js";
+import { PlanService } from "./modules/subscriptions/plan-service.js";
+import { subscriptionRoutes } from "./modules/subscriptions/subscription-routes.js";
+import { WatchlistService } from "./modules/watchlists/watchlist-service.js";
+import { watchlistRoutes } from "./modules/watchlists/watchlist-routes.js";
+import { envelopePlugin } from "./plugins/envelope.js";
+import { createRedis, redisPlugin } from "./plugins/redis.js";
 import { TokenCipher } from "./lib/token-cipher.js";
+import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
+import { adminPlatformRoutes } from "./modules/admin/admin-platform-routes.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
 import {
   type AuthRateLimits,
@@ -57,7 +83,12 @@ export interface AppDeps {
   logger?: FastifyServerOptions["logger"];
   /** Overridable for tests; production uses the defaults. */
   rateLimits?: AuthRateLimits;
-  loginThrottle?: Omit<LoginThrottleOptions, "now">;
+  loginThrottle?: LoginThrottleOptions;
+  /** Global per-IP limit (requests/minute). */
+  globalRateLimit?: number;
+  /** Injected Redis client / queues (tests); otherwise created from env. */
+  redis?: Redis;
+  jobs?: JobQueues;
   sessionTouchIntervalMs?: number;
 }
 
@@ -102,7 +133,28 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // matters for explicitly allow-listed extra origins.
   await app.register(cors, { origin: env.ALLOWED_ORIGINS, credentials: true });
   await app.register(cookie);
-  await app.register(rateLimit, { global: true, max: 300, timeWindow: "1 minute" });
+  const redis = deps.redis ?? createRedis(env.REDIS_URL);
+  await app.register(redisPlugin, { redis });
+  const jobs =
+    deps.jobs ??
+    new JobQueuesImpl({
+      connection: redisConnectionFromUrl(env.REDIS_URL),
+      prefix: `${env.REDIS_KEY_PREFIX}:bull`,
+    });
+  app.addHook("onClose", async () => {
+    await jobs.close();
+  });
+  await app.register(envelopePlugin);
+  // Shared across API instances via Redis. If Redis is down, requests are
+  // allowed (skipOnError) rather than rejecting all traffic; /ready reports it.
+  await app.register(rateLimit, {
+    global: true,
+    max: deps.globalRateLimit ?? 300,
+    timeWindow: "1 minute",
+    redis,
+    nameSpace: `${env.REDIS_KEY_PREFIX}:rl:`,
+    skipOnError: true,
+  });
   await app.register(csrfPlugin, {
     csrf: new CsrfTokens(env.SESSION_SECRET),
     cookies,
@@ -175,18 +227,45 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         : { touchIntervalMs: deps.sessionTouchIntervalMs }),
     },
   );
-  const throttle = new LoginThrottle(
+  const throttle: LoginThrottle = new RedisLoginThrottle(
+    redis,
+    env.REDIS_KEY_PREFIX,
     deps.loginThrottle ?? { maxFailures: 5, windowMs: 15 * 60_000, lockMs: 15 * 60_000 },
+    (err) =>
+      app.log.error({ err: (err as Error).message }, "login throttle unavailable (failing open)"),
   );
   const auth = new AuthService(prisma, sessions, iam, verifier, throttle);
   const users = new UserService(prisma, sessions, iam);
+  const cache = new CacheService(redis, env.REDIS_KEY_PREFIX, app.log);
+  const catalog = new CatalogService(prisma, cache, {
+    ttl: {
+      categories: env.CATALOG_CATEGORY_TTL_SECONDS,
+      product: env.CATALOG_PRODUCT_TTL_SECONDS,
+      offers: env.CATALOG_OFFER_TTL_SECONDS,
+      history: env.CATALOG_HISTORY_TTL_SECONDS,
+    },
+    offerStaleAfterMs: env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+  });
+  const plans = new PlanService(prisma);
+  const search = new SearchService(
+    prisma,
+    jobs,
+    plans,
+    cache,
+    app.log,
+    env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+  );
+  const watchlists = new WatchlistService(prisma, plans, env.CATALOG_OFFER_STALE_HOURS * 3_600_000);
+  const alerts = new AlertService(prisma, plans);
 
   await app.register(authPlugin, { sessions, cookies, secureCookies: env.COOKIE_SECURE });
   await app.register(healthRoutes, {
-    prefix: "/health",
     // Critical: the API cannot serve users without these.
     checks: {
       ...deps.healthChecks,
+      redis: async () => {
+        await redis.ping();
+      },
       iam: () => iam.health(),
       iamJwks: () => verifier.health(),
     },
@@ -205,8 +284,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         users,
         rateLimits: deps.rateLimits ?? DEFAULT_AUTH_RATE_LIMITS,
       });
-      await v1.register(userRoutes, { prefix: "/users", users });
+      await v1.register(userRoutes, { prefix: "/users", users, sessions, auth });
       await v1.register(adminUserRoutes, { prefix: "/admin/users", prisma, sessions });
+      await v1.register(adminPlatformRoutes, { prefix: "/admin", prisma });
+      await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
+      await v1.register(categoryRoutes, { prefix: "/categories", catalog });
+      await v1.register(productRoutes, { prefix: "/products", catalog });
+      await v1.register(sourceRoutes, { prefix: "/sources", catalog });
+      await v1.register(searchRoutes, { prefix: "/search", search });
+      await v1.register(watchlistRoutes, { prefix: "/watchlists", watchlists });
+      await v1.register(alertRoutes, { prefix: "/alerts", alerts });
+      await v1.register(notificationRoutes, { prefix: "/notifications", prisma });
+      await v1.register(subscriptionRoutes, { prefix: "/subscriptions", plans });
     },
     { prefix: "/api/v1" },
   );

@@ -34,8 +34,19 @@ const envSchema = z
       .string()
       .regex(/^[a-z0-9:_-]{1,40}$/, "lowercase letters, digits, : _ - only")
       .default("dm"),
-    /** TTL for cached shared catalog reads (categories, product detail). */
-    CATALOG_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    /** Cache TTLs (seconds) for shared catalog reads; 0 disables that cache. */
+    CATALOG_CATEGORY_TTL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(3_600),
+    CATALOG_PRODUCT_TTL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    /** Offer lists/summaries: kept short so prices are never shown long after they change. */
+    CATALOG_OFFER_TTL_SECONDS: z.coerce.number().int().min(0).max(600).default(60),
+    CATALOG_HISTORY_TTL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    /** An offer not observed for this many hours is stale (never presented as live). */
+    CATALOG_OFFER_STALE_HOURS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 30)
+      .default(24),
 
     /** Public origin of the web app; used for email links and the Origin allow-list. */
     APP_URL: z.string().url().default("http://localhost:3000"),

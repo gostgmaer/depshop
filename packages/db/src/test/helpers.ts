@@ -39,17 +39,19 @@ export function iamTokenFields() {
 export async function createCatalog(prisma: PrismaClient) {
   const source = await prisma.shoppingSource.create({
     data: {
-      code: `src_${unique().replace(/-/g, "")}`,
+      slug: `src_${unique().replace(/-/g, "")}`,
       name: "Test Source",
+      domain: "example.test",
       baseUrl: "https://example.test",
       integrationKind: "PARTNER",
     },
   });
   const product = await prisma.product.create({
     data: {
-      title: "Acme Phone X 5G",
+      name: "Acme Phone X 5G",
+      normalizedName: "acme phone x 5g",
       brand: "Acme",
-      model: "X",
+      modelNumber: "X",
       fingerprint: `acme-x-${unique()}`,
     },
   });
@@ -58,13 +60,14 @@ export async function createCatalog(prisma: PrismaClient) {
   });
   const offer = await prisma.productOffer.create({
     data: {
+      productId: product.id,
       variantId: variant.id,
       sourceId: source.id,
       externalId: `ext-${unique()}`,
-      url: "https://example.test/p/1",
+      productUrl: "https://example.test/p/1",
       title: "Acme Phone X 5G (Black, 128 GB)",
-      pricePaise: 1_999_900,
-      mrpPaise: 2_499_900,
+      sellingPricePaise: 1_999_900n,
+      mrpPaise: 2_499_900n,
     },
   });
   return { source, product, variant, offer };

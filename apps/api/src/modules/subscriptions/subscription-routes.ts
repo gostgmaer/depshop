@@ -7,11 +7,18 @@ import type { PlanService } from "./plan-service.js";
 
 const security = [{ sessionCookie: [] }];
 
-export const subscriptionRoutes: FastifyPluginAsyncZod<{ plans: PlanService }> = async (app, { plans }) => {
+export const subscriptionRoutes: FastifyPluginAsyncZod<{ plans: PlanService }> = async (
+  app,
+  { plans },
+) => {
   app.get(
     "/plans",
     {
-      schema: { tags: ["subscriptions"], summary: "Available plans", response: { 200: ok(z.array(planView)) } },
+      schema: {
+        tags: ["subscriptions"],
+        summary: "Available plans",
+        response: { 200: ok(z.array(planView)) },
+      },
     },
     async () => plans.listPlans(),
   );
