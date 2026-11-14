@@ -5,31 +5,31 @@ compare identical products, find genuine discounts, and track prices.
 
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap & status (including known gaps): [docs/PHASES.md](docs/PHASES.md)
-- API docs: run the API and open `http://localhost:4000/docs`
+- Docker infrastructure, operations & troubleshooting: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md)
+- API docs: run the API and open `http://127.0.0.1:4000/docs`
 
 ## Requirements
 
-Node.js ≥ 22, pnpm 10 (`corepack enable`), Docker (for Postgres/Redis).
+Node.js ≥ 22, pnpm 10 (`corepack enable`), Docker with Compose v2.
 
 ## Getting started
 
 ```bash
-cp .env.example .env              # then set JWT_ACCESS_SECRET and POSTGRES_PASSWORD
+cp .env.example .env    # replace every change_me and set JWT_ACCESS_SECRET
 pnpm install
-docker compose up -d postgres redis
+pnpm infra:up           # Postgres (+pgvector) and Redis; wait for "healthy" in `pnpm infra:ps`
 pnpm db:generate
 pnpm --filter @dealmind/db build
-pnpm db:migrate                   # applies prisma/migrations
-pnpm db:seed                      # plans + shopping sources (all disabled)
-pnpm dev                          # API on :4000, web on :3000
+pnpm db:migrate         # applies prisma/migrations
+pnpm db:seed            # plans + shopping sources (all disabled)
+pnpm dev                # API on :4000, web on :3000
 ```
 
-The API and Prisma read `DATABASE_URL` from the environment. When running
-outside Docker, export the variables from `.env` (e.g. with `dotenv-cli` or
-your shell) before running `pnpm db:migrate` / `pnpm dev`.
+The API and DB scripts load the repo-root `.env` automatically. Optional
+dev-only admin UIs (pgAdmin, RedisInsight): `pnpm infra:tools`.
 
 Full containerised stack behind Traefik (web at `http://localhost`, API at
-`http://api.localhost`):
+`http://api.localhost`; not yet validated, see PHASES.md):
 
 ```bash
 docker compose --profile app up -d --build

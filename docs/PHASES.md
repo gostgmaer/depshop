@@ -7,6 +7,7 @@ those pass.
 | #   | Phase                                                                                                                                                                       | Status                    |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | 1   | Foundation: monorepo, tooling, data model, auth, RBAC, errors, API docs, web scaffold, Compose                                                                              | **Done** (see gaps below) |
+| 1.2 | Docker development infrastructure: Postgres + pgvector, Redis (auth, BullMQ-safe), pgAdmin, RedisInsight, health checks, network, volumes, operations docs                  | **Done** (see gaps below) |
 | 2   | Web auth & account: login/register UI, session handling, profile, preferences API + UI                                                                                      | Not started               |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                            | Not started               |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches  | Not started               |
@@ -35,11 +36,28 @@ those pass.
 
 ### Phase 1 — known gaps (not hidden, carried forward)
 
-1. **Not verified against a real database.** Docker was not running in the build environment. The initial migration was generated with `prisma migrate diff` from the schema, and API tests use an in-memory `UserStore`. `PrismaUserStore` has no integration test yet → add Testcontainers/Compose-backed integration tests (Phase 2).
-2. **Docker images and Compose not built or run.** The Dockerfiles and `docker-compose.yml` are written but untested.
+1. **Partially closed in 1.2.** Migrations now apply cleanly to real PostgreSQL 17, and `PrismaUserStore` was exercised end to end by a manual smoke test (register, login, refresh rotation, replay revocation, duplicate email). There is still **no automated** DB-backed integration test → add one in Phase 2.
+2. **Partially closed in 1.2.** The core Compose services are built, run and validated (see INFRASTRUCTURE.md). The `app` profile images (`migrate`, `api`, `web`, `traefik`) are still **not built or run**.
 3. **Access tokens are not checked against user status.** A suspended user's existing access token remains valid until expiry (≤ 15 min); refresh is blocked immediately. Revisit if stricter revocation is needed.
 4. **No email verification or password reset** (schema has `emailVerifiedAt`; flows are not implemented).
 5. **No admin bootstrap command.** Promote the first admin manually: `UPDATE "User" SET role='ADMIN' WHERE email='…';` → CLI to be added in Phase 10.
 6. **Redis is provisioned but unused**; rate-limit state is in-process memory (per-instance). Move to Redis store in Phase 7 when Redis becomes a hard dependency.
 7. **No web tests yet**; web UI is a static landing page.
 8. **Runtime API image is not slimmed** (includes dev dependencies).
+
+## Phase 1.2 — delivered
+
+- `docker-compose.yml`: `postgres` (`pgvector/pgvector:0.8.0-pg17`), `redis` (`7.4.2-alpine`, password auth, AOF + RDB, `noeviction` for BullMQ), dev-only `tools` profile with `pgadmin` (`9.0`) and `redisinsight` (`2.70.1`). Pinned images, health checks, `service_healthy` dependencies, `unless-stopped` restarts, named volumes, a `dealmind` bridge network, and all ports bound to 127.0.0.1.
+- `infrastructure/docker/`: Postgres init script (`pg_trgm`, `vector` in the app DB and `template1`), `redis.conf`, and a pgAdmin entrypoint that pre-registers the server and password from env.
+- New Prisma migration `20261114010000_extensions` (portable: `vector` only if available).
+- `.env.example` documents every variable. `.dockerignore` excludes secrets. `.gitattributes` forces LF for container scripts.
+- DB scripts load the root `.env` via `dotenv-cli`; root `infra:*` / `db:*` convenience scripts.
+- `docs/INFRASTRUCTURE.md`: operations, troubleshooting, security notes and **actual validation results**.
+
+### Phase 1.2 — known gaps / deviations
+
+1. **Package naming:** the brief refers to `packages/database`. The existing package is `packages/db` (`@dealmind/db`) and was kept to avoid churn. Rename on request.
+2. **`apps/worker` does not exist yet** (Phase 7). Compose provides the shared `x-app-env` anchor and network it will use; no worker service is defined.
+3. **RedisInsight auto-registration needs its EULA accepted.** It is opt-in via `REDISINSIGHT_ACCEPT_EULA` and was **not** accepted during validation. The RedisInsight → Redis connection itself was verified.
+4. **Secrets are plain environment variables** (visible via `docker inspect`). Fine for local development; production needs Docker secrets or a secret manager (Phase 11).
+5. **`app` profile not validated** (see Phase 1 gap 2).

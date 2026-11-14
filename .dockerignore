@@ -1,9 +1,30 @@
+# Dependencies and build output (rebuilt inside the image)
 **/node_modules
 **/dist
 **/.next
 **/.turbo
 **/coverage
+**/*.tsbuildinfo
+
+# Secrets: never send to the build context
 .env
 .env.*
 !.env.example
+**/*.pem
+**/*.key
+
+# VCS, editor and OS noise
 .git
+.gitignore
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db
+**/*.log
+
+# Not needed to build images
+docs
+infrastructure
+docker-compose*.yml
+**/Dockerfile
+README.md

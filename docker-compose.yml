@@ -1,69 +1,189 @@
-# Local development stack.
-#   Infra only (run apps with `pnpm dev`):  docker compose up -d postgres redis
-#   Full stack behind Traefik:              docker compose --profile app up -d --build
-# With the full stack: web → http://localhost, API → http://api.localhost
+# DealMind AI — local development stack.
+# Full guide: docs/INFRASTRUCTURE.md
+#
+#   Core infra (Postgres + Redis):       docker compose up -d
+#   + admin UIs (pgAdmin, RedisInsight): docker compose --profile tools up -d
+#   + containerised apps behind Traefik: docker compose --profile app up -d --build
+#
+# Every published port binds to 127.0.0.1 only, so nothing is reachable from
+# other machines. Containers reach each other by service name on the
+# `dealmind` network (postgres:5432, redis:6379).
+#
+# Single-platform, multi-user: one database, one Redis, no tenant-specific
+# services or configuration.
 
 name: dealmind
 
+x-restart: &restart
+  restart: unless-stopped
+
+# Connection settings shared by every app container (api, migrate, and the
+# BullMQ worker once apps/worker exists). Uses Docker service names.
+x-app-env: &app-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
+  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+
 services:
+  # ───────────────────────────── Core infrastructure ─────────────────────────────
+
   postgres:
-    image: postgres:17-alpine
+    <<: *restart
+    # PostgreSQL 17 with the pgvector extension preinstalled.
+    image: pgvector/pgvector:0.8.0-pg17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-dealmind}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-dealmind}
-    ports: ["127.0.0.1:5432:5432"]
-    volumes: [postgres-data:/var/lib/postgresql/data]
+      POSTGRES_USER: ${POSTGRES_USER:-dealmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C.UTF-8
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [dealmind]
+    shm_size: 256mb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -h 127.0.0.1']
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
+      start_period: 10s
 
   redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports: ["127.0.0.1:6379:6379"]
-    volumes: [redis-data:/data]
+    <<: *restart
+    image: redis:7.4.2-alpine
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    environment:
+      # Read by the health check via REDISCLI_AUTH (keeps the password off argv).
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+      - ./infrastructure/docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [dealmind]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
+      start_period: 5s
+
+  # ───────────────────────────── Dev-only admin UIs ─────────────────────────────
+  # Opt-in via `--profile tools`. Never enable this profile in production.
+
+  pgadmin:
+    <<: *restart
+    profiles: [tools]
+    image: dpage/pgadmin4:9.0
+    entrypoint: ["/bin/sh", "/opt/dealmind/entrypoint.sh"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:?Set PGADMIN_EMAIL in .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?Set PGADMIN_PASSWORD in .env}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      PGADMIN_DISABLE_POSTFIX: "true"
+      # Consumed by the wrapper entrypoint to pre-register the server.
+      POSTGRES_DB: ${POSTGRES_DB:-dealmind}
+      POSTGRES_USER: ${POSTGRES_USER:-dealmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./infrastructure/docker/pgadmin/entrypoint.sh:/opt/dealmind/entrypoint.sh:ro
+    networks: [dealmind]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/misc/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  redisinsight:
+    <<: *restart
+    profiles: [tools]
+    image: redis/redisinsight:2.70.1
+    environment:
+      # Pre-registers the DealMind Redis connection. RedisInsight only applies
+      # this AFTER its EULA is accepted: either click through the prompt in the
+      # UI once (then restart this service), or opt in via .env.
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: "6379"
+      RI_REDIS_ALIAS: DealMind (local)
+      RI_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      RI_ACCEPT_TERMS_AND_CONDITIONS: ${REDISINSIGHT_ACCEPT_EULA:-false}
+    ports:
+      - "127.0.0.1:${REDISINSIGHT_PORT:-5540}:5540"
+    volumes:
+      - redisinsight-data:/data
+    networks: [dealmind]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5540/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ───────────────────────────── Containerised apps ─────────────────────────────
+  # Opt-in via `--profile app`. For day-to-day development, run the apps on the
+  # host with `pnpm dev` against the core infrastructure instead.
 
   traefik:
+    <<: *restart
     profiles: [app]
-    image: traefik:v3.3
+    image: traefik:v3.3.4
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=dealmind
       - --entrypoints.web.address=:80
       - --ping=true
-    ports: ["127.0.0.1:80:80"]
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-80}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [dealmind]
 
   migrate:
     profiles: [app]
     build: { context: ., dockerfile: apps/api/Dockerfile, target: build }
     working_dir: /repo/packages/db
-    command: ["sh", "-c", "pnpm prisma migrate deploy && pnpm seed"]
+    command: ["sh", "-c", "pnpm migrate:deploy && pnpm seed"]
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
+      <<: *app-env
+    networks: [dealmind]
     depends_on:
       postgres: { condition: service_healthy }
 
   api:
+    <<: *restart
     profiles: [app]
     build: { context: ., dockerfile: apps/api/Dockerfile }
     environment:
+      <<: *app-env
       NODE_ENV: production
       PORT: 4000
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
-      REDIS_URL: redis://redis:6379
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in .env}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env}
       CORS_ORIGINS: http://localhost
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+    networks: [dealmind]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -74,18 +194,31 @@ services:
       - traefik.http.services.api.loadbalancer.server.port=4000
 
   web:
+    <<: *restart
     profiles: [app]
     build:
       context: .
       dockerfile: apps/web/Dockerfile
       args: { NEXT_PUBLIC_API_URL: "http://api.localhost" }
-    depends_on: [api]
+    networks: [dealmind]
+    depends_on:
+      api: { condition: service_healthy }
     labels:
       - traefik.enable=true
       - traefik.http.routers.web.rule=Host(`localhost`)
       - traefik.http.routers.web.entrypoints=web
       - traefik.http.services.web.loadbalancer.server.port=3000
 
+  # worker: added in Phase 7 together with apps/worker. It will reuse
+  # `environment: { <<: *app-env }` and the `dealmind` network.
+
+networks:
+  dealmind:
+    name: dealmind
+    driver: bridge
+
 volumes:
   postgres-data:
   redis-data:
+  pgadmin-data:
+  redisinsight-data:

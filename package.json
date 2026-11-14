@@ -15,7 +15,16 @@
     "format": "prettier --write .",
     "db:generate": "pnpm --filter @dealmind/db generate",
     "db:migrate": "pnpm --filter @dealmind/db migrate:deploy",
-    "db:seed": "pnpm --filter @dealmind/db seed"
+    "db:seed": "pnpm --filter @dealmind/db seed",
+    "infra:up": "docker compose up -d",
+    "infra:tools": "docker compose --profile tools up -d",
+    "infra:ps": "docker compose --profile tools ps",
+    "infra:logs": "docker compose --profile tools logs -f --tail=100",
+    "infra:stop": "docker compose --profile tools stop",
+    "infra:down": "docker compose --profile tools --profile app down",
+    "db:migrate:dev": "pnpm --filter @dealmind/db migrate:dev",
+    "db:status": "pnpm --filter @dealmind/db migrate:status",
+    "db:studio": "pnpm --filter @dealmind/db studio"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

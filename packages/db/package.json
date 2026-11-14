@@ -17,16 +17,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
-    "migrate:dev": "prisma migrate dev",
-    "migrate:deploy": "prisma migrate deploy",
-    "migrate:diff": "prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --script --shadow-database-url \"$SHADOW_DATABASE_URL\"",
-    "seed": "node dist/seed.js"
+    "migrate:dev": "dotenv -e ../../.env -- prisma migrate dev",
+    "migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
+    "seed": "dotenv -e ../../.env -- node dist/seed.js",
+    "migrate:status": "dotenv -e ../../.env -- prisma migrate status",
+    "migrate:reset": "dotenv -e ../../.env -- prisma migrate reset",
+    "studio": "dotenv -e ../../.env -- prisma studio"
   },
   "dependencies": {
     "@dealmind/shared": "workspace:*",
     "@prisma/client": "^6.19.0"
   },
   "devDependencies": {
+    "dotenv-cli": "^8.0.0",
     "prisma": "^6.19.0"
   }
 }
