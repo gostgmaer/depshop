@@ -60,6 +60,7 @@ model User {
   updatedAt       DateTime   @updatedAt
 
   sessions               UserSession[]
+  authTokens             AuthToken[]
   preference             UserPreference?
   searches               Search[]
   searchSourceRuns       SearchSourceRun[]
@@ -80,14 +81,18 @@ model User {
   @@index([createdAt])
 }
 
-/// Refresh-token session. Only the SHA-256 hash of the token is stored.
+/// Server-side browser session. The opaque token lives only in an HttpOnly
+/// cookie; the database stores its SHA-256 hash.
 model UserSession {
   id           String    @id @default(uuid(7)) @db.Uuid
   userId       String    @db.Uuid
   tokenHash    String    @unique
-  /// Rotation family: replaying a rotated token revokes the whole family.
+  /// Rotation family: presenting a rotated-away token revokes the whole family.
   familyId     String    @db.Uuid
+  /// Absolute expiry.
   expiresAt    DateTime
+  /// Drives the idle timeout; refreshed (throttled) on authenticated requests.
+  lastUsedAt   DateTime  @default(now())
   revokedAt    DateTime?
   replacedById String?   @db.Uuid
   userAgent    String?
@@ -98,6 +103,28 @@ model UserSession {
 
   @@index([userId])
   @@index([familyId])
+  @@index([expiresAt])
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+/// Single-use, expiring email-verification and password-reset tokens.
+/// Only the SHA-256 hash is stored; the raw token exists only in the email link.
+model AuthToken {
+  id        String        @id @default(uuid(7)) @db.Uuid
+  userId    String        @db.Uuid
+  type      AuthTokenType
+  tokenHash String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
   @@index([expiresAt])
 }
 

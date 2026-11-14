@@ -278,3 +278,25 @@ describe("AI & monetization", () => {
     expect(conv.orderAmountPaise).toBe(9_000_000_000_00n);
   });
 });
+
+describe("auth tokens", () => {
+  it("stores unique hashes with a valid expiry and usage time", async () => {
+    const base = { userId: user.id, type: "PASSWORD_RESET" as const };
+    const future = new Date(Date.now() + 3_600_000);
+    await prisma.authToken.create({ data: { ...base, tokenHash: "h1", expiresAt: future } });
+    await expectPrismaCode(
+      prisma.authToken.create({ data: { ...base, tokenHash: "h1", expiresAt: future } }),
+      "P2002",
+    );
+    await expectCheckViolation(
+      prisma.authToken.create({ data: { ...base, tokenHash: "h2", expiresAt: new Date(0) } }),
+      "AuthToken_expiry_check",
+    );
+    await expectCheckViolation(
+      prisma.authToken.create({
+        data: { ...base, tokenHash: "h3", expiresAt: future, usedAt: new Date(0) },
+      }),
+      "AuthToken_used_after_created_check",
+    );
+  });
+});

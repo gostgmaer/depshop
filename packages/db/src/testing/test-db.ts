@@ -15,7 +15,10 @@ export function resolveTestDatabaseUrl(env: NodeJS.ProcessEnv = process.env): st
       throw new Error("DB tests need TEST_DATABASE_URL or DATABASE_URL (see .env.example)");
     }
     const derived = new URL(env.DATABASE_URL);
-    derived.pathname = `${derived.pathname.replace(/^\//, "")}_test`;
+    // TEST_DATABASE_SUFFIX lets packages use separate DBs (e.g. "_api_test")
+    // so their suites can run in parallel without wiping each other.
+    const suffix = env.TEST_DATABASE_SUFFIX ?? "_test";
+    derived.pathname = `${derived.pathname.replace(/^\//, "")}${suffix}`;
     raw = derived.toString();
   }
   const url = new URL(raw);

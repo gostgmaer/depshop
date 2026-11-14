@@ -1,25 +1,57 @@
-import { AppError, publicUser } from "@dealmind/shared";
+import {
+  meResponse,
+  preferencesSchema,
+  updatePreferencesInput,
+  updateProfileInput,
+} from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
-import { requireAuth } from "../../plugins/auth.js";
-import { type UserStore, toPublicUser } from "./user-store.js";
+import { getAuth } from "../../plugins/auth.js";
+import type { UserService } from "./user-service.js";
 
-export const userRoutes: FastifyPluginAsyncZod<{ store: UserStore }> = async (app, { store }) => {
-  app.addHook("preHandler", app.authenticate);
+const security = [{ sessionCookie: [] }];
 
-  app.get(
+/** /users/me/*: the caller's own profile and preferences only. */
+export const userRoutes: FastifyPluginAsyncZod<{ users: UserService }> = async (app, { users }) => {
+  app.addHook("preHandler", app.requireAuth);
+
+  app.patch(
     "/me",
     {
       schema: {
         tags: ["users"],
-        summary: "Get the authenticated user's profile",
-        security: [{ bearerAuth: [] }],
-        response: { 200: publicUser },
+        summary: "Update your profile",
+        security,
+        body: updateProfileInput,
+        response: { 200: meResponse },
       },
     },
-    async (req) => {
-      const user = await store.findUserById(requireAuth(req).userId);
-      if (!user) throw AppError.notFound("User");
-      return toPublicUser(user);
+    async (req) => ({ user: await users.updateProfile(getAuth(req).userId, req.body) }),
+  );
+
+  app.get(
+    "/me/preferences",
+    {
+      schema: {
+        tags: ["users"],
+        summary: "Get your preferences",
+        security,
+        response: { 200: preferencesSchema },
+      },
     },
+    async (req) => users.getPreferences(getAuth(req).userId),
+  );
+
+  app.patch(
+    "/me/preferences",
+    {
+      schema: {
+        tags: ["users"],
+        summary: "Update your preferences",
+        security,
+        body: updatePreferencesInput,
+        response: { 200: preferencesSchema },
+      },
+    },
+    async (req) => users.updatePreferences(getAuth(req).userId, req.body),
   );
 };

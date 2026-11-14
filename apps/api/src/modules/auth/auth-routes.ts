@@ -1,75 +1,284 @@
-import { authResponse, loginInput, refreshInput, registerInput } from "@dealmind/shared";
+import {
+  AppError,
+  changePasswordInput,
+  forgotPasswordInput,
+  loginInput,
+  meResponse,
+  messageResponse,
+  registerInput,
+  resetPasswordInput,
+  sessionsResponse,
+  verifyEmailInput,
+} from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { requireAuth } from "../../plugins/auth.js";
-import type { AuthService } from "./auth-service.js";
+import { clientInfo, getAuth } from "../../plugins/auth.js";
+import type { UserService } from "../users/user-service.js";
+import { type AuthService, FORGOT_PASSWORD_MESSAGE, REGISTER_MESSAGE } from "./auth-service.js";
+import type { SessionService } from "./session-service.js";
 
-/** Stricter per-route limits for credential endpoints (brute-force protection). */
-const credentialRateLimit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
+export interface RateLimitRule {
+  max: number;
+  timeWindow: string | number;
+}
 
-export const authRoutes: FastifyPluginAsyncZod<{ auth: AuthService }> = async (app, { auth }) => {
-  const client = (req: { headers: Record<string, unknown>; ip: string }) => ({
-    userAgent:
-      typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
-    ipAddress: req.ip,
-  });
+export interface AuthRateLimits {
+  /** login, register, reset-password, change-password (per IP). */
+  credentials: RateLimitRule;
+  /** Endpoints that send email: forgot-password, resend-verification (per IP). */
+  email: RateLimitRule;
+}
+
+export const DEFAULT_AUTH_RATE_LIMITS: AuthRateLimits = {
+  credentials: { max: 10, timeWindow: "1 minute" },
+  email: { max: 5, timeWindow: "15 minutes" },
+};
+
+export interface AuthRoutesOptions {
+  auth: AuthService;
+  sessions: SessionService;
+  users: UserService;
+  rateLimits: AuthRateLimits;
+}
+
+const security = [{ sessionCookie: [] }];
+
+export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = async (
+  app,
+  { auth, sessions, users, rateLimits },
+) => {
+  const credentials = { rateLimit: rateLimits.credentials };
+  const email = { rateLimit: rateLimits.email };
+
+  app.get(
+    "/csrf",
+    {
+      schema: {
+        tags: ["auth"],
+        summary: "Issue a CSRF token (also set as a cookie); send it as x-csrf-token",
+        response: { 200: z.object({ csrfToken: z.string() }) },
+      },
+    },
+    async (_req, reply) => ({ csrfToken: app.issueCsrfToken(reply) }),
+  );
 
   app.post(
     "/register",
     {
-      config: credentialRateLimit,
+      config: credentials,
       schema: {
         tags: ["auth"],
-        summary: "Create a user account",
+        summary: "Create an account (responds identically whether or not the email exists)",
         body: registerInput,
-        response: { 201: authResponse },
+        response: { 202: messageResponse },
       },
     },
-    async (req, reply) => reply.status(201).send(await auth.register(req.body, client(req))),
+    async (req, reply) => {
+      await auth.register(req.body);
+      return reply.status(202).send({ message: REGISTER_MESSAGE });
+    },
   );
 
   app.post(
     "/login",
     {
-      config: credentialRateLimit,
+      config: credentials,
       schema: {
         tags: ["auth"],
-        summary: "Log in with email and password",
+        summary: "Sign in; sets a new HttpOnly session cookie",
         body: loginInput,
-        response: { 200: authResponse },
+        response: { 200: meResponse },
       },
     },
-    async (req) => auth.login(req.body, client(req)),
-  );
-
-  app.post(
-    "/refresh",
-    {
-      config: credentialRateLimit,
-      schema: {
-        tags: ["auth"],
-        summary: "Rotate a refresh token",
-        body: refreshInput,
-        response: { 200: authResponse },
-      },
+    async (req, reply) => {
+      const presented = await app.optionalAuth(req);
+      const { user, session } = await auth.login(req.body, clientInfo(req), presented);
+      app.setSessionCookie(reply, session);
+      // Fresh CSRF token for the new session.
+      app.issueCsrfToken(reply);
+      return { user };
     },
-    async (req) => auth.refresh(req.body.refreshToken, client(req)),
   );
 
   app.post(
     "/logout",
     {
-      preHandler: app.authenticate,
+      preHandler: app.requireAuth,
       schema: {
         tags: ["auth"],
-        summary: "Revoke a refresh token",
-        security: [{ bearerAuth: [] }],
-        body: refreshInput,
+        summary: "Sign out this session",
+        security,
         response: { 204: z.null() },
       },
     },
     async (req, reply) => {
-      await auth.logout(req.body.refreshToken, requireAuth(req).userId);
+      await auth.logout(getAuth(req));
+      app.clearSessionCookie(reply);
+      return reply.status(204).send(null);
+    },
+  );
+
+  app.get(
+    "/me",
+    {
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["auth"],
+        summary: "The signed-in user",
+        security,
+        response: { 200: meResponse },
+      },
+    },
+    async (req) => ({ user: await users.getMe(getAuth(req).userId) }),
+  );
+
+  app.post(
+    "/verify-email",
+    {
+      config: credentials,
+      schema: {
+        tags: ["auth"],
+        summary: "Confirm an email address with the token from the verification email",
+        body: verifyEmailInput,
+        response: { 200: messageResponse },
+      },
+    },
+    async (req) => {
+      await auth.verifyEmail(req.body.token);
+      return { message: "Your email address is verified." };
+    },
+  );
+
+  app.post(
+    "/resend-verification",
+    {
+      config: email,
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["auth"],
+        summary: "Send a new verification email to the signed-in user",
+        security,
+        response: { 200: messageResponse },
+      },
+    },
+    async (req) => {
+      const result = await auth.resendVerification(getAuth(req));
+      return {
+        message:
+          result === "already-verified"
+            ? "Your email address is already verified."
+            : "We've sent a new verification link.",
+      };
+    },
+  );
+
+  app.post(
+    "/forgot-password",
+    {
+      config: email,
+      schema: {
+        tags: ["auth"],
+        summary: "Request a password-reset email (responds identically for unknown emails)",
+        body: forgotPasswordInput,
+        response: { 202: messageResponse },
+      },
+    },
+    async (req, reply) => {
+      await auth.forgotPassword(req.body.email);
+      return reply.status(202).send({ message: FORGOT_PASSWORD_MESSAGE });
+    },
+  );
+
+  app.post(
+    "/reset-password",
+    {
+      config: credentials,
+      schema: {
+        tags: ["auth"],
+        summary: "Set a new password with a reset token; signs out all sessions",
+        body: resetPasswordInput,
+        response: { 200: messageResponse },
+      },
+    },
+    async (req, reply) => {
+      await auth.resetPassword(req.body.token, req.body.password);
+      app.clearSessionCookie(reply);
+      return { message: "Your password has been reset. Please sign in." };
+    },
+  );
+
+  app.post(
+    "/change-password",
+    {
+      config: credentials,
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["auth"],
+        summary: "Change password; signs out other sessions and rotates this one",
+        security,
+        body: changePasswordInput,
+        response: { 200: messageResponse },
+      },
+    },
+    async (req, reply) => {
+      const rotated = await auth.changePassword(
+        getAuth(req),
+        req.body.currentPassword,
+        req.body.newPassword,
+        clientInfo(req),
+      );
+      app.setSessionCookie(reply, rotated);
+      app.issueCsrfToken(reply);
+      return { message: "Your password has been changed. Other sessions were signed out." };
+    },
+  );
+
+  app.get(
+    "/sessions",
+    {
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["auth"],
+        summary: "List your active sessions",
+        security,
+        response: { 200: sessionsResponse },
+      },
+    },
+    async (req) => {
+      const me = getAuth(req);
+      const rows = await sessions.listActive(me.userId);
+      return {
+        sessions: rows.map((s) => ({
+          id: s.id,
+          current: s.id === me.sessionId,
+          userAgent: s.userAgent,
+          ipAddress: s.ipAddress,
+          createdAt: s.createdAt.toISOString(),
+          lastUsedAt: s.lastUsedAt.toISOString(),
+          expiresAt: s.expiresAt.toISOString(),
+        })),
+      };
+    },
+  );
+
+  app.delete(
+    "/sessions/:id",
+    {
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["auth"],
+        summary: "Revoke one of your sessions",
+        security,
+        params: z.object({ id: z.string().uuid() }),
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      const me = getAuth(req);
+      // Scoped by the caller's userId: another user's session is "not found".
+      if (!(await sessions.revokeOwned(me.userId, req.params.id)))
+        throw AppError.notFound("Session");
+      if (req.params.id === me.sessionId) app.clearSessionCookie(reply);
       return reply.status(204).send(null);
     },
   );

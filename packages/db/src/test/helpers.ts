@@ -1,23 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { expect } from "vitest";
-import { resolveTestDatabaseUrl } from "./test-db.js";
+import { resolveTestDatabaseUrl } from "../testing/test-db.js";
+export { truncateAll } from "../testing/setup.js";
 
 let client: PrismaClient | undefined;
 
 export function testPrisma(): PrismaClient {
   client ??= new PrismaClient({ datasources: { db: { url: resolveTestDatabaseUrl() } } });
   return client;
-}
-
-/** Empties every table except Prisma's migration history. */
-export async function truncateAll(prisma: PrismaClient): Promise<void> {
-  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
-    SELECT tablename FROM pg_tables
-    WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
-  if (tables.length === 0) return;
-  const list = tables.map((t) => `"public"."${t.tablename}"`).join(", ");
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
 }
 
 const unique = () => randomUUID().slice(0, 8);

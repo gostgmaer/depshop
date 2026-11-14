@@ -74,6 +74,30 @@ services:
       retries: 12
       start_period: 5s
 
+  # Local email catcher: the API sends verification/reset emails here over
+  # SMTP; read them at http://127.0.0.1:${MAILPIT_UI_PORT}. Nothing leaves
+  # this machine. Development only: production uses a real SMTP provider.
+  mailpit:
+    <<: *restart
+    image: axllent/mailpit:v1.27.11
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+    volumes:
+      - mailpit-data:/data
+    networks: [dealmind]
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   # ───────────────────────────── Dev-only admin UIs ─────────────────────────────
   # Opt-in via `--profile tools`. Never enable this profile in production.
 
@@ -180,16 +204,26 @@ services:
       NODE_ENV: production
       PORT: 4000
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env}
-      CORS_ORIGINS: http://localhost
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      APP_URL: http://localhost
+      TRUST_PROXY: uniquelocal
       API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+      # Local Docker stack delivers mail to Mailpit.
+      EMAIL_TRANSPORT: smtp
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      EMAIL_FROM: ${EMAIL_FROM:-DealMind AI <no-reply@dealmind.local>}
     networks: [dealmind]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
     labels:
+      # Same origin as the web app: /api/* goes to the API, so session
+      # cookies stay first-party.
       - traefik.enable=true
-      - traefik.http.routers.api.rule=Host(`api.localhost`)
+      - traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)
+      - traefik.http.routers.api.priority=100
       - traefik.http.routers.api.entrypoints=web
       - traefik.http.services.api.loadbalancer.server.port=4000
 
@@ -199,7 +233,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args: { NEXT_PUBLIC_API_URL: "http://api.localhost" }
+    environment:
+      # Server-side calls (session checks in layouts) go straight to the API.
+      API_INTERNAL_URL: http://api:4000
     networks: [dealmind]
     depends_on:
       api: { condition: service_healthy }
@@ -222,3 +258,4 @@ volumes:
   redis-data:
   pgadmin-data:
   redisinsight-data:
+  mailpit-data:

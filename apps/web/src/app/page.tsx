@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { getServerUser } from "@/lib/server-session";
 
 const features = [
   {
@@ -15,10 +17,32 @@ const features = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  const user = await getServerUser();
   return (
-    <main className="mx-auto flex max-w-5xl flex-col gap-16 px-4 py-16 sm:px-6 sm:py-24">
-      <section className="flex flex-col items-start gap-6">
+    <main className="mx-auto flex max-w-5xl flex-col gap-16 px-4 py-8 sm:px-6">
+      <nav className="flex items-center justify-between">
+        <span className="font-semibold tracking-tight">
+          DealMind<span className="text-primary"> AI</span>
+        </span>
+        <div className="flex gap-2">
+          {user ? (
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/settings/profile">Account</Link>
+            </Button>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" asChild>
+                <Link href="/login">Sign in</Link>
+              </Button>
+              <Button size="sm" asChild>
+                <Link href="/register">Create account</Link>
+              </Button>
+            </>
+          )}
+        </div>
+      </nav>
+      <section className="flex flex-col items-start gap-6 sm:py-12">
         <span className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground">
           Early preview
         </span>

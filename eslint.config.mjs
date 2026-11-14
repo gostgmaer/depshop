@@ -37,6 +37,14 @@ export default tseslint.config(
     files: ["apps/web/**/*.{ts,tsx}"],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { "react-hooks": reactHooks },
-    rules: reactHooks.configs.recommended.rules,
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      // react-hook-form handleSubmit returns a promise and handles its own errors;
+      // allow promise-returning JSX event handlers (still checked elsewhere).
+      "@typescript-eslint/no-misused-promises": [
+        "error",
+        { checksVoidReturn: { attributes: false } },
+      ],
+    },
   },
 );

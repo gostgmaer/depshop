@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { OwnershipError, assertOwnedBy, isOwnershipViolation, ownedBy } from "./ownership.js";
-import { resolveTestDatabaseUrl } from "./test/test-db.js";
+import { resolveTestDatabaseUrl } from "./testing/test-db.js";
 
 describe("ownership helpers", () => {
   it("ownedBy builds a where fragment and rejects empty ids", () => {
