@@ -1,0 +1,32 @@
+{
+  "name": "dealmind",
+  "private": true,
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "check": "turbo run typecheck lint test build",
+    "format": "prettier --write .",
+    "db:generate": "pnpm --filter @dealmind/db generate",
+    "db:migrate": "pnpm --filter @dealmind/db migrate:deploy",
+    "db:seed": "pnpm --filter @dealmind/db seed"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.0.0",
+    "eslint-plugin-react-hooks": "^5.1.0"
+  }
+}
