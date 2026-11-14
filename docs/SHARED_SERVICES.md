@@ -60,16 +60,46 @@ Browser ──cookie──► DealMind API ──► IAM  (/auth/login, /auth/re
 the running IAM (creates one `@example.com` user and deletes it when
 `IAM_CONTRACT_ADMIN_EMAIL`/`_PASSWORD` are set).
 
+## Email links (per-application link base)
+
+The notification templates take the complete link in the payload (`verifyLink`
+for `USER_WELCOME`, `resetLink` for `PASSWORD_RESET_REQUESTED`); the IAM builds
+that link. Originally it always used its global `FRONTEND_URL`, so DealMind
+users got links to EasyDev's frontend.
+
+**Fix (IAM change, 2026-11-14):** `register`, `register/send-verification` and
+`password/forgot` accept an optional `appUrl` in the payload. DealMind sends its
+`APP_URL`. The IAM never uses that string directly: its origin must match an
+**active Application registered in the IAM database**, and the link base is
+that application's **stored** `frontendUrl`.
+
+| `appUrl`                                   | Result                                                    |
+| ------------------------------------------ | --------------------------------------------------------- |
+| absent                                     | global `FRONTEND_URL` (unchanged for every other product) |
+| origin of a registered, active application | that application's `frontendUrl`                          |
+| unregistered / look-alike / non-http(s)    | `400`, nothing created (checked before any user lookup)   |
+
+Accepting a raw URL instead would let an attacker request a reset for a victim
+with `appUrl=https://evil.example` and receive the victim's valid token.
+
+DealMind side: `IamClient` sends `appUrl` on those three calls; if the IAM
+rejects it (APP_URL not registered), DealMind fails with a logged `500` instead
+of hiding it. **`APP_URL` must equal the `frontendUrl` of the `dealmind`
+application in the IAM.**
+
 ## Changes made to the shared services
 
 Made through the IAM's admin API with the local bootstrap super-admin, with
 your approval. No source code in those repositories was changed.
 
-| When (UTC)        | Change                                                                                                       | Previous state        | How to revert                                                         |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ | --------------------- | --------------------------------------------------------------------- |
-| 2026-11-14 ~10:52 | Created tenant `dealmind` ("DealMind"), not default                                                          | did not exist         | `DELETE /api/v1/iam/tenants/<id>` (admin)                             |
-| 2026-11-14 ~10:52 | `auth.registration.enabled` → `true` (**platform-wide**: every EasyDev product now allows self-registration) | `false` (invite-only) | `PUT /api/v1/iam/settings/auth.registration.enabled {"value": false}` |
-| 2026-11-14        | Throwaway accounts at `@example.com` created to observe the contract                                         | n/a                   | Removed afterwards (see "Test accounts")                              |
+| When (UTC)        | Change                                                                                                                                                                                                                                                             | Previous state                                            | How to revert                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 2026-11-14 ~10:52 | Created tenant `dealmind` ("DealMind"), not default                                                                                                                                                                                                                | did not exist                                             | `DELETE /api/v1/iam/tenants/<id>` (admin)                                                           |
+| 2026-11-14 ~10:52 | `auth.registration.enabled` → `true` (**platform-wide**: every EasyDev product now allows self-registration)                                                                                                                                                       | `false` (invite-only)                                     | `PUT /api/v1/iam/settings/auth.registration.enabled {"value": false}`                               |
+| 2026-11-14 ~12:15 | **IAM code change** on branch `feat/per-app-email-link-base` (uncommitted): optional `appUrl` + `resolveFrontendUrl()` (`src/modules/auth/frontend-url.resolver.ts` + spec, DTOs, controller, `auth.service.ts`). Tests 63/63, tsc, lint (no new errors), build OK | n/a                                                       | `git checkout -- . && git clean -fd src/modules/auth/frontend-url.resolver*` on that branch         |
+| 2026-11-14 ~12:21 | Rebuilt `easydev-iam-platform:local` and recreated `auth-service` + `auth-worker` (`docker compose -p easydev-core -f docker-compose.local.build.yml up -d --no-deps --no-build auth-service auth-worker`)                                                         | previous image kept as `easydev-iam-platform:pre-applink` | `docker tag easydev-iam-platform:pre-applink easydev-iam-platform:local` then the same `up` command |
+| 2026-11-14 ~12:22 | Registered Application `dealmind` (tenant `dealmind`, `frontendUrl` `http://localhost:3100`, `allowedOrigins` `[http://localhost:3100]`) in the IAM database                                                                                                       | did not exist                                             | `DELETE /api/v1/iam/apps/<id>` (admin)                                                              |
+| 2026-11-14        | Throwaway accounts at `@example.com` created to observe the contract                                                                                                                                                                                               | n/a                                                       | Removed afterwards (see "Test accounts")                                                            |
 
 Copied into DealMind's git-ignored `.env` (never printed or committed): the
 notification service's shared `API_KEY` (as `NOTIFICATION_API_KEY`) and the
@@ -92,7 +122,7 @@ file service's `GATEWAY_INTERNAL_SECRET` (as `FILE_SERVICE_HMAC_SECRET`).
 | --- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | 1   | `POST /auth/login` returns the user's `passwordHash` and `twoFactorSecret`                                   | Every IAM client receives password hashes                                                                              | None: `IamClient` picks only the fields it needs, and response schemas strip unknown fields (both verified by tests) |
 | 2   | `POST /tenants/:id/users` checks `tenant:user_add` but not the caller's own tenant, and accepts any `roleId` | Any holder can add anyone to any tenant with any role (privilege escalation)                                           | DealMind holds no such credential (membership step skipped)                                                          |
-| 3   | Verification/reset email links use one global `FRONTEND_URL` (`http://localhost:3000`)                       | All products' users get links to the same frontend                                                                     | **DealMind users' emails link to EasyDev's frontend, not DealMind.** Open issue (see below)                          |
+| 3   | ~~Verification/reset email links use one global `FRONTEND_URL`~~                                             | **Fixed** by the per-application link base (see "Email links")                                                         | DealMind's links go to `APP_URL`                                                                                     |
 | 4   | Refresh-reuse detection marks the session inactive in the DB but does not clear its Redis cache              | After detected theft, the rotated **access** token keeps working for up to 15 min                                      | Limited: DealMind revalidates by refreshing, which does fail                                                         |
 | 5   | Refresh tokens have second-resolution `iat` and no `jti`                                                     | Two refreshes within one second yield identical tokens, so rotation and reuse detection don't apply inside that window | None: DealMind never refreshes concurrently                                                                          |
 | 6   | JWKS served inside the response envelope instead of a standard JWK Set                                       | Standard JWKS clients (e.g. jose `createRemoteJWKSet`) can't consume it                                                | Handled by DealMind's own JWKS fetcher                                                                               |
@@ -102,17 +132,18 @@ file service's `GATEWAY_INTERNAL_SECRET` (as `FILE_SERVICE_HMAC_SECRET`).
 Recommended IAM fixes, in priority order: strip secrets from all user
 payloads (1); scope tenant membership changes to the caller's tenant and
 role level (2); clear the session cache on reuse revocation (4); per-tenant
-`frontendUrl` and self-registration (3, 7); add `jti` to refresh tokens (5);
+self-registration (7) (3 is fixed); add `jti` to refresh tokens (5);
 serve a bare JWK Set (6); trusted-proxy handling (8).
 
-### Open issue: email links point to the wrong app
+### Notification service (found while verifying, not caused by this work)
 
-Until issue 3 is fixed in the IAM (or `FRONTEND_URL` is changed, which would
-affect every product), DealMind's verification and reset emails link to
-`http://localhost:3000/verify-email?token=…` and `/reset-password?token=…`.
-The **paths** match DealMind's pages, so serving DealMind's web app at the
-IAM's `FRONTEND_URL` would make them work. The links themselves can't be
-changed from DealMind.
+Locally the notification service could not deliver email ("Email service
+temporarily unavailable (circuit open)", jobs exhausting retries) and its
+`/v1/email/logs` endpoint timed out on MongoDB, although `/v1/health` reports
+healthy. Every product's emails are affected until its mail transport is fixed.
+Because of this the _delivered_ email could not be inspected; the link base
+was verified by the IAM resolver tests, the live contract test (registered
+`appUrl` accepted, unregistered rejected) and DealMind's integration tests.
 
 ## Test accounts
 

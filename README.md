@@ -27,10 +27,13 @@ pnpm db:generate
 pnpm --filter @dealmind/db build
 pnpm db:migrate         # applies prisma/migrations
 pnpm db:seed            # plans + shopping sources (all disabled)
-pnpm dev                # API on :4000, web on :3000
+pnpm dev                # API on :4000, web on :3000 (this machine: PORT=3100, see below)
 ```
 
-The API and DB scripts load the repo-root `.env` automatically. Optional
+The API and DB scripts load the repo-root `.env` automatically. `APP_URL` must
+match where the web app runs **and** the `dealmind` application registered in
+the IAM (here `http://localhost:3100`, since port 3000 is taken locally):
+`PORT=3100 pnpm --filter @dealmind/web dev`. Optional
 dev-only admin UIs (pgAdmin, RedisInsight): `pnpm infra:tools`.
 
 Full containerised stack behind Traefik (web at `http://localhost`, API at

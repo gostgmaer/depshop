@@ -122,7 +122,7 @@ See [SHARED_SERVICES.md](SHARED_SERVICES.md) and [AUTH.md](AUTH.md).
 
 ### Phase 1.5 — known gaps
 
-1. **Email links point to EasyDev's frontend** (the IAM's single global `FRONTEND_URL`). DealMind users' verification and reset links don't reach DealMind until the IAM supports per-tenant/app URLs.
+1. ~~Email links point to EasyDev's frontend~~ **Fixed:** the IAM now accepts a registered `appUrl` (IAM branch `feat/per-app-email-link-base`, uncommitted; local IAM image rebuilt; DealMind registered as an application). The delivered email itself couldn't be inspected because the local notification service can't send mail right now (pre-existing).
 2. **Users join the IAM's `easydev` tenant**, not `dealmind`: the IAM ignores `x-tenant-id` at registration, and the membership workaround was dropped because it would need a cross-tenant escalation credential.
 3. **Opening sign-up was platform-wide:** every EasyDev product sharing this IAM now allows self-registration.
 4. **IAM-side revocation reaches DealMind within ~15 min** (at the next refresh), not instantly. IAM 2FA challenges aren't supported at DealMind login.

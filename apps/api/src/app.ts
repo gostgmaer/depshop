@@ -135,6 +135,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     baseUrl: env.IAM_BASE_URL,
     tenant: env.IAM_TENANT,
     timeoutMs: env.IAM_TIMEOUT_MS,
+    appUrl: env.APP_URL,
     fetch: iamFetch,
   });
   const verifier = new IamTokenVerifier({

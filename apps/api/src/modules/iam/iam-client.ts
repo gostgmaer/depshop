@@ -16,6 +16,13 @@ export interface IamClientOptions {
   /** Sent as x-tenant-id. A config constant only: DealMind has no tenancy. */
   tenant: string;
   timeoutMs: number;
+  /**
+   * DealMind's public frontend URL, sent as `appUrl` on calls that email links
+   * (register, resend verification, forgot password). The IAM only accepts it
+   * if it matches an application registered in its database, and then builds
+   * the links from that application's frontendUrl.
+   */
+  appUrl?: string | undefined;
   fetch?: typeof fetch;
 }
 
@@ -28,6 +35,10 @@ export class IamError extends Error {
     message: string,
   ) {
     super(message);
+  }
+  /** True when the IAM rejected DealMind's appUrl: the application isn't registered. */
+  get appUrlRejected(): boolean {
+    return this.status === 400 && /appUrl/i.test(this.message);
   }
   /** True when the IAM itself is unavailable (network, timeout, 5xx). */
   get unavailable(): boolean {
@@ -84,6 +95,10 @@ export class IamClient {
     this.fetchImpl = opts.fetch ?? fetch;
   }
 
+  private appUrlField(): { appUrl?: string } {
+    return this.opts.appUrl ? { appUrl: this.opts.appUrl } : {};
+  }
+
   private async request<T>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
@@ -138,6 +153,7 @@ export class IamClient {
       password: input.password,
       firstName: input.firstName,
       lastName: input.lastName,
+      ...this.appUrlField(),
     };
     const data = await this.request<{ userId: string }>("POST", "/auth/register", {
       body,
@@ -200,11 +216,16 @@ export class IamClient {
   }
 
   async sendVerification(email: string): Promise<void> {
-    await this.request("POST", "/auth/register/send-verification", { body: { email } });
+    await this.request("POST", "/auth/register/send-verification", {
+      body: { email, ...this.appUrlField() },
+    });
   }
 
   async forgotPassword(email: string, clientIp?: string): Promise<void> {
-    await this.request("POST", "/auth/password/forgot", { body: { email }, clientIp });
+    await this.request("POST", "/auth/password/forgot", {
+      body: { email, ...this.appUrlField() },
+      clientIp,
+    });
   }
 
   async resetPassword(token: string, newPassword: string): Promise<void> {

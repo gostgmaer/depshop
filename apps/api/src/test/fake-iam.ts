@@ -26,12 +26,13 @@ const ALLOWED_BODY_FIELDS: Record<string, string[]> = {
     "lastName",
     "inviteToken",
     "captchaToken",
+    "appUrl",
   ],
   "POST /auth/login": ["email", "phone", "password", "otp", "loginMethod"],
   "POST /auth/refresh": ["refreshToken"],
   "POST /auth/register/verify": ["token"],
-  "POST /auth/register/send-verification": ["email"],
-  "POST /auth/password/forgot": ["email"],
+  "POST /auth/register/send-verification": ["email", "appUrl"],
+  "POST /auth/password/forgot": ["email", "appUrl"],
   "POST /auth/password/reset": ["token", "newPassword"],
   "POST /auth/password/change": ["currentPassword", "newPassword"],
   "PATCH /profile": ["firstName", "lastName", "displayName", "phone"],
@@ -69,6 +70,28 @@ export class FakeIam {
   private readonly resetTokens = new Map<string, string>(); // token -> email
   readonly lastVerifyToken = new Map<string, string>(); // email -> token
   readonly lastResetToken = new Map<string, string>(); // email -> token
+  /** Full links the IAM would email (email -> URL). */
+  readonly lastVerifyLink = new Map<string, string>();
+  readonly lastResetLink = new Map<string, string>();
+  /** The IAM's global FRONTEND_URL (used when no appUrl is sent). */
+  static readonly DEFAULT_FRONTEND_URL = "http://iam-frontend.test";
+  /** Registered applications: origin -> stored frontendUrl. */
+  private readonly apps = new Map<string, string>();
+
+  /** Registers an application (as an admin would in the IAM database). */
+  registerApp(frontendUrl: string): void {
+    this.apps.set(new URL(frontendUrl).origin, frontendUrl.replace(/\/+$/, ""));
+  }
+
+  /** Mirrors the IAM's resolveFrontendUrl(): registered origins only. */
+  private linkBase(appUrl: string | undefined): string | null {
+    if (!appUrl) return FakeIam.DEFAULT_FRONTEND_URL;
+    try {
+      return this.apps.get(new URL(appUrl).origin) ?? null;
+    } catch {
+      return null;
+    }
+  }
   readonly calls: FakeIamCall[] = [];
   /** Simulate an outage: every request fails at the network level. */
   down = false;
@@ -95,6 +118,8 @@ export class FakeIam {
     this.verifyTokens.clear();
     this.resetTokens.clear();
     this.lastVerifyToken.clear();
+    this.lastVerifyLink.clear();
+    this.lastResetLink.clear();
     this.lastResetToken.clear();
     this.calls.length = 0;
     this.down = false;
@@ -213,6 +238,8 @@ export class FakeIam {
       case "GET /health":
         return ok({ status: "ok" });
       case "POST /auth/register": {
+        const base = this.linkBase(body.appUrl);
+        if (!base) return fail(400, "appUrl is not the URL of a registered application");
         if (this.users.has(body.email ?? "")) return fail(409, "Account already exists");
         const user: FakeUser = {
           id: randomUUID(),
@@ -227,6 +254,7 @@ export class FakeIam {
         const t = randomUUID().replace(/-/g, "") + "a1b2c3d4e5f6";
         this.verifyTokens.set(t, user.email);
         this.lastVerifyToken.set(user.email, t);
+        this.lastVerifyLink.set(user.email, `${base}/verify-email?token=${t}`);
         return ok(
           { message: "Registration successful. Please verify your account.", userId: user.id },
           201,
@@ -276,21 +304,27 @@ export class FakeIam {
         return ok(null, 200, "Email verified");
       }
       case "POST /auth/register/send-verification": {
+        const base = this.linkBase(body.appUrl);
+        if (!base) return fail(400, "appUrl is not the URL of a registered application");
         const user = this.users.get(body.email ?? "");
         if (user) {
           for (const [t, e] of this.verifyTokens) if (e === user.email) this.verifyTokens.delete(t);
           const t = randomUUID().replace(/-/g, "") + "f6e5d4c3b2a1";
           this.verifyTokens.set(t, user.email);
           this.lastVerifyToken.set(user.email, t);
+          this.lastVerifyLink.set(user.email, `${base}/verify-email?token=${t}`);
         }
         return ok(null, 200, "Verification email sent");
       }
       case "POST /auth/password/forgot": {
+        const base = this.linkBase(body.appUrl);
+        if (!base) return fail(400, "appUrl is not the URL of a registered application");
         const user = this.users.get(body.email ?? "");
         if (user) {
           const t = randomUUID().replace(/-/g, "") + "0a0b0c0d0e0f";
           this.resetTokens.set(t, user.email);
           this.lastResetToken.set(user.email, t);
+          this.lastResetLink.set(user.email, `${base}/reset-password?token=${t}`);
         }
         return ok(null, 200, "If an account exists, a reset link has been sent");
       }

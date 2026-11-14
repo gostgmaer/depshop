@@ -27,6 +27,9 @@ export async function createTestApp(
 ): Promise<TestContext> {
   const url = resolveTestDatabaseUrl();
   const fakeIam = iam ?? (await FakeIam.create());
+  // DealMind is a registered application in the IAM (admin setup), so its
+  // APP_URL is accepted as the base for emailed links.
+  fakeIam.registerApp(APP_ORIGIN);
   const env = loadEnv({
     NODE_ENV: "test",
     DATABASE_URL: url,

@@ -42,10 +42,18 @@ export const INVALID_LINK = "This link is invalid or has expired";
 const unavailable = () =>
   new AppError(ErrorCode.DEPENDENCY_UNAVAILABLE, "The identity service is temporarily unavailable");
 
-/** Re-throws IAM outages as 503; returns other IAM errors for case-specific mapping. */
+/** Re-throws IAM outages as 503 and appUrl misconfiguration as 500; returns other IAM errors. */
 function iamFailure(err: unknown): IamError {
   if (err instanceof IamError) {
     if (err.unavailable) throw unavailable();
+    if (err.appUrlRejected) {
+      // APP_URL is not registered as an application in the IAM: email links
+      // cannot be generated for DealMind. This is a deployment error.
+      throw new AppError(
+        ErrorCode.INTERNAL,
+        "Email links are misconfigured (APP_URL is not registered with the IAM)",
+      );
+    }
     return err;
   }
   throw err;

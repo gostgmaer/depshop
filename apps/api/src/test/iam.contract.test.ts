@@ -17,10 +17,19 @@ const BASE = (process.env.IAM_CONTRACT_BASE_URL ?? "http://127.0.0.1:3304/api/v1
   /\/+$/,
   "",
 );
+/** DealMind's APP_URL; must be the frontendUrl of the IAM's "dealmind" application. */
+const APP_URL = process.env.APP_URL ?? "http://localhost:3100";
 const client = new IamClient({
   baseUrl: BASE,
   tenant: process.env.IAM_TENANT ?? "easydev",
   timeoutMs: 10_000,
+  appUrl: APP_URL,
+});
+const unregistered = new IamClient({
+  baseUrl: BASE,
+  tenant: process.env.IAM_TENANT ?? "easydev",
+  timeoutMs: 10_000,
+  appUrl: "https://not-registered.example",
 });
 const verifier = new IamTokenVerifier({
   jwksUrl: `${BASE}/.well-known/jwks.json`,
@@ -33,14 +42,16 @@ const email = `dealmind-contract-${Date.now()}@example.com`;
 const password = "Contract-Pass-123!";
 const newPassword = "Contract-Pass-456!";
 let userId: string | undefined;
+const strayUserIds: string[] = [];
 
 afterAll(async () => {
-  if (!userId) return;
+  const ids = [userId, ...strayUserIds].filter((id): id is string => !!id);
+  if (ids.length === 0) return;
   const adminEmail = process.env.IAM_CONTRACT_ADMIN_EMAIL;
   const adminPassword = process.env.IAM_CONTRACT_ADMIN_PASSWORD;
   if (!adminEmail || !adminPassword) {
     console.warn(
-      `[contract] left test user ${email} (${userId}) in the IAM; set IAM_CONTRACT_ADMIN_* to auto-delete`,
+      `[contract] left test users ${ids.join(", ")} in the IAM; set IAM_CONTRACT_ADMIN_* to auto-delete`,
     );
     return;
   }
@@ -48,11 +59,13 @@ afterAll(async () => {
     adminEmail,
     adminPassword,
   );
-  const res = await fetch(`${BASE}/users/${userId}`, {
-    method: "DELETE",
-    headers: { authorization: `Bearer ${admin.accessToken}`, "x-tenant-id": "easydev" },
-  });
-  console.warn(`[contract] deleted test user ${email}: HTTP ${res.status}`);
+  for (const id of ids) {
+    const res = await fetch(`${BASE}/users/${id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${admin.accessToken}`, "x-tenant-id": "easydev" },
+    });
+    console.warn(`[contract] deleted test user ${id}: HTTP ${res.status}`);
+  }
   await client.logout(admin.accessToken).catch(() => undefined);
 });
 
@@ -128,6 +141,24 @@ describe("shared IAM contract", () => {
     // inactive in the database and does not clear its Redis cache entry, so
     // the rotated ACCESS token keeps passing /auth/me until it expires (≤15 min).
     // See docs/SHARED_SERVICES.md, "IAM issues found".
+  });
+
+  it("accepts DealMind's registered appUrl and rejects unregistered ones (no side effects)", async () => {
+    // `client` sends APP_URL on every call above; registration already succeeded with it.
+    await client.forgotPassword(email);
+    await client.sendVerification(email);
+    const strayEmail = `dealmind-stray-${Date.now()}@example.com`;
+    const reg = await unregistered
+      .register({ email: strayEmail, password, ...splitName("Stray") })
+      .catch((e: unknown) => e);
+    expect(reg).toBeInstanceOf(IamError);
+    expect((reg as IamError).status).toBe(400);
+    expect((reg as IamError).appUrlRejected).toBe(true);
+    const forgot = await unregistered.forgotPassword(email).catch((e: unknown) => e);
+    expect((forgot as IamError).appUrlRejected).toBe(true);
+    // The rejected registration created nothing: registering for real still works.
+    const real = await client.register({ email: strayEmail, password, ...splitName("Stray") });
+    strayUserIds.push(real.userId);
   });
 
   it("answers forgot-password identically for known and unknown emails", async () => {

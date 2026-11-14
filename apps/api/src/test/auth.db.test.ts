@@ -52,6 +52,7 @@ describe("1. registration", () => {
       firstName: "Asha",
       lastName: "Rao Iyer",
       // No displayName: the IAM's RegisterDto rejects unknown properties.
+      appUrl: "http://localhost:3000", // DealMind's APP_URL: base for emailed links
     });
     expect(ctx.iam.users.get("asha@example.com")?.verified).toBe(false);
     // The local mirror is created on first sign-in, not at registration.
@@ -80,6 +81,55 @@ describe("1. registration", () => {
     });
     expect(sneaky.statusCode).toBe(422);
     expect(ctx.iam.callsTo("/auth/register")).toHaveLength(0);
+  });
+});
+
+describe("emailed links", () => {
+  it("point to DealMind's pages (APP_URL), not the IAM's global frontend", async () => {
+    const agent = new Agent(ctx.app);
+    await agent.post("/api/v1/auth/register", {
+      email: "links@example.com",
+      password: PASSWORD,
+      name: "Links",
+    });
+    expect(ctx.iam.lastVerifyLink.get("links@example.com")).toMatch(
+      /^http:\/\/localhost:3000\/verify-email\?token=[A-Za-z0-9_-]+$/,
+    );
+    await agent.post("/api/v1/auth/forgot-password", { email: "links@example.com" });
+    expect(ctx.iam.lastResetLink.get("links@example.com")).toMatch(
+      /^http:\/\/localhost:3000\/reset-password\?token=[A-Za-z0-9_-]+$/,
+    );
+    const { agent: signedIn } = await signUp(ctx, "resend@example.com", { verify: false });
+    await signedIn.post("/api/v1/auth/resend-verification");
+    expect(ctx.iam.lastVerifyLink.get("resend@example.com")).toMatch(
+      /^http:\/\/localhost:3000\/verify-email\?token=/,
+    );
+    const sent = [
+      ...ctx.iam.callsTo("/auth/register"),
+      ...ctx.iam.callsTo("/auth/password/forgot"),
+      ...ctx.iam.callsTo("/auth/register/send-verification"),
+    ];
+    expect(
+      sent.every((c) => (c.body as { appUrl?: string }).appUrl === "http://localhost:3000"),
+    ).toBe(true);
+  });
+
+  it("fails loudly (500) when APP_URL is not registered with the IAM, instead of hiding it", async () => {
+    const misconfigured = await createTestApp({ APP_URL: "http://unregistered.test" }, {}, ctx.iam);
+    try {
+      const agent = new Agent(misconfigured.app, "http://unregistered.test");
+      const reg = await agent.post("/api/v1/auth/register", {
+        email: "nowhere@example.com",
+        password: PASSWORD,
+        name: "Nowhere",
+      });
+      expect(reg.statusCode).toBe(500);
+      expect(ctx.iam.users.has("nowhere@example.com")).toBe(false); // nothing created
+      const forgot = await agent.post("/api/v1/auth/forgot-password", { email: "x@example.com" });
+      expect(forgot.statusCode).toBe(500); // not a silent 202
+    } finally {
+      await misconfigured.close();
+    }
   });
 });
 

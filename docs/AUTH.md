@@ -117,9 +117,8 @@ Web: `API_INTERNAL_URL`, `TRUSTED_PROXY_COUNT`, `PORT` (unchanged; see README).
 
 ## Known limitations
 
-- **Email links:** the IAM builds verification/reset links from its global
-  `FRONTEND_URL` (EasyDev's frontend), so DealMind users' links point there.
-  See SHARED_SERVICES.md, "Open issue".
+- **Email links** go to `APP_URL`, which must be registered as the `dealmind`
+  application's `frontendUrl` in the IAM (see SHARED_SERVICES.md, "Email links").
 - IAM-side revocation reaches DealMind within ~15 minutes, not instantly.
 - IAM 2FA challenges are not supported by DealMind's login yet (responds 403).
 - Accounts are shared with other EasyDev products: a DealMind suspension
