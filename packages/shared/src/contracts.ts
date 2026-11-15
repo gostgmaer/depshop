@@ -350,7 +350,23 @@ export const createSearchInput = z
   .strict();
 export type CreateSearchInput = z.infer<typeof createSearchInput>;
 
-export const searchStatus = z.enum(["PENDING", "RUNNING", "COMPLETED", "PARTIAL", "FAILED"]);
+export const searchStatus = z.enum([
+  "PENDING",
+  "RUNNING",
+  "COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "NEEDS_CLARIFICATION",
+  "CANCELLED",
+]);
+export type SearchStatusValue = z.infer<typeof searchStatus>;
+export const TERMINAL_SEARCH_STATUSES: readonly SearchStatusValue[] = [
+  "COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "NEEDS_CLARIFICATION",
+  "CANCELLED",
+];
 
 export const searchSourceRunView = z.object({
   source: sourceRef,
@@ -371,7 +387,29 @@ export const searchView = z.object({
   completedAt: iso.nullable(),
 });
 
-export const searchDetail = searchView.extend({ sourceRuns: z.array(searchSourceRunView) });
+export const agentRunSummary = z.object({
+  id: uuid,
+  status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]),
+  provider: z.string(),
+  model: z.string(),
+  durationMs: z.number().int().nullable(),
+  inputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  startedAt: iso,
+  finishedAt: iso.nullable(),
+});
+
+export const searchDetail = searchView.extend({
+  sourceRuns: z.array(searchSourceRunView),
+  /** The AI's validated interpretation of the query (filters it derived). */
+  interpretation: z.record(z.unknown()).nullable(),
+  /** Set when the agent needs more information instead of guessing. */
+  clarificationQuestion: z.string().nullable(),
+  /** Explanation generated from verified results only. */
+  summary: z.string().nullable(),
+  warnings: z.array(z.string()),
+  agentRun: agentRunSummary.nullable(),
+});
 
 export const searchResultView = z.object({
   rank: z.number().int(),

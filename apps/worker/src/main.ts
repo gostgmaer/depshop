@@ -1,19 +1,15 @@
 /**
  * DealMind background worker.
- *  - shopping-search: parallel connector execution, catalog import, results;
+ *  - shopping-search: supervises the Python LangGraph agent (apps/agent),
+ *    which orchestrates each search through the API's internal endpoints;
  *  - connector-health: scheduled health checks of every registered connector.
  * Price refresh, alert evaluation and notification delivery consumers arrive
  * with their phases; those jobs are not consumed yet.
  */
-import { CatalogImporter, invalidateProductCaches } from "@dealmind/catalog";
 import {
   HealthMonitor,
-  ParallelSearchExecutor,
   PrismaSourceConfigProvider,
   PrismaSourceStatusStore,
-  RedisMetricsStore,
-  RedisRateLimiter,
-  RedisResponseCache,
   createDefaultRegistry,
 } from "@dealmind/connectors";
 import { createPrismaClient } from "@dealmind/db";
@@ -22,6 +18,7 @@ import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { pino } from "pino";
 import { z } from "zod";
+import { AgentClient } from "./agent-client.js";
 import { processShoppingSearch } from "./search-processor.js";
 
 const env = z
@@ -34,7 +31,6 @@ const env = z
       .regex(/^[a-z0-9:_-]{1,40}$/)
       .default("dm"),
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
-    CONNECTOR_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(6),
     CONNECTOR_HEALTH_INTERVAL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
     /** Mock connectors (fictional data) — default on outside production; refused in production. */
     CONNECTORS_ENABLE_MOCKS: z.enum(["true", "false"]).optional(),
@@ -43,6 +39,11 @@ const env = z
     AMAZON_CREATORS_CREDENTIAL_ID: z.string().optional(),
     AMAZON_CREATORS_CREDENTIAL_SECRET: z.string().optional(),
     AMAZON_ASSOCIATES_PARTNER_TAG: z.string().optional(),
+    /** Python agent service (internal network only). */
+    AGENT_SERVICE_URL: z.string().url(),
+    AGENT_SERVICE_TOKEN: z.string().min(32),
+    AGENT_USER_CONTEXT_SECRET: z.string().min(32),
+    AGENT_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(180),
     LOG_LEVEL: z.string().default("info"),
   })
   .parse(process.env);
@@ -56,38 +57,26 @@ if (allowMocks && env.NODE_ENV === "production")
 const log = pino({
   level: env.LOG_LEVEL,
   base: { service: "dealmind-worker" },
-  // Credentials are never logged, even by accident.
+  // Credentials and signed contexts are never logged, even by accident.
   redact: [
     "*.token",
     "*.FLIPKART_AFFILIATE_TOKEN",
     "*.AMAZON_CREATORS_CREDENTIAL_SECRET",
+    "*.AGENT_SERVICE_TOKEN",
+    "*.AGENT_USER_CONTEXT_SECRET",
+    "*.userContext",
     "headers",
   ],
 });
 const prisma = createPrismaClient({ url: env.DATABASE_URL });
 const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2 });
 const prefix = env.REDIS_KEY_PREFIX;
-const onRedisError = (err: unknown) =>
-  log.warn({ err: (err as Error).message }, "redis operation failed");
 
 const registry = createDefaultRegistry(env, { includeMocks: allowMocks });
 const sources = new PrismaSourceConfigProvider(prisma);
 const statusStore = new PrismaSourceStatusStore(prisma);
-const executor = new ParallelSearchExecutor({
-  registry,
-  sources,
-  statusStore,
-  rateLimiter: new RedisRateLimiter(redis, prefix, onRedisError),
-  cache: new RedisResponseCache(redis, prefix, onRedisError),
-  metrics: new RedisMetricsStore(redis, prefix, onRedisError),
-  concurrency: env.CONNECTOR_CONCURRENCY,
-  allowMocks,
-  logger: log,
-});
-const importer = new CatalogImporter(prisma, {
-  onProductsChanged: (ids) => invalidateProductCaches(redis, prefix, ids),
-});
 const monitor = new HealthMonitor(registry, sources, statusStore);
+const agent = new AgentClient(env.AGENT_SERVICE_URL, env.AGENT_SERVICE_TOKEN);
 
 const connection = redisConnectionFromUrl(env.REDIS_URL);
 const bullPrefix = `${prefix}:bull`;
@@ -95,11 +84,28 @@ const bullPrefix = `${prefix}:bull`;
 const searchWorker = new Worker(
   QueueName.shoppingSearch,
   async (job) => {
-    const outcome = await processShoppingSearch({ prisma, executor, importer }, job.data);
+    const outcome = await processShoppingSearch(
+      {
+        prisma,
+        agent,
+        redis,
+        redisPrefix: prefix,
+        userContextSecret: env.AGENT_USER_CONTEXT_SECRET,
+        timeoutMs: env.AGENT_TIMEOUT_SECONDS * 1000,
+      },
+      job.data,
+      { attempt: job.attemptsMade + 1, maxAttempts: job.opts.attempts ?? 1 },
+    );
     log.info({ jobId: job.id, outcome }, "shopping search processed");
     return outcome;
   },
-  { connection, prefix: bullPrefix, concurrency: env.WORKER_CONCURRENCY },
+  {
+    connection,
+    prefix: bullPrefix,
+    concurrency: env.WORKER_CONCURRENCY,
+    // A search can legitimately run for minutes; keep the job lock alive.
+    lockDuration: Math.max(60_000, env.AGENT_TIMEOUT_SECONDS * 1000),
+  },
 );
 
 const healthQueue = new Queue(QueueName.connectorHealth, { connection, prefix: bullPrefix });

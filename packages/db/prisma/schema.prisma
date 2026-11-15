@@ -418,6 +418,10 @@ enum SearchStatus {
   COMPLETED
   PARTIAL
   FAILED
+  /// The query was contradictory or too vague; the agent asked a question instead of guessing.
+  NEEDS_CLARIFICATION
+  /// Cancelled by its owner before completion.
+  CANCELLED
 }
 
 model Search {
@@ -625,6 +629,7 @@ enum AgentRunStatus {
   RUNNING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
 /// Private record of an AI graph execution, owned by the requesting user.
@@ -640,6 +645,15 @@ model AgentRun {
   error        String?
   inputTokens  Int            @default(0)
   outputTokens Int            @default(0)
+  /// LLM provider used ("openai", "google", "rules"…); never credentials.
+  provider     String         @default("")
+  /// LangGraph checkpoint thread id (stable per run; resumes after a retry).
+  threadId     String?        @unique
+  /// Execution attempts (BullMQ retries resume from the last checkpoint).
+  attempts     Int            @default(0)
+  durationMs   Int?
+  /// Node timings, iteration count, connector summary (no user secrets).
+  metadata     Json           @default("{}")
   startedAt    DateTime       @default(now())
   finishedAt   DateTime?
 

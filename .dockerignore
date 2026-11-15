@@ -28,3 +28,10 @@ infrastructure
 docker-compose*.yml
 **/Dockerfile
 README.md
+
+# Python virtualenvs and caches (rebuilt inside the agent image)
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache

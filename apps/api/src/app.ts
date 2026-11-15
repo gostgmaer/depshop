@@ -32,7 +32,20 @@ import { AlertService } from "./modules/alerts/alert-service.js";
 import { alertRoutes } from "./modules/alerts/alert-routes.js";
 import { categoryRoutes, productRoutes, sourceRoutes } from "./modules/catalog/catalog-routes.js";
 import { CatalogService } from "./modules/catalog/catalog-service.js";
-import { RedisMetricsStore } from "@dealmind/connectors";
+import {
+  type ConnectorRegistry,
+  ParallelSearchExecutor,
+  PrismaSourceConfigProvider,
+  PrismaSourceStatusStore,
+  RedisMetricsStore,
+  RedisRateLimiter,
+  RedisResponseCache,
+  createDefaultRegistry,
+} from "@dealmind/connectors";
+import { CatalogImporter, invalidateProductCaches } from "@dealmind/catalog";
+import { InternalIntelligence } from "./modules/internal/internal-intelligence.js";
+import { internalRoutes } from "./modules/internal/internal-routes.js";
+import { agentCanceller } from "./modules/internal/agent-client.js";
 import { notificationRoutes } from "./modules/notifications/notification-routes.js";
 import { SearchService } from "./modules/search/search-service.js";
 import { searchRoutes } from "./modules/search/search-routes.js";
@@ -91,6 +104,8 @@ export interface AppDeps {
   redis?: Redis;
   jobs?: JobQueues;
   sessionTouchIntervalMs?: number;
+  /** Connector registry for the internal API (tests inject scripted connectors). */
+  connectorRegistry?: ConnectorRegistry;
 }
 
 function trustProxy(value: string): boolean | string {
@@ -258,6 +273,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     cache,
     app.log,
     env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+    {
+      redis,
+      redisPrefix: env.REDIS_KEY_PREFIX,
+      ...(env.AGENT_SERVICE_URL && env.AGENT_SERVICE_TOKEN
+        ? {
+            cancelExecution: agentCanceller(
+              env.AGENT_SERVICE_URL,
+              env.AGENT_SERVICE_TOKEN,
+              deps.fetch,
+            ),
+          }
+        : {}),
+    },
   );
   const watchlists = new WatchlistService(prisma, plans, env.CATALOG_OFFER_STALE_HOURS * 3_600_000);
   const alerts = new AlertService(prisma, plans);
@@ -295,7 +323,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
       await v1.register(productRoutes, { prefix: "/products", catalog });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
-      await v1.register(searchRoutes, { prefix: "/search", search });
+      await v1.register(searchRoutes, {
+        prefix: "/search",
+        search,
+        redis,
+        redisPrefix: env.REDIS_KEY_PREFIX,
+      });
       await v1.register(watchlistRoutes, { prefix: "/watchlists", watchlists });
       await v1.register(alertRoutes, { prefix: "/alerts", alerts });
       await v1.register(notificationRoutes, { prefix: "/notifications", prisma });
@@ -303,6 +336,44 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     },
     { prefix: "/api/v1" },
   );
+
+  // Internal service API for the Python agent: only when explicitly configured.
+  if (env.INTERNAL_API_TOKEN && env.AGENT_USER_CONTEXT_SECRET) {
+    const onRedisError = (err: unknown) =>
+      app.log.warn({ err: (err as Error).message }, "connector redis operation failed");
+    const registry =
+      deps.connectorRegistry ??
+      createDefaultRegistry(env, { includeMocks: env.CONNECTORS_ALLOW_MOCKS });
+    const sources = new PrismaSourceConfigProvider(prisma);
+    const executor = new ParallelSearchExecutor({
+      registry,
+      sources,
+      statusStore: new PrismaSourceStatusStore(prisma),
+      rateLimiter: new RedisRateLimiter(redis, env.REDIS_KEY_PREFIX, onRedisError),
+      cache: new RedisResponseCache(redis, env.REDIS_KEY_PREFIX, onRedisError),
+      metrics: new RedisMetricsStore(redis, env.REDIS_KEY_PREFIX, onRedisError),
+      concurrency: env.CONNECTOR_CONCURRENCY,
+      allowMocks: env.CONNECTORS_ALLOW_MOCKS,
+      logger: app.log,
+    });
+    const importer = new CatalogImporter(prisma, {
+      onProductsChanged: (ids) => invalidateProductCaches(redis, env.REDIS_KEY_PREFIX, ids),
+    });
+    await app.register(internalRoutes, {
+      prefix: "/internal/v1",
+      prisma,
+      redis,
+      redisPrefix: env.REDIS_KEY_PREFIX,
+      token: env.INTERNAL_API_TOKEN,
+      userContextSecret: env.AGENT_USER_CONTEXT_SECRET,
+      registry,
+      sources,
+      executor,
+      intelligence: new InternalIntelligence(prisma, importer),
+      catalog,
+      allowMocks: env.CONNECTORS_ALLOW_MOCKS,
+    });
+  }
 
   return app;
 }

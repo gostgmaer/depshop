@@ -8,3 +8,10 @@ coverage
 .env.*
 !.env.example
 next-env.d.ts
+
+# Python (apps/agent)
+.venv/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

@@ -200,6 +200,17 @@ services:
       FILE_SERVICE_URL: http://file-upload-service:3000
       FILE_SERVICE_HMAC_SECRET: ${FILE_SERVICE_HMAC_SECRET:-}
       FILE_SERVICE_TENANT_ID: ${FILE_SERVICE_TENANT_ID:-dealmind}
+      # Internal service API for the Python agent (/internal/v1, never routed by Traefik).
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Set INTERNAL_API_TOKEN in .env}
+      AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET:?Set AGENT_USER_CONTEXT_SECRET in .env}
+      AGENT_SERVICE_URL: http://agent:8100
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:?Set AGENT_SERVICE_TOKEN in .env}
+      CONNECTORS_ENABLE_MOCKS: "false"
+      FLIPKART_AFFILIATE_ID: ${FLIPKART_AFFILIATE_ID:-}
+      FLIPKART_AFFILIATE_TOKEN: ${FLIPKART_AFFILIATE_TOKEN:-}
+      AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}
+      AMAZON_CREATORS_CREDENTIAL_SECRET: ${AMAZON_CREATORS_CREDENTIAL_SECRET:-}
+      AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
     networks: [dealmind, core-network]
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -233,8 +244,56 @@ services:
       - traefik.http.routers.web.entrypoints=web
       - traefik.http.services.web.loadbalancer.server.port=3000
 
-  # worker: added in Phase 7 together with apps/worker. It will reuse
-  # `environment: { <<: *app-env }` and the `dealmind` network.
+  # BullMQ worker: supervises the Python agent and runs connector health checks.
+  worker:
+    <<: *restart
+    profiles: [app]
+    build: { context: ., dockerfile: apps/worker/Dockerfile }
+    environment:
+      <<: *app-env
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      AGENT_SERVICE_URL: http://agent:8100
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:?Set AGENT_SERVICE_TOKEN in .env}
+      AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET:?Set AGENT_USER_CONTEXT_SECRET in .env}
+      AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-180}
+      CONNECTORS_ENABLE_MOCKS: "false"
+      FLIPKART_AFFILIATE_ID: ${FLIPKART_AFFILIATE_ID:-}
+      FLIPKART_AFFILIATE_TOKEN: ${FLIPKART_AFFILIATE_TOKEN:-}
+      AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}
+      AMAZON_CREATORS_CREDENTIAL_SECRET: ${AMAZON_CREATORS_CREDENTIAL_SECRET:-}
+      AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
+    networks: [dealmind]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      agent: { condition: service_healthy }
+
+  # Python LangGraph agent. Internal only: no published port, no Traefik labels.
+  agent:
+    <<: *restart
+    profiles: [app]
+    build: { context: ., dockerfile: apps/agent/Dockerfile }
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}
+      CHECKPOINTER: postgres
+      INTERNAL_API_URL: http://api:4000/internal/v1
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Set INTERNAL_API_TOKEN in .env}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:?Set AGENT_SERVICE_TOKEN in .env}
+      AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET:?Set AGENT_USER_CONTEXT_SECRET in .env}
+      LLM_PROVIDER: ${LLM_PROVIDER:-google}
+      LLM_MODEL: ${LLM_MODEL:?Set LLM_MODEL in .env}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks: [dealmind]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
 
 networks:
   dealmind:

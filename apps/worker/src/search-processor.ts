@@ -1,138 +1,169 @@
 /**
- * Shopping-search job processor.
+ * Shopping-search job processor (TypeScript worker → Python agent).
  *
- *  1. Re-checks ownership (the job's user must own the search); terminal
- *     searches are left untouched (idempotent).
- *  2. Runs the parallel connector executor over every eligible source.
- *  3. Persists the shared data through the catalog importer (normalize →
- *     match → offer upsert → price history). Indicative (discovery) prices
- *     are never stored as offers and never shown as results.
- *  4. Writes one SearchSourceRun per source (SUCCEEDED / FAILED / TIMED_OUT /
- *     SKIPPED with the reason) and the user's ranked SearchResults.
- *  5. Status: COMPLETED (all searched sources ok, or none eligible),
- *     PARTIAL (some failed), FAILED (all failed). Nothing is fabricated.
- *
- * Ranking here is a simple deterministic baseline (text relevance, then
- * price); the full ranking engine is Phase 4.
+ *  1. Re-checks ownership (the job's user must own the search). Finished or
+ *     cancelled searches are left untouched (idempotent).
+ *  2. Reuses the RUNNING AgentRun of this search on a retry (stable execution
+ *     id = LangGraph thread id, so the agent resumes from its checkpoint),
+ *     otherwise creates one.
+ *  3. Signs a short-lived user context and asks the agent to run the graph.
+ *     The agent persists results through the internal API (which re-checks
+ *     ownership); this worker only supervises: polling, timeout, cancellation.
+ *  4. Failures: retried by BullMQ while attempts remain; on the final attempt
+ *     the search and run are marked FAILED with the reason. Nothing is
+ *     fabricated when the agent is unavailable.
  */
-import type { CatalogImporter } from "@dealmind/catalog";
-import type { ParallelSearchExecutor, SearchExecution } from "@dealmind/connectors";
-import { normalizeQuery, toSourceListing } from "@dealmind/connectors";
 import type { PrismaClient } from "@dealmind/db";
-import { type ShoppingSearchJob, shoppingSearchJob } from "@dealmind/queue";
-import { searchFilters } from "@dealmind/shared";
+import {
+  type ShoppingSearchJob,
+  searchCancelKey,
+  shoppingSearchJob,
+  signUserContext,
+} from "@dealmind/queue";
+import { TERMINAL_SEARCH_STATUSES } from "@dealmind/shared";
+import type { Redis } from "ioredis";
+import { AGENT_TERMINAL, type AgentClient } from "./agent-client.js";
 
-export type SearchOutcome = "missing" | "already-finished" | SearchExecution["status"];
+export type SearchOutcome =
+  "missing" | "already-finished" | "cancelled" | (typeof AGENT_TERMINAL)[number];
 
 export interface SearchProcessorDeps {
   prisma: PrismaClient;
-  executor: ParallelSearchExecutor;
-  importer: CatalogImporter;
+  agent: AgentClient;
+  redis: Pick<Redis, "get">;
+  redisPrefix: string;
+  userContextSecret: string;
+  /** Whole-execution timeout. */
+  timeoutMs: number;
+  pollIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
-const TERMINAL = new Set(["COMPLETED", "PARTIAL", "FAILED"]);
-const MAX_RESULTS = 100;
+export interface AttemptInfo {
+  attempt: number; // 1-based
+  maxAttempts: number;
+}
 
-/** Share of query tokens found in the title, in basis points (0–10000). */
-export function relevanceScore(query: string, title: string): number {
-  const tokens = [
-    ...new Set(
-      normalizeQuery(query)
-        .split(/[^\p{L}\p{N}]+/u)
-        .filter((t) => t.length > 1),
-    ),
-  ];
-  if (!tokens.length) return 0;
-  const hay = normalizeQuery(title);
-  return Math.floor((tokens.filter((t) => hay.includes(t)).length * 10_000) / tokens.length);
+export class RetryableSearchError extends Error {
+  override readonly name = "RetryableSearchError";
+}
+
+async function fail(
+  prisma: PrismaClient,
+  searchId: string,
+  userId: string,
+  runId: string,
+  error: string,
+  status: "FAILED" | "CANCELLED" = "FAILED",
+) {
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.search.updateMany({
+      where: { id: searchId, userId, status: { in: ["PENDING", "RUNNING"] } },
+      data: { status, completedAt: now },
+    }),
+    prisma.agentRun.updateMany({
+      where: { id: runId, userId, finishedAt: null },
+      data: { status, error, finishedAt: now },
+    }),
+  ]);
 }
 
 export async function processShoppingSearch(
   deps: SearchProcessorDeps,
   payload: unknown,
+  attempt: AttemptInfo = { attempt: 1, maxAttempts: 1 },
 ): Promise<SearchOutcome> {
-  const { prisma, executor, importer } = deps;
+  const { prisma, agent } = deps;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const now = deps.now ?? Date.now;
   const job: ShoppingSearchJob = shoppingSearchJob.parse(payload);
   const search = await prisma.search.findFirst({ where: { id: job.searchId, userId: job.userId } });
   if (!search) return "missing";
-  if (TERMINAL.has(search.status)) return "already-finished";
-  await prisma.search.update({ where: { id: search.id }, data: { status: "RUNNING" } });
+  if (TERMINAL_SEARCH_STATUSES.includes(search.status)) return "already-finished";
 
-  const parsedFilters = searchFilters.safeParse(search.filters ?? {});
-  const f = parsedFilters.success ? parsedFilters.data : {};
-  const execution = await executor.run(
+  const cancelled = async () =>
+    (await deps.redis.get(searchCancelKey(deps.redisPrefix, search.id))) !== null;
+
+  const run =
+    (await prisma.agentRun.findFirst({
+      where: { searchId: search.id, userId: search.userId, status: "RUNNING", finishedAt: null },
+      orderBy: { startedAt: "desc" },
+    })) ??
+    (await prisma.agentRun.create({
+      data: {
+        userId: search.userId,
+        searchId: search.id,
+        graph: "shopping_search",
+        model: "",
+        input: { query: search.query, filters: search.filters ?? {} },
+      },
+    }));
+  await prisma.agentRun.update({
+    where: { id: run.id },
+    data: { attempts: { increment: 1 }, threadId: run.id },
+  });
+
+  if (await cancelled()) {
+    await fail(prisma, search.id, search.userId, run.id, "Cancelled by user", "CANCELLED");
+    return "cancelled";
+  }
+  await prisma.search.updateMany({
+    where: { id: search.id, status: "PENDING" },
+    data: { status: "RUNNING" },
+  });
+
+  const finalAttempt = attempt.attempt >= attempt.maxAttempts;
+  const deadline = now() + deps.timeoutMs;
+  const userContext = signUserContext(
     {
-      query: search.query,
-      ...(f.category ? { category: f.category } : {}),
-      ...(f.brands ? { brands: f.brands } : {}),
-      ...(f.minPricePaise !== undefined ? { minPricePaise: f.minPricePaise } : {}),
-      ...(f.maxPricePaise !== undefined ? { maxPricePaise: f.maxPricePaise } : {}),
-      limit: 20,
+      userId: search.userId,
+      searchId: search.id,
+      executionId: run.id,
+      exp: Math.floor((deadline + 300_000) / 1000),
     },
-    f.sourceSlugs ? { only: f.sourceSlugs } : {},
+    deps.userContextSecret,
   );
 
-  // Persist offers per successful source through the catalog importer.
-  const offers: { offerId: string; title: string; price: number; mrp: number | null }[] = [];
-  for (const run of execution.sources) {
-    if (run.status !== "SUCCEEDED" || run.items.length === 0) continue;
-    const storable = run.items.filter((i) => i.priceType !== "INDICATIVE");
-    if (!storable.length) continue;
-    const summary = await importer.importListings(
-      run.sourceId,
-      storable.map((i) => toSourceListing(i, execution.request.category)),
-    );
-    for (const o of summary.outcomes) {
-      if (o.status !== "imported") continue;
-      const item = storable[o.index]!;
-      offers.push({
-        offerId: o.offerId,
-        title: item.title,
-        price: item.sellingPricePaise,
-        mrp: item.mrpPaise ?? null,
-      });
+  try {
+    let status = await agent.start({
+      executionId: run.id,
+      searchId: search.id,
+      userContext,
+      query: search.query,
+      filters: (search.filters ?? {}) as Record<string, unknown>,
+    });
+    while (!AGENT_TERMINAL.includes(status.status)) {
+      if (await cancelled()) {
+        await agent.cancel(run.id).catch(() => undefined);
+      }
+      if (now() >= deadline) {
+        await agent.cancel(run.id).catch(() => undefined);
+        throw new RetryableSearchError(`Agent execution timed out after ${deps.timeoutMs} ms`);
+      }
+      await sleep(deps.pollIntervalMs ?? 1_000);
+      const next = await agent.status(run.id);
+      if (!next) throw new RetryableSearchError("Agent lost the execution (restarted?)");
+      status = next;
     }
+    const persisted = await prisma.search.findUniqueOrThrow({ where: { id: search.id } });
+    if (status.persisted && TERMINAL_SEARCH_STATUSES.includes(persisted.status)) {
+      return status.status;
+    }
+    if (status.status === "CANCELLED") {
+      await fail(prisma, search.id, search.userId, run.id, "Cancelled by user", "CANCELLED");
+      return "cancelled";
+    }
+    throw new RetryableSearchError(
+      status.error ?? `Agent finished ${status.status} without persisting results`,
+    );
+  } catch (err) {
+    const message = (err as Error).message.slice(0, 1_000);
+    if (finalAttempt) {
+      await fail(prisma, search.id, search.userId, run.id, message);
+      return "FAILED";
+    }
+    throw err; // BullMQ retries; the agent resumes from the run's checkpoint.
   }
-
-  const ranked = [...new Map(offers.map((o) => [o.offerId, o])).values()]
-    .filter(
-      (o) =>
-        (f.minPricePaise === undefined || o.price >= f.minPricePaise) &&
-        (f.maxPricePaise === undefined || o.price <= f.maxPricePaise),
-    )
-    .map((o) => ({ ...o, score: relevanceScore(search.query, o.title) }))
-    .sort((a, b) => b.score - a.score || a.price - b.price || a.offerId.localeCompare(b.offerId))
-    .slice(0, MAX_RESULTS);
-
-  const status = execution.status === "NO_SOURCES" ? "COMPLETED" : execution.status;
-  await prisma.$transaction([
-    prisma.searchSourceRun.deleteMany({ where: { searchId: search.id } }),
-    prisma.searchResult.deleteMany({ where: { searchId: search.id } }),
-    prisma.searchSourceRun.createMany({
-      data: execution.sources.map((s) => ({
-        userId: search.userId,
-        searchId: search.id,
-        sourceId: s.sourceDbId,
-        status: s.status,
-        resultCount: s.resultCount,
-        durationMs: s.durationMs,
-        errorCode: s.errorCode ?? null,
-        errorMessage: s.errorMessage ?? null,
-      })),
-    }),
-    prisma.searchResult.createMany({
-      data: ranked.map((r, i) => ({
-        userId: search.userId,
-        searchId: search.id,
-        offerId: r.offerId,
-        rank: i + 1,
-        score: r.score,
-        pricePaiseAtSearch: BigInt(r.price),
-        mrpPaiseAtSearch: r.mrp === null ? null : BigInt(r.mrp),
-        explanation: `Text relevance ${(r.score / 100).toFixed(0)}%, then lowest listed price`,
-      })),
-    }),
-    prisma.search.update({ where: { id: search.id }, data: { status, completedAt: new Date() } }),
-  ]);
-  return execution.status;
 }

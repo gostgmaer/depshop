@@ -97,8 +97,33 @@ const envSchema = z
     FILE_SERVICE_URL: z.string().url().optional(),
     FILE_SERVICE_HMAC_SECRET: z.string().optional(),
     FILE_SERVICE_TENANT_ID: z.string().min(1).default("dealmind"),
+
+    // ── Internal service API (/internal/v1) for the Python agent ────────
+    /** Bearer token the Python agent presents. Unset → internal API disabled (404). */
+    INTERNAL_API_TOKEN: z.string().min(32).optional(),
+    /** Python agent service (used for search cancellation). */
+    AGENT_SERVICE_URL: z.string().url().optional(),
+    AGENT_SERVICE_TOKEN: z.string().min(32).optional(),
+    /** HMAC secret for signed user contexts (shared by worker, agent and API). */
+    AGENT_USER_CONTEXT_SECRET: z.string().min(32).optional(),
+
+    // ── Connectors (executor runs here for the internal API) ────────────
+    CONNECTORS_ENABLE_MOCKS: z.enum(["true", "false"]).optional(),
+    CONNECTOR_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(6),
+    FLIPKART_AFFILIATE_ID: z.string().optional(),
+    FLIPKART_AFFILIATE_TOKEN: z.string().optional(),
+    AMAZON_CREATORS_CREDENTIAL_ID: z.string().optional(),
+    AMAZON_CREATORS_CREDENTIAL_SECRET: z.string().optional(),
+    AMAZON_ASSOCIATES_PARTNER_TAG: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (env.NODE_ENV === "production" && env.CONNECTORS_ENABLE_MOCKS === "true") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["CONNECTORS_ENABLE_MOCKS"],
+        message: "mock connectors are not allowed in production",
+      });
+    }
     if (env.NODE_ENV === "production") {
       if (env.COOKIE_SECURE === "false") {
         ctx.addIssue({
@@ -122,6 +147,10 @@ const envSchema = z
     /** Every origin allowed to make cookie-authenticated, state-changing requests. */
     ALLOWED_ORIGINS: [...new Set([new URL(env.APP_URL).origin, ...env.CORS_ORIGINS])],
     IAM_JWKS_URL: env.IAM_JWKS_URL ?? `${env.IAM_BASE_URL}/.well-known/jwks.json`,
+    /** Mock connectors (fictional data): on outside production unless disabled. */
+    CONNECTORS_ALLOW_MOCKS: env.CONNECTORS_ENABLE_MOCKS
+      ? env.CONNECTORS_ENABLE_MOCKS === "true"
+      : env.NODE_ENV !== "production",
   }));
 
 export type Env = z.infer<typeof envSchema>;

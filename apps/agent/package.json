@@ -1,0 +1,12 @@
+{
+  "name": "@dealmind/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Python LangGraph agent. Scripts delegate to uv so `pnpm check` runs the Python gates too.",
+  "scripts": {
+    "dev": "uv run python -m app",
+    "lint": "uv run ruff check app tests && uv run ruff format --check app tests",
+    "typecheck": "uv run mypy app tests",
+    "test": "uv run pytest -q -p no:cacheprovider"
+  }
+}

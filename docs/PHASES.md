@@ -14,6 +14,7 @@ those pass.
 | 2.1 | Fastify API foundation: response envelope, modules (catalog, search, watchlists, alerts, notifications, subscriptions, admin), Redis cache/rate limits, BullMQ job contracts, `/health` + `/ready`                              | Partially done (see gaps) |
 | 2.2 | Product catalog & data management: catalog model refinement (BIGINT paise), normalization, matching/dedup, import/upsert, catalog APIs, caching, seed + sample data, query plans                                                | **Done** (see gaps below) |
 | 2.3 | Marketplace connector framework: registry, parallel executor (bounded concurrency, timeouts, rate limits, retries + jitter, circuit breakers, cache, dedup), normalization, health/metrics, marketplace connectors, mock stores | **Done** (see gaps below) |
+| 3.1 | Python LangGraph shopping agent (FastAPI): 13-node graph, typed state, Pydantic schemas, LLM provider abstraction, internal APIs to the TS connectors/intelligence, BullMQ worker integration, checkpointing, SSE progress      | **Done** (see gaps below) |
 | 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                                                                     | Partially done (1.4)      |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                                                                                | Not started               |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches                                                      | Not started               |
@@ -233,3 +234,43 @@ See [CONNECTORS.md](CONNECTORS.md) for the architecture and the per-marketplace 
 4. **Results ranking is a simple baseline** (text relevance, then price). The real ranking engine is Phase 4.
 5. **No OpenTelemetry SDK or exporter is installed yet** (Phase 11), so the instruments are no-ops.
 6. **No admin API to change source status or tuning;** it's a database change for now.
+
+## Phase 3.1 — Python LangGraph shopping agent (delivered)
+
+See [AGENT.md](AGENT.md).
+
+- **`apps/agent`** (Python 3.12, LangGraph 1.2, FastAPI, Pydantic 2, SQLAlchemy 2, httpx, structlog, OpenTelemetry API):
+  - 13 nodes with conditional edges and bounded iterations, plus a TypedDict state.
+  - Pydantic validation of all LLM output and external data; budget grounding (no invented or adjusted budgets).
+  - Provider abstraction (Gemini, OpenAI, explicit fallback, dev-only rules) and grounded response narration.
+  - Postgres checkpointing in its own schema, with resume on retry.
+  - Internal API (`/internal/agent`) protected by a service token.
+  - Dockerfile: non-root, uv-locked.
+- **Fastify `/internal/v1`** (service token; never routed by Traefik):
+  - Reuses `@dealmind/connectors` (eligibility, parallel search) and `@dealmind/catalog` (normalization, matching, canonical specs).
+  - Reuses the new deterministic `@dealmind/intelligence` package (genuine-discount pricing engine and deal ranking, integer bp).
+  - Owner-checked persistence driven by a **signed user context** (HMAC), with prices always taken from the database.
+- **Public API:** `GET /api/v1/search/:id` now includes interpretation, summary, warnings and the agent run. Added `POST /api/v1/search/:id/cancel` and `GET /api/v1/search/:id/events` (SSE).
+- **Worker:** supervises the agent. It reuses the execution id across retries (checkpoint resume), times out, cancels, and marks FAILED only on the final attempt.
+- **Compose:** `worker` and `agent` services added (app profile, internal network only).
+- **Verification:**
+  - `pnpm check --force` 40/40 tasks, including ruff, mypy --strict and pytest.
+  - pytest: 47.
+  - API DB tests: 80, including 13 internal-API and 3 search tests.
+  - Worker DB tests: 6.
+  - Cross-language E2E: built API + worker + Python agent with Postgres checkpointer, on a disposable database.
+  - The agent Docker image was built and smoke-tested: healthy, non-root, 401 without a token.
+- **Bugs found by the E2E and fixed:**
+  - psycopg async can't use Windows' Proactor loop, so the service now runs through `python -m app` with a selector loop.
+  - The rule-based extractor parsed the prompt wrapper into the keywords.
+  - Ranking relevance was measured against filler words instead of the planned keywords.
+
+### Phase 3.1 — known gaps
+
+1. **No real LLM was exercised** (no API key here). Gemini and OpenAI are tested with a stub chat model; the E2E used the dev-only `rules` extractor.
+2. **No live marketplaces** (Phase 2.3 status), so results come from mock stores only.
+3. **The agent's in-memory execution registry is per instance.** Multiple replicas need sticky routing or a shared registry.
+4. **Cancellation happens at node boundaries.**
+5. **The worker image was not built** (same pattern as the API image).
+6. **Ranking is a baseline:** no semantic relevance or personalization.
+7. **The local dev database still needs the pending reset.**

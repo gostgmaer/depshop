@@ -99,3 +99,7 @@ export const DEFAULT_JOB_OPTIONS = {
   removeOnComplete: { age: 24 * 3600, count: 10_000 },
   removeOnFail: { age: 7 * 24 * 3600 },
 };
+
+/** Redis flag set by the API when a user cancels a search (checked by the worker). */
+export const searchCancelKey = (prefix: string, searchId: string) =>
+  `${prefix}:search-cancel:${searchId}`;
