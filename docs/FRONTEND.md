@@ -1,4 +1,4 @@
-# Web app (Phase 4.1)
+# Web app (Phases 4.1–4.2)
 
 `apps/web` is a Next.js 15 App Router app (React 19, TypeScript strict).
 It is styled with Tailwind CSS 4 and uses shadcn/ui-style components built on
@@ -165,4 +165,126 @@ The fixtures are checked against the shared Zod contracts (`src/test/contracts.t
 - **Conditional benefits are never applied in the UI.** Users can't yet state their bank, card or memberships in the web app, so displayed pricing (product pages and search results) is computed without eligibility and benefits show as "conditional · not guaranteed". If a user names their bank in the query, the agent's ranking may use the verified payable price, but the result card still shows the delivered price; a saved eligibility profile would make the two consistent.
 - **Savings and trending have no data source** and say so.
 - **Not tested here:** a real-browser E2E against the real Fastify API. The cross-language E2E covers API + worker + agent, including the new progress events (29/29 accepted), while Playwright covers web ↔ mock API.
-- **Dashboard and search pages load about 260 kB of JS.** Not profiled yet; `LazyMotion` or CSS transitions instead of Framer Motion are the first candidates.
+- **Bundle size:** dashboard and search load about 217 kB of JS, and a search result page about 229 kB. The search bar no longer uses Framer Motion. Not profiled further.
+
+## AI shopping search (Phase 4.2)
+
+### Search box (`components/search/ai-search-bar.tsx`)
+
+- **Natural language first.** The text alone is enough; filters are optional and hidden behind a toggle that shows how many are set.
+- **Autocomplete.** An ARIA combobox and listbox:
+  - suggestions: recent searches, then catalog products, then examples;
+  - catalog products come from `GET /products?q=`, debounced by 250 ms; superseded requests are aborted through TanStack's `signal`;
+  - keyboard: ↑ ↓ Enter Esc.
+- **Voice input (optional).** Uses the browser's Web Speech API (`en-IN`), feature-detected; browsers without it show no microphone. Only the transcript is used.
+- **No duplicate searches.**
+  - The submit is locked while a request is in flight.
+  - The API also returns the running search, instead of creating and counting a second one, when the same user resubmits the same query and filters within 30 s.
+- **Editing.** "Edit search" on a results page opens the box prefilled from the saved query and filters (`fromSearch`). Submitting starts a **new** search, so the old one stays in history. "Run again" re-submits the saved search as it was.
+
+### Filters (`components/search/search-filters.tsx`)
+
+- **General filters:**
+  - category, then subcategory;
+  - min/max price (rupee text parsed to integer paise);
+  - minimum verified discount;
+  - launch window;
+  - confirmed availability;
+  - ranking mode;
+  - brands;
+  - marketplaces: only searchable ones are offered, and the others are named as "not searchable yet".
+- **Category-specific filters** come from `GET /categories/:slug/filters`. Nothing per category is hard-coded: a phone category shows RAM/storage, a washing-machine category shows capacity, from whatever its products actually state. Changing category clears the previous specification choices.
+- **Rating filter:** there isn't one. The panel says why: no verified rating data exists.
+- **Hard requirements.** Every filter is sent as an explicit filter that wins over the AI, and offers that don't state a required detail are left out.
+
+### Ranking
+
+- **Modes offered:** best value, highest verified discount, lowest price, recently launched and biggest price drop, plus "let the AI choose".
+- **Explanations.** Each mode's explanation mirrors the engine's actual weights and ordering.
+- **Results header.** It says which mode was used and whether **the user or the AI** chose it (`searchDetail.ranking`), and that affiliate commission never affects ranking.
+
+### Live progress (`search-timeline.tsx`, `search-progress.tsx`)
+
+- **Steps:**
+  - search accepted;
+  - AI understanding the query;
+  - search plan created;
+  - marketplace searches ("n of m marketplaces reported");
+  - products matched;
+  - prices calculated;
+  - results ranked;
+  - final results available.
+- **Driven by real events.** A step is _done_ only when the agent sent `node_finished` for its last node, and _active_ while one of its nodes is running (a second search round re-activates it).
+- **Unfinished steps.**
+  - If a search ended early, they show as _not reached_.
+  - If it succeeded but an event wasn't received (e.g. the replay log expired), they show as _not reported_.
+- **No percentages or time estimates.**
+- **Every known marketplace is listed:**
+  - _Searching / Completed (n listings) / Failed / Timed out_ from live SSE events, then from persisted source runs;
+  - _Pending approval / Credentials unavailable / Disabled / Not selected / Not searched_ from the persisted skip reason or the connector status, with the reason text.
+- **The stream also opens for finished searches**, so the steps are shown when the API still has the replay log.
+- **If the stream drops,** the panel says so and the page keeps polling.
+
+### Results (`search/[id]/search-view.tsx`, `result-card.tsx`)
+
+- **Card contents:**
+  - image (lazy-loaded), name, brand, model number and variant (RAM · storage · colour);
+  - delivered price and the selling price when it differs;
+  - MRP: struck through only when verified, otherwise "listed MRP · not verified";
+  - verified direct discount, marketplace, shipping, availability;
+  - conditional offers, kept separate;
+  - price-history summary and the observation time.
+- **Actions:** compare, other marketplaces, watch and price alert.
+- **List and grid views, sorting and pagination** live in the URL (`?view=grid&sort=price_asc&page=2`).
+- **Sorting re-orders, never re-ranks.** `GET /search/:id/results?sort=rank|price_asc|discount_desc|newest` sorts the stored results by current delivered price, verified discount only, or launch date. The original rank numbers stay visible.
+
+### States
+
+- **Partial:** a heading and an alert say results come only from the marketplaces that responded, and the failed ones are named.
+- **Expired:** prices not observed in 24 h get a banner and "Get fresh prices".
+- **Failed:** separate messages for no marketplace searchable, every marketplace failed, and an agent error.
+- **No listings vs. no matches:** "no listings returned" is told apart from "n listings, none met every requirement".
+- **Cancelled, needs clarification** (prefilled box), **not found** (another user's search), and invalid queries.
+- **API timeouts:** requests time out after 20 s with a retryable `TIMEOUT` error, instead of hanging.
+
+### Comparison (`components/compare/multi-compare.tsx`)
+
+- **Selection.** Pick two to four results ("Compare" checkbox). A tray links to `/compare?items=productId:variantId,…`.
+- **Rows:** variant, lowest delivered price, verified direct discount, marketplace offers, conditional offers, price history, availability, launch date, and the union of specifications. Values never stated show "Not stated"; rows that differ are marked.
+- **Nothing is presented as identical unless it is the same variant.** Each column says _Same variant_, _Different variant_ or _Different product_, and notes above the table explain why the prices aren't like-for-like.
+
+### Phase 4.2 tests
+
+| Kind                                      | Count                   | What                                                                                                                                                                                                                                                         |
+| ----------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Vitest + RTL (`src/test/search.test.tsx`) | 29                      | All 14 required categories (see list below)                                                                                                                                                                                                                  |
+| Playwright                                | 16 (8 × desktop/mobile) | New flow: category filters → live steps → partial results → sort → grid → compare selection → compare page with the different-variant warning, no horizontal overflow. axe now also scans a results page and a multi-compare page (11 pages, light and dark) |
+| API DB (`search-results.db.test.ts`)      | 6                       | Duplicate guard (key order, per-user), result sorting and pagination, owner isolation of sorted results, ranking-mode reporting, category filters from stored data. Also a canonical-specs round-trip test                                                   |
+| pytest                                    | 2                       | Explicit availability/launch/discount filters are hard; an explicit discount overrides the AI's                                                                                                                                                              |
+
+The 14 Vitest categories:
+
+1. natural language and autocomplete (keyboard, debounce, double-submit);
+2. validation, and no client-side user id;
+3. advanced filters;
+4. category-specific filters, for two different categories;
+5. ranking modes and their explanations;
+6. progress steps only from reported events;
+7. marketplace states and reasons;
+8. partial results;
+9. failed searches and sources, no-listing vs. no-match, expired results;
+10. cancellation;
+11. comparison selection, and the relation of different variants/products;
+12. persistence: edit, re-run, and the filter round-trip;
+13. isolation (404);
+14. responsive list/grid and sort through the URL.
+
+### Phase 4.2 limitations
+
+- **Marketplace data is still mock or sample only.** Amazon India, Flipkart, Croma, Reliance Digital and Tata CLiQ appear as pending approval, credentials unavailable or disabled until authorized integrations exist.
+- **Live skip reasons.** While a search runs, a marketplace skipped at planning shows its _current_ connector status. The precise skip reason appears once the run is saved, because the `sources_planned` event carries slugs only.
+- **The comparison selection lives on the results page** and is lost on reload. The compare URL itself is shareable.
+- **Category filters reflect stored data only.** A category with no imported products has no specification filters, and the panel says so.
+- **Voice input** depends on browser support (Chromium/Safari). Its recognition runs in the browser vendor's service.
+- **Sorting is in memory.** It handles at most 200 stored results per search; the agent stores up to 100.
+- **The E2E mock's pricing endpoint ignores `variantId`,** so in the browser test both compare columns show the same mock prices. The real API prices each variant separately (covered by API tests).

@@ -84,6 +84,7 @@ class FakeBackend:
     matches: dict[str, dict[str, Any]] = field(default_factory=dict)
     ranking_tokens: list[str] = field(default_factory=list)
     catalog_gtins: dict[str, dict[str, Any]] = field(default_factory=dict)  # gtin → product ref
+    launch_dates: dict[str, str] = field(default_factory=dict)  # external id → catalog launch date
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -380,7 +381,7 @@ class FakeBackend:
             "productUrl": o["productUrl"],
             "sellerName": None,
             "stockStatus": o["stockStatus"],
-            "launchDate": o.get("launchDate"),
+            "launchDate": o.get("launchDate") or self.launch_dates.get(o["externalId"]),
             "variantAttributes": {},
             "specifications": {},
             "offerConditions": {},

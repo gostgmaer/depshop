@@ -165,3 +165,15 @@ Docker: `docker compose --profile app up` builds `apps/agent/Dockerfile` (non-ro
   Fastify validates them, and the web app shows per-marketplace progress from them.
 
 - **Explicit UI filters.** `explicit_filters.sortMode` and `explicit_filters.specs` (name/value) from the search form override the AI's interpretation. Specs are canonicalized like stated requirements.
+
+## More explicit filters (Phase 4.2)
+
+`calculate_discounts` applies three more hard filters from the search form. They are never relaxed, and each removal is counted in the filter report:
+
+- `minDiscountPercent` → `min_discount_bp`. It overrides the AI's value and is compared with the engine's verified direct discount.
+- `launchedWithinDays` (30/90/180/365) → `launched_within_days`.
+  - Products whose launch date is unknown are **excluded**, because the requirement can't be verified (`launch_date_unknown`), and the response warns about it.
+  - This is stricter than the AI-inferred "recently launched" preference, which keeps unknown dates and only warns.
+- `inStockOnly` → `in_stock_only`: keeps `IN_STOCK`/`LIMITED` and drops `PREORDER`/`UNKNOWN` (`availability_not_confirmed`). Out-of-stock offers are never ranked anyway.
+
+Specification values chosen from the category filters use canonical keys (`ram_gb: "8 GB"`, `capacity_l: "7"`). The canonical-specs endpoint keeps them as they are, so they round-trip exactly.

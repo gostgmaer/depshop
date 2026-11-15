@@ -112,6 +112,11 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
     if source_slugs and set(source_slugs) <= set(excluded_sources):
         contradictions.append("Every requested marketplace is also excluded.")
 
+    min_discount_bp = intent.min_discount_percent * 100 if intent.min_discount_percent is not None else None
+    if isinstance(explicit.get("minDiscountPercent"), int):
+        min_discount_bp = int(explicit["minDiscountPercent"]) * 100
+    launched_within = explicit.get("launchedWithinDays")
+
     filters = ShoppingFilters(
         category_slug=category,
         product_type=intent.product_type,
@@ -124,10 +129,10 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
         excluded_specs=excluded,
         preferred_features=intent.preferred_features,
         launch_preference=intent.launch_preference,
-        min_discount_bp=intent.min_discount_percent * 100
-        if intent.min_discount_percent is not None
-        else None,
+        min_discount_bp=min_discount_bp,
         genuine_discount_only=intent.genuine_discount_only,
+        launched_within_days=int(launched_within) if isinstance(launched_within, int) else None,
+        in_stock_only=explicit.get("inStockOnly") is True,
         sort_mode=explicit_sort if explicit_sort else intent.sort_mode,
         source_slugs=source_slugs,
         excluded_source_slugs=excluded_sources,

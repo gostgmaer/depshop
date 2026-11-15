@@ -4,6 +4,7 @@ import { GitCompareArrows, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useState } from "react";
+import { MultiCompare, parseCompareItems } from "@/components/compare/multi-compare";
 import { OfferComparisonTable } from "@/components/offers/offer-comparison-table";
 import { ProductImage } from "@/components/products/product-card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,17 @@ import { rupees, variantSummary } from "@/lib/format";
 export function CompareView() {
   const params = useSearchParams();
   const productId = params.get("product");
+  const items = params.get("items");
+  if (items !== null)
+    return (
+      <>
+        <PageHeader
+          title="Compare products"
+          description="Specifications, variants, prices, verified discounts, offers, price history and availability side by side."
+        />
+        <MultiCompare items={parseCompareItems(items)} />
+      </>
+    );
   return (
     <>
       <PageHeader

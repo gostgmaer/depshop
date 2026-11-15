@@ -48,20 +48,59 @@ test("4/6/7. search: submit, live marketplace progress (one fails), results", as
   await page
     .getByLabel("Describe what you want to buy")
     .fill("Find a smartphone under ₹35,000 with 8GB RAM");
-  await page.getByRole("button", { name: /^Search/ }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.waitForURL(/\/search\/[0-9a-f-]+$/);
   const status = page.getByRole("list", { name: "Marketplace status" });
   await expect(status.getByText("Mock Store 1")).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText(/results from the others are still shown/)).toBeVisible({
+  await expect(page.getByText(/results from the other marketplaces are still shown/)).toBeVisible({
     timeout: 15_000,
   });
   // Final results despite the failed marketplace.
-  await expect(page.getByRole("heading", { name: "Acme Nova 7 5G" })).toBeVisible({
+  await expect(page.getByRole("heading", { name: "Acme Nova 7 5G" }).first()).toBeVisible({
     timeout: 15_000,
   });
   await expect(page.getByText("16.66% off MRP").first()).toBeVisible();
   await expect(page.getByText("conditional · not guaranteed").first()).toBeVisible();
   await expect(page.getByLabel("AI summary")).toContainText("Top pick");
+});
+
+test("4.2 category filters, live steps, sort, grid and comparison selection", async ({ page }) => {
+  await signIn(page, "/search");
+  await page.getByLabel("Describe what you want to buy").fill("Find a phone with 8GB RAM");
+  // Category-specific filters come from the category's catalog data.
+  await page.getByLabel("Category", { exact: true }).selectOption("smartphones");
+  await page.getByLabel("RAM", { exact: true }).selectOption("8 GB");
+  await page.getByLabel("Minimum verified discount").selectOption("10");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.waitForURL(/\/search\/[0-9a-f-]+$/);
+
+  // Real (mock-API) pipeline events drive the steps; the final step waits for the result.
+  const steps = page.getByRole("list", { name: "Search progress" });
+  await expect(steps.getByText("AI understanding the query")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "Partial results" })).toBeVisible({
+    timeout: 15_000,
+  });
+  const marketplaces = page.getByRole("list", { name: "Marketplace status" });
+  await expect(marketplaces.getByText(/Credentials unavailable/)).toBeVisible();
+  await expect(page.getByText("2 ranked deals")).toBeVisible();
+
+  await page.getByLabel("Sort").selectOption("price_asc");
+  await expect(page).toHaveURL(/sort=price_asc/);
+  await page.getByRole("button", { name: "Grid" }).click();
+  await expect(page).toHaveURL(/view=grid/);
+
+  const boxes = page.getByRole("checkbox", { name: "Compare" });
+  await boxes.nth(0).check();
+  await boxes.nth(1).check();
+  await page.getByRole("link", { name: /Compare 2/ }).click();
+  await expect(page).toHaveURL(/\/compare\?items=/);
+  await expect(page.getByRole("heading", { name: "Compare products", level: 1 })).toBeVisible();
+  await expect(page.getByText(/different variants of the same product/)).toBeVisible();
+  await expect(page.getByText("Different variant").first()).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
 });
 
 test("8. product page compares marketplaces by delivered price", async ({ page }) => {
@@ -92,6 +131,8 @@ for (const scheme of ["light", "dark"] as const) {
       "/notifications",
       "/categories",
       "/compare",
+      "/search/40000000-0000-7000-8000-000000000001",
+      "/compare?items=10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000001,10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000002",
     ];
     const found: string[] = [];
     for (const path of paths) {

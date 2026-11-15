@@ -27,6 +27,7 @@ import type {
 import type { z } from "zod";
 
 export type {
+  CategoryFiltersView,
   CategoryNode,
   EvaluatedBenefitView,
   OfferPricingView,
@@ -36,6 +37,7 @@ export type {
   PublicUser,
   SearchEvent,
   SearchResultView,
+  SearchResultSort,
   SearchSortMode,
 } from "@dealmind/shared";
 

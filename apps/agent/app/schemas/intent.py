@@ -124,6 +124,10 @@ class ShoppingFilters(BaseModel):
     launch_preference: LaunchPreference = "any"
     min_discount_bp: int | None = Field(None, ge=0, le=10_000)
     genuine_discount_only: bool = False
+    launched_within_days: int | None = Field(None, ge=1, le=3650)
+    """Explicit launch window: products without a known launch date are excluded (unverifiable)."""
+    in_stock_only: bool = False
+    """Explicit: only offers whose availability is confirmed (in stock or limited)."""
     sort_mode: SortMode = "best_value"
     source_slugs: list[str] | None = None
     excluded_source_slugs: list[str] = Field(default_factory=list)

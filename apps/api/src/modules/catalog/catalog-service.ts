@@ -22,6 +22,7 @@ import { Prisma, type PrismaClient } from "@dealmind/db";
 import {
   AppError,
   type CategoryNode,
+  type CategoryFiltersView,
   type CategoryView,
   type OfferView,
   type PageQuery,
@@ -32,6 +33,9 @@ import {
   paiseFromDb,
   paiseFromDbOrNull,
   paginationOf,
+  specFilterValue,
+  specLabel,
+  specValueLabel,
 } from "@dealmind/shared";
 import type { CacheService } from "../../lib/cache.js";
 import { type Paginated, iso, paginated } from "../../utils/http.js";
@@ -78,6 +82,53 @@ const toCategory = (c: CategoryRow): CategoryView => ({
   imageUrl: c.imageUrl,
   parentId: c.parentId,
 });
+
+/** Free-text colour names are summarized by `color_family`. */
+const FACET_SKIP = new Set(["color"]);
+const MAX_FACETS = 12;
+const MAX_FACET_VALUES = 20;
+/** More distinct values than this means free text, not a filter. */
+const MAX_DISTINCT = 40;
+
+export function specFacets(
+  rows: { key: string; value: unknown; n: number }[],
+  keys: { key: string; n: number }[],
+): CategoryFiltersView["specs"] {
+  const byKey = new Map<string, { value: string | number; n: number }[]>();
+  for (const r of rows) {
+    if (FACET_SKIP.has(r.key) || !/^[a-z][a-z0-9_]{0,39}$/.test(r.key)) continue;
+    if (typeof r.value !== "string" && typeof r.value !== "number") continue;
+    const list = byKey.get(r.key) ?? [];
+    list.push({ value: r.value, n: r.n });
+    byKey.set(r.key, list);
+  }
+  const productCount = new Map(keys.map((k) => [k.key, k.n]));
+  return [...byKey.entries()]
+    .filter(([, values]) => values.length >= 2 && values.length <= MAX_DISTINCT)
+    .map(([key, values]) => {
+      const numeric = values.every((v) => typeof v.value === "number");
+      const top = [...values]
+        .sort((a, b) => b.n - a.n)
+        .slice(0, MAX_FACET_VALUES)
+        .sort((a, b) =>
+          numeric
+            ? Number(a.value) - Number(b.value)
+            : String(a.value).localeCompare(String(b.value)),
+        );
+      return {
+        key,
+        label: specLabel(key),
+        productCount: productCount.get(key) ?? 0,
+        values: top.map((v) => ({
+          value: specFilterValue(key, v.value),
+          label: specValueLabel(key, v.value),
+          count: v.n,
+        })),
+      };
+    })
+    .sort((a, b) => b.productCount - a.productCount || a.key.localeCompare(b.key))
+    .slice(0, MAX_FACETS);
+}
 
 interface OfferSummary {
   low: number | null;
@@ -198,6 +249,91 @@ export class CatalogService {
       children: all.filter((c) => c.parentId === category.id),
       productCount,
     };
+  }
+
+  /**
+   * Filters for one category, derived from the stored catalog data of its
+   * subtree: brands, price range of fresh offers, and the specifications
+   * products actually state (variant attributes and product specifications,
+   * scalar values only). Nothing is hard-coded per category.
+   */
+  async categoryFilters(idOrSlug: string): Promise<CategoryFiltersView> {
+    const category = await this.findCategory(idOrSlug);
+    return this.cached(
+      this.cache.catalogKey("category-filters", category.id),
+      this.options.ttl.categories,
+      async () => {
+        const all = await this.listCategories();
+        const ids = await this.subtreeIds(category.id);
+        const inIds = Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`));
+        const cutoff = this.freshCutoff();
+        const [brands, price, specRows, keyRows, launch, subcategories, productCount] =
+          await Promise.all([
+            this.prisma.$queryRaw<{ brand: string; n: number }[]>`
+              SELECT brand, COUNT(*)::int AS n FROM "Product"
+              WHERE "isActive" AND "categoryId" IN (${inIds})
+              GROUP BY brand ORDER BY n DESC, brand ASC LIMIT 30`,
+            this.prisma.$queryRaw<{ lo: bigint | null; hi: bigint | null }[]>`
+              SELECT MIN(o."sellingPricePaise" + COALESCE(o."shippingPaise", 0)) AS lo,
+                     MAX(o."sellingPricePaise" + COALESCE(o."shippingPaise", 0)) AS hi
+              FROM "ProductOffer" o
+              JOIN "ShoppingSource" s ON s.id = o."sourceId" AND s.status = 'ACTIVE'
+              JOIN "Product" p ON p.id = o."productId"
+              WHERE p."isActive" AND p."categoryId" IN (${inIds}) AND o."observedAt" >= ${cutoff}
+                AND o."stockStatus" <> 'OUT_OF_STOCK'`,
+            this.prisma.$queryRaw<{ key: string; value: Prisma.JsonValue; n: number }[]>`
+              WITH kv AS (
+                SELECT p.id AS pid, e.key, e.value FROM "Product" p, jsonb_each(p.specifications) e
+                WHERE p."isActive" AND p."categoryId" IN (${inIds})
+                UNION
+                SELECT p.id, e.key, e.value FROM "Product" p
+                JOIN "ProductVariant" v ON v."productId" = p.id, jsonb_each(v.attributes) e
+                WHERE p."isActive" AND p."categoryId" IN (${inIds})
+              )
+              SELECT key, value, COUNT(DISTINCT pid)::int AS n FROM kv
+              WHERE jsonb_typeof(value) IN ('string', 'number')
+                AND length(value #>> '{}') BETWEEN 1 AND 60
+              GROUP BY key, value`,
+            this.prisma.$queryRaw<{ key: string; n: number }[]>`
+              WITH kv AS (
+                SELECT p.id AS pid, e.key FROM "Product" p, jsonb_each(p.specifications) e
+                WHERE p."isActive" AND p."categoryId" IN (${inIds})
+                UNION
+                SELECT p.id, e.key FROM "Product" p
+                JOIN "ProductVariant" v ON v."productId" = p.id, jsonb_each(v.attributes) e
+                WHERE p."isActive" AND p."categoryId" IN (${inIds})
+              )
+              SELECT key, COUNT(DISTINCT pid)::int AS n FROM kv GROUP BY key`,
+            this.prisma.product.count({
+              where: { isActive: true, categoryId: { in: ids }, launchDate: { not: null } },
+            }),
+            Promise.all(
+              all
+                .filter((c) => c.parentId === category.id)
+                .map(async (c) => ({
+                  ...c,
+                  productCount: await this.prisma.product.count({
+                    where: { isActive: true, categoryId: { in: await this.subtreeIds(c.id) } },
+                  }),
+                })),
+            ),
+            this.prisma.product.count({ where: { isActive: true, categoryId: { in: ids } } }),
+          ]);
+        return {
+          category,
+          subcategories,
+          brands: brands.map((b) => ({ name: b.brand, count: b.n })),
+          priceRange:
+            price[0]?.lo != null && price[0].hi != null
+              ? { minPaise: paiseFromDb(price[0].lo), maxPaise: paiseFromDb(price[0].hi) }
+              : null,
+          specs: specFacets(specRows, keyRows),
+          hasLaunchDates: launch > 0,
+          ratingsAvailable: false as const,
+          productCount,
+        };
+      },
+    );
   }
 
   // ── Products ────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
   productPricingQuery,
   productPricingView,
   categoryDetail,
+  categoryFilters,
   categoryNode,
   categoryView,
   offerQuery,
@@ -67,6 +68,19 @@ export const categoryRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> 
       },
     },
     async (req) => catalog.getCategory(req.params.idOrSlug),
+  );
+
+  app.get(
+    "/:idOrSlug/filters",
+    {
+      schema: {
+        tags: ["catalog"],
+        summary: "Search filters for a category, derived from its stored catalog data",
+        params: z.object({ idOrSlug: z.string().trim().min(1).max(100) }),
+        response: { 200: ok(categoryFilters) },
+      },
+    },
+    async (req) => catalog.categoryFilters(req.params.idOrSlug),
   );
 };
 

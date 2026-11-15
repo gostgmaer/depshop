@@ -4,6 +4,7 @@
  * and validated against the shared Zod schemas in the tests that use them.
  */
 import type {
+  CategoryFiltersView,
   PricingResultView,
   ProductPricingView,
   SearchDetail,
@@ -186,7 +187,10 @@ export function searchResult(rank = 1): SearchResultView {
       name: "Acme Nova 7 5G",
       brand: "Acme",
       imageUrl: null,
+      modelNumber: "AN7-5G",
+      launchDate: null,
     },
+    variantAttributes: { ram_gb: 8, storage_gb: 128, color: "midnight black" },
     pricing: pricing(),
   };
 }
@@ -238,6 +242,124 @@ export function searchDetail(over: Partial<SearchDetail> = {}): SearchDetail {
     summary: null,
     warnings: [],
     agentRun: null,
+    ranking: null,
     ...over,
   };
+}
+
+/** A result for another variant of the same fictional product (different RAM/storage). */
+export function searchResultVariant(
+  rank: number,
+  n: number,
+  attrs: Record<string, unknown>,
+  price: number,
+): SearchResultView {
+  const base = searchResult(rank);
+  const id = `00000000-0000-7000-8000-00000000010${n}`;
+  return {
+    ...base,
+    offer: {
+      ...base.offer,
+      id,
+      variantId: `20000000-0000-7000-8000-00000000000${n}`,
+      title: `Acme Nova 7 5G (${Number(attrs.ram_gb)}GB RAM, ${Number(attrs.storage_gb)}GB Storage)`,
+      sellingPricePaise: price,
+      mrpPaise: price + 500_000,
+    },
+    variantAttributes: attrs,
+    pricePaiseAtSearch: price,
+    mrpPaiseAtSearch: price + 500_000,
+    pricing: pricing({
+      offerId: id,
+      // A ₹5,000 discount off this variant's own MRP (basis points floored).
+      directDiscount: {
+        status: "OK",
+        mrpPaise: price + 500_000,
+        sellingPricePaise: price,
+        amountPaise: 500_000,
+        percentBp: Math.floor((500_000 * 10_000) / (price + 500_000)),
+        percentText: `${(Math.floor((500_000 * 10_000) / (price + 500_000)) / 100).toFixed(2)}%`,
+      },
+      prices: {
+        ...pricing().prices,
+        basePaise: price,
+        deliveredPaise: price,
+        bestVerifiedPayablePaise: price,
+      },
+    }),
+  };
+}
+
+/** Category filters as GET /categories/:slug/filters returns them (fictional data). */
+export function categoryFilters(slug = "smartphones"): CategoryFiltersView {
+  const category = {
+    id: "30000000-0000-7000-8000-000000000001",
+    slug,
+    name: slug === "washing-machines" ? "Washing Machines" : "Smartphones",
+    description: null,
+    imageUrl: null,
+    parentId: null,
+  };
+  return slug === "washing-machines"
+    ? {
+        category,
+        subcategories: [],
+        brands: [{ name: "Acme", count: 2 }],
+        priceRange: null,
+        specs: [
+          {
+            key: "capacity_kg",
+            label: "Capacity",
+            productCount: 2,
+            values: [
+              { value: "7", label: "7 kg", count: 1 },
+              { value: "8", label: "8 kg", count: 1 },
+            ],
+          },
+        ],
+        hasLaunchDates: false,
+        ratingsAvailable: false,
+        productCount: 2,
+      }
+    : {
+        category,
+        subcategories: [
+          {
+            ...category,
+            id: "30000000-0000-7000-8000-000000000002",
+            slug: "5g-phones",
+            name: "5G phones",
+            parentId: category.id,
+            productCount: 2,
+          },
+        ],
+        brands: [
+          { name: "Acme", count: 3 },
+          { name: "Zenith", count: 1 },
+        ],
+        priceRange: { minPaise: 2_000_000, maxPaise: 3_000_000 },
+        specs: [
+          {
+            key: "ram_gb",
+            label: "RAM",
+            productCount: 4,
+            values: [
+              { value: "8 GB", label: "8 GB", count: 3 },
+              { value: "12 GB", label: "12 GB", count: 1 },
+            ],
+          },
+          {
+            key: "storage_gb",
+            label: "Storage",
+            productCount: 4,
+            values: [
+              { value: "128 GB", label: "128 GB", count: 2 },
+              { value: "256 GB", label: "256 GB", count: 2 },
+            ],
+          },
+        ],
+        hasLaunchDates: true,
+        ratingsAvailable: false,
+        productCount: 4,
+      };
 }

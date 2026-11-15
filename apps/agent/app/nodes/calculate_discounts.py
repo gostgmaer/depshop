@@ -15,6 +15,12 @@ from app.nodes.deps import AgentDeps
 from app.schemas.intent import ShoppingFilters
 from app.state.state import ShoppingSearchState
 
+CONFIRMED_STOCK = {"IN_STOCK", "LIMITED"}
+
+
+def bump(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
 
 def eligibility_of(filters: ShoppingFilters) -> dict[str, list[str]] | None:
     """User-stated eligibility for conditional offers (absent keys = unknown, never assumed)."""
@@ -41,7 +47,23 @@ async def calculate_discounts(state: ShoppingSearchState, deps: AgentDeps) -> di
     kept = []
     cutoff = datetime.now(UTC) - timedelta(days=deps.recently_launched_days)
     unknown_launch = 0
+    window_cutoff = (
+        datetime.now(UTC) - timedelta(days=filters.launched_within_days)
+        if filters.launched_within_days
+        else None
+    )
     for f in facts:
+        if filters.in_stock_only and f.stock_status not in CONFIRMED_STOCK:
+            bump(removed, "availability_not_confirmed")
+            continue
+        if window_cutoff is not None:
+            # An explicit launch window is a hard requirement: an unknown date can't satisfy it.
+            if f.launch_date is None:
+                bump(removed, "launch_date_unknown")
+                continue
+            if datetime.fromisoformat(f.launch_date.replace("Z", "+00:00")) < window_cutoff:
+                bump(removed, "launched_before_window")
+                continue
         p = f.pricing.assessment
         if filters.genuine_discount_only and p.verdict != "GENUINE":
             removed[f"discount_{p.verdict.lower()}"] = removed.get(f"discount_{p.verdict.lower()}", 0) + 1
@@ -63,6 +85,11 @@ async def calculate_discounts(state: ShoppingSearchState, deps: AgentDeps) -> di
         warnings.append(
             f"Launch dates are unknown for {unknown_launch} product(s), "
             "so 'recently launched' couldn't be verified for them."
+        )
+    if removed.get("launch_date_unknown"):
+        warnings.append(
+            f"{removed['launch_date_unknown']} offer(s) were left out because the product's launch date "
+            "is unknown, so the launch-date filter couldn't be verified."
         )
     if filters.genuine_discount_only and not kept and facts:
         warnings.append("No offer has enough price history to verify a genuine discount yet.")

@@ -67,6 +67,35 @@ export const categoryDetail = categoryView.extend({
   productCount: z.number().int(),
 });
 
+/**
+ * Filters available in one category, derived from the catalog data actually
+ * stored for it (never a hard-coded list per category). Each value is sent back
+ * as a search spec filter exactly as given in `value`.
+ */
+export const categoryFilters = z.object({
+  category: categoryView,
+  /** Direct subcategories (narrow the search). */
+  subcategories: z.array(categoryView.extend({ productCount: z.number().int() })),
+  brands: z.array(z.object({ name: z.string(), count: z.number().int() })),
+  /** Delivered price range of fresh offers in this category; null when none. */
+  priceRange: z.object({ minPaise: paise, maxPaise: paise }).nullable(),
+  specs: z.array(
+    z.object({
+      key: z.string(),
+      label: z.string(),
+      /** Products (not offers) that state this specification. */
+      productCount: z.number().int(),
+      values: z.array(z.object({ value: z.string(), label: z.string(), count: z.number().int() })),
+    }),
+  ),
+  /** Whether any product here has a known launch date (launch filter meaningful). */
+  hasLaunchDates: z.boolean(),
+  /** No verified rating data exists yet, so a rating filter is never offered. */
+  ratingsAvailable: z.literal(false),
+  productCount: z.number().int(),
+});
+export type CategoryFiltersView = z.infer<typeof categoryFilters>;
+
 export const productSort = z.enum(["relevance", "newest", "price_asc", "price_desc", "name"]);
 
 /** Specification filter keys (variant attributes / product specifications). */
@@ -373,6 +402,14 @@ export const searchFilters = z
       .optional(),
     /** Ranking mode chosen in the UI (wins over the one the AI infers). */
     sortMode: z.enum(SEARCH_SORT_MODES).optional(),
+    /** Minimum verified direct discount (MRP-based, validated by the pricing engine), in percent. */
+    minDiscountPercent: z.number().int().min(1).max(90).optional(),
+    /** Only products whose launch date is known and within this many days. */
+    launchedWithinDays: z
+      .union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)])
+      .optional(),
+    /** Exclude offers whose availability isn't confirmed (pre-order, unknown). */
+    inStockOnly: z.boolean().optional(),
     /** Required specifications chosen in the UI, as name/value text (canonicalized server-side). */
     specs: z
       .array(
@@ -430,6 +467,23 @@ export const searchSourceRunView = z.object({
   errorMessage: z.string().nullable(),
 });
 
+/** Ranking modes a user can choose (trending needs popularity data DealMind doesn't collect). */
+export const USER_RANKING_MODES = [
+  "best_value",
+  "highest_discount",
+  "lowest_price",
+  "recently_launched",
+  "price_drop",
+] as const satisfies readonly SearchSortMode[];
+
+/** Re-ordering of a finished result list (the stored ranking is never rewritten). */
+export const searchResultSort = z.enum(["rank", "price_asc", "discount_desc", "newest"]);
+export type SearchResultSort = z.infer<typeof searchResultSort>;
+export const searchResultsQuery = pageQuery
+  .extend({ sort: searchResultSort.default("rank") })
+  .strict();
+export type SearchResultsQuery = z.infer<typeof searchResultsQuery>;
+
 export const searchView = z.object({
   id: uuid,
   query: z.string(),
@@ -462,6 +516,8 @@ export const searchDetail = searchView.extend({
   summary: z.string().nullable(),
   warnings: z.array(z.string()),
   agentRun: agentRunSummary.nullable(),
+  /** Ranking mode actually used, and whether the user chose it or the AI inferred it. */
+  ranking: z.object({ mode: z.string(), chosenBy: z.enum(["user", "ai"]) }).nullable(),
 });
 
 export const searchResultView = z.object({
@@ -472,7 +528,9 @@ export const searchResultView = z.object({
   pricePaiseAtSearch: paise,
   mrpPaiseAtSearch: paise.nullable(),
   offer: offerView,
-  product: productRef,
+  product: productRef.extend({ modelNumber: z.string().nullable(), launchDate: iso.nullable() }),
+  /** Variant attributes of the offer (canonical keys from the catalog). */
+  variantAttributes: z.record(z.unknown()),
   /** Current pricing of the offer (null if it can no longer be priced). */
   pricing: pricingResultSchema.nullable(),
 });

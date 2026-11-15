@@ -19,7 +19,13 @@ export interface SearchProgress {
   connected: boolean;
   /** Last pipeline step reported by the agent. */
   stage: string | null;
+  /** Pipeline steps the agent reported starting / finishing (never inferred). */
+  startedStages: string[];
+  /** The node started and not yet finished (a later search round can re-run a step). */
+  running: string | null;
   completedStages: string[];
+  /** Number of events received (0 = nothing recorded for this search). */
+  eventCount: number;
   sources: Record<string, { status: SourceProgress; resultCount: number }>;
   status: string | null;
   error: boolean;
@@ -28,7 +34,10 @@ export interface SearchProgress {
 export const initialProgress: SearchProgress = {
   connected: false,
   stage: null,
+  startedStages: [],
+  running: null,
   completedStages: [],
+  eventCount: 0,
   sources: {},
   status: null,
   error: false,
@@ -40,13 +49,23 @@ export function progressReducer(state: SearchProgress, action: Action): SearchPr
   if (action.kind === "connected") return { ...state, connected: true, error: false };
   if (action.kind === "error") return { ...state, connected: false, error: true };
   const e = action.event;
+  state = { ...state, eventCount: state.eventCount + 1 };
   switch (e.type) {
     case "node_started":
-      return { ...state, stage: e.node };
-    case "node_finished":
+      return {
+        ...state,
+        stage: e.node,
+        running: e.node,
+        startedStages: state.startedStages.includes(e.node)
+          ? state.startedStages
+          : [...state.startedStages, e.node],
+      };
+    case "node_finished": {
+      const running = state.running === e.node ? null : state.running;
       return state.completedStages.includes(e.node)
-        ? state
-        : { ...state, completedStages: [...state.completedStages, e.node] };
+        ? { ...state, running }
+        : { ...state, running, completedStages: [...state.completedStages, e.node] };
+    }
     case "sources_planned": {
       const sources = { ...state.sources };
       for (const s of e.sources) sources[s] ??= { status: "PENDING", resultCount: 0 };

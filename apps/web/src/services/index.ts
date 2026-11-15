@@ -3,9 +3,10 @@
  * Every function maps 1:1 to an endpoint; no response is ever fabricated.
  */
 import type { CreateSearchInput } from "@dealmind/shared";
-import { api, apiPage, queryString } from "@/lib/api";
+import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
 import type {
   CategoryDetail,
+  CategoryFiltersView,
   CategoryNode,
   Notification,
   Plan,
@@ -16,6 +17,7 @@ import type {
   ProductSummary,
   Search,
   SearchDetail,
+  SearchResultSort,
   SearchResultView,
   SearchSourceRun,
   SourceStatus,
@@ -46,9 +48,18 @@ export const catalog = {
   categoryTree: () => api<CategoryNode[]>("GET", "/categories/tree"),
   category: (idOrSlug: string) =>
     api<CategoryDetail>("GET", `/categories/${encodeURIComponent(idOrSlug)}`),
-  products: (q: ProductQuery = {}) =>
+  /** Filters derived from the category's stored catalog data. */
+  categoryFilters: (slug: string, opts?: RequestOptions) =>
+    api<CategoryFiltersView>(
+      "GET",
+      `/categories/${encodeURIComponent(slug)}/filters`,
+      undefined,
+      opts,
+    ),
+  products: (q: ProductQuery = {}, opts?: RequestOptions) =>
     apiPage<ProductSummary>(
       `/products${queryString({ ...q, inStock: q.inStock === undefined ? undefined : String(q.inStock) })}`,
+      opts,
     ),
   product: (id: string) => api<ProductDetail>("GET", `/products/${id}`),
   variants: (id: string) => api<Variant[]>("GET", `/products/${id}/variants`),
@@ -65,8 +76,15 @@ export const searches = {
   create: (input: CreateSearchInput) => api<Search>("POST", "/search", input),
   list: (page = 1, pageSize = 20) => apiPage<Search>(`/search${queryString({ page, pageSize })}`),
   get: (id: string) => api<SearchDetail>("GET", `/search/${id}`),
-  results: (id: string, page = 1, pageSize = 50) =>
-    apiPage<SearchResultView>(`/search/${id}/results${queryString({ page, pageSize })}`),
+  results: (
+    id: string,
+    q: { page?: number; pageSize?: number; sort?: SearchResultSort } = {},
+    opts?: RequestOptions,
+  ) =>
+    apiPage<SearchResultView>(
+      `/search/${id}/results${queryString({ page: q.page ?? 1, pageSize: q.pageSize ?? 20, sort: q.sort && q.sort !== "rank" ? q.sort : undefined })}`,
+      opts,
+    ),
   sources: (id: string) => api<SearchSourceRun[]>("GET", `/search/${id}/sources`),
   cancel: (id: string) => api<Search>("POST", `/search/${id}/cancel`),
   eventsUrl: (id: string) => `/api/v1/search/${id}/events`,

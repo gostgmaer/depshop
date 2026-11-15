@@ -15,6 +15,7 @@ import {
   type CreateSearchInput,
   ErrorCode,
   type PageQuery,
+  type SearchResultsQuery,
   paginationOf,
   type SearchStatusValue,
   TERMINAL_SEARCH_STATUSES,
@@ -39,6 +40,63 @@ export interface SearchServiceOptions {
   pricing?: PricingService;
 }
 const RESULTS_CACHE_TTL = 300;
+/** An identical search submitted again within this window returns the running one. */
+const DUPLICATE_WINDOW_MS = 30_000;
+/** Upper bound of stored results re-ordered in memory (the agent stores at most 100). */
+const MAX_SORTED_RESULTS = 200;
+
+/** Stable JSON (sorted keys) so equal filters compare equal. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(v ?? null);
+}
+
+type ResultItem = {
+  rank: number;
+  pricing: PricingResult | null;
+  pricePaiseAtSearch: number;
+  product: { launchDate: string | null };
+};
+
+/**
+ * Re-orders results for display. Prices are current delivered prices (the
+ * price at search when it can no longer be priced); discounts count only when
+ * the pricing engine verified the MRP. Ties keep the stored rank.
+ */
+export function sortResults<T extends ResultItem>(
+  items: T[],
+  sort: SearchResultsQuery["sort"],
+): T[] {
+  const price = (i: T) => i.pricing?.prices.deliveredPaise ?? i.pricePaiseAtSearch;
+  const discount = (i: T) =>
+    i.pricing?.directDiscount.status === "OK" ? (i.pricing.directDiscount.percentBp ?? 0) : -1;
+  const launch = (i: T) => (i.product.launchDate ? Date.parse(i.product.launchDate) : -Infinity);
+  const by: Record<SearchResultsQuery["sort"], (a: T, b: T) => number> = {
+    rank: () => 0,
+    price_asc: (a, b) => price(a) - price(b),
+    discount_desc: (a, b) => discount(b) - discount(a),
+    newest: (a, b) => (launch(b) === launch(a) ? 0 : launch(b) > launch(a) ? 1 : -1),
+  };
+  return [...items].sort((a, b) => by[sort](a, b) || a.rank - b.rank);
+}
+
+/** The ranking mode used: the user's explicit choice, else the agent's validated filters. */
+function rankingOf(filters: unknown, intent: unknown) {
+  const chosen = (filters as { sortMode?: unknown } | null)?.sortMode;
+  if (typeof chosen === "string") return { mode: chosen, chosenBy: "user" as const };
+  const i = intent as {
+    filters?: { sort_mode?: unknown; sortMode?: unknown };
+    sort_mode?: unknown;
+    sortMode?: unknown;
+  } | null;
+  const ai = i?.filters?.sort_mode ?? i?.filters?.sortMode ?? i?.sort_mode ?? i?.sortMode;
+  return typeof ai === "string" ? { mode: ai, chosenBy: "ai" as const } : null;
+}
 
 type SearchRow = {
   id: string;
@@ -116,6 +174,22 @@ export class SearchService {
   }
 
   async create(userId: string, input: CreateSearchInput) {
+    // A double click or a retried request must not start (and count) a second search.
+    const recent = await this.prisma.search.findMany({
+      where: {
+        userId,
+        query: input.query,
+        status: { in: ["PENDING", "RUNNING"] },
+        createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      include: { _count: { select: { results: true } } },
+    });
+    const wanted = canonical(input.filters ?? {});
+    const duplicate = recent.find((r) => canonical(r.filters ?? {}) === wanted);
+    if (duplicate) return toSearchView(duplicate);
+
     await this.plans.assertWithinLimit(userId, "searchesPerDay");
     const search = await this.prisma.search.create({
       data: { userId, query: input.query, filters: input.filters ?? {}, status: "PENDING" },
@@ -200,6 +274,7 @@ export class SearchService {
       clarificationQuestion: output.clarificationQuestion ?? null,
       summary: output.response ?? null,
       warnings: Array.isArray(output.warnings) ? output.warnings : [],
+      ranking: rankingOf(search.filters, search.intent),
       agentRun: run
         ? {
             id: run.id,
@@ -220,19 +295,31 @@ export class SearchService {
     return this.runs(await this.owned(userId, id));
   }
 
-  async results(userId: string, id: string, q: PageQuery) {
+  async results(userId: string, id: string, q: SearchResultsQuery) {
     const search = await this.owned(userId, id);
+    const sorted = q.sort !== "rank";
     const load = async () => {
       const rows = await this.prisma.searchResult.findMany({
         where: { searchId: id, userId },
         orderBy: { rank: "asc" },
-        skip: (q.page - 1) * q.pageSize,
-        take: q.pageSize,
+        // Another order needs the whole (bounded) list; the stored rank pages directly.
+        skip: sorted ? 0 : (q.page - 1) * q.pageSize,
+        take: sorted ? MAX_SORTED_RESULTS : q.pageSize,
         include: {
           offer: {
             include: {
               source: { select: { id: true, slug: true, name: true, isSample: true } },
-              product: { select: { id: true, name: true, brand: true, imageUrl: true } },
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  brand: true,
+                  imageUrl: true,
+                  modelNumber: true,
+                  launchDate: true,
+                },
+              },
+              variant: { select: { attributes: true } },
             },
           },
         },
@@ -245,7 +332,15 @@ export class SearchService {
           pricePaiseAtSearch: paiseFromDb(r.pricePaiseAtSearch),
           mrpPaiseAtSearch: paiseFromDbOrNull(r.mrpPaiseAtSearch),
           offer: toOfferView(r.offer, false),
-          product: r.offer.product,
+          product: {
+            id: r.offer.product.id,
+            name: r.offer.product.name,
+            brand: r.offer.product.brand,
+            imageUrl: r.offer.product.imageUrl,
+            modelNumber: r.offer.product.modelNumber,
+            launchDate: iso(r.offer.product.launchDate),
+          },
+          variantAttributes: (r.offer.variant.attributes ?? {}) as Record<string, unknown>,
         })),
         pagination: paginationOf(q, search._count.results),
       };
@@ -253,7 +348,13 @@ export class SearchService {
     // Finished results never change: cache them, keyed by the owner's id.
     const page = TERMINAL.has(search.status)
       ? await this.cache.getOrSet(
-          this.cache.userKey(userId, "search", id, "results", q.page, q.pageSize),
+          this.cache.userKey(
+            userId,
+            "search",
+            id,
+            "results",
+            sorted ? "all" : `${q.page}:${q.pageSize}`,
+          ),
           RESULTS_CACHE_TTL,
           load,
         )
@@ -268,16 +369,21 @@ export class SearchService {
           ]),
         )
       : new Map<string, PricingResult>();
-    return paginated(
-      page.items.map((item) => ({
-        ...item,
-        pricing: priced.get(item.offer.id) ?? null,
-        offer: {
-          ...item.offer,
-          isStale: now - new Date(item.offer.observedAt).getTime() > this.offerStaleAfterMs,
-        },
-      })),
-      page.pagination,
-    );
+    const items = page.items.map((item) => ({
+      ...item,
+      pricing: priced.get(item.offer.id) ?? null,
+      offer: {
+        ...item.offer,
+        isStale: now - new Date(item.offer.observedAt).getTime() > this.offerStaleAfterMs,
+      },
+    }));
+    if (!sorted) return paginated(items, page.pagination);
+    const start = (q.page - 1) * q.pageSize;
+    return paginated(sortResults(items, q.sort).slice(start, start + q.pageSize), {
+      ...page.pagination,
+      page: q.page,
+      pageSize: q.pageSize,
+      totalPages: Math.ceil(page.pagination.total / q.pageSize),
+    });
   }
 }

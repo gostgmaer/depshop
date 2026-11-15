@@ -50,6 +50,23 @@ async function fetchCsrfToken(): Promise<string> {
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
+/** No API call may hang the UI: after this the request fails with a TIMEOUT error. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+export interface RequestOptions {
+  /** Aborts the request (TanStack Query passes one to cancel superseded fetches). */
+  signal?: AbortSignal;
+}
+
+function withTimeout(signal?: AbortSignal): AbortSignal | undefined {
+  if (typeof AbortSignal === "undefined" || typeof AbortSignal.timeout !== "function")
+    return signal;
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal && typeof AbortSignal.any === "function"
+    ? AbortSignal.any([signal, timeout])
+    : (signal ?? timeout);
+}
+
 export interface Page<T> {
   items: T[];
   pagination: PaginationMeta;
@@ -80,14 +97,14 @@ export async function api<T>(
   method: Method,
   path: string,
   body?: unknown,
-  retried = false,
+  opts: RequestOptions = {},
 ): Promise<T> {
-  return (await request<T>(method, path, body, retried)).data;
+  return (await request<T>(method, path, body, false, opts)).data;
 }
 
 /** A paginated GET: items plus the pagination meta of the envelope. */
-export async function apiPage<T>(path: string): Promise<Page<T>> {
-  const res = await request<T[]>("GET", path);
+export async function apiPage<T>(path: string, opts: RequestOptions = {}): Promise<Page<T>> {
+  const res = await request<T[]>("GET", path, undefined, false, opts);
   return {
     items: res.data,
     pagination: res.meta?.pagination ?? {
@@ -111,6 +128,7 @@ async function request<T>(
   path: string,
   body?: unknown,
   retried = false,
+  opts: RequestOptions = {},
 ): Promise<{ data: T; meta?: SuccessBody<T>["meta"] }> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (method !== "GET") {
@@ -118,13 +136,23 @@ async function request<T>(
     headers["content-type"] = "application/json";
   }
 
-  const res = await fetch(`/api/v1${path}`, {
-    method,
-    headers,
-    credentials: "same-origin",
-    cache: "no-store",
-    ...(method === "GET" ? {} : { body: JSON.stringify(body ?? {}) }),
-  });
+  const signal = withTimeout(opts.signal);
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1${path}`, {
+      method,
+      headers,
+      credentials: "same-origin",
+      cache: "no-store",
+      ...(signal ? { signal } : {}),
+      ...(method === "GET" ? {} : { body: JSON.stringify(body ?? {}) }),
+    });
+  } catch (err) {
+    // Our own timeout (not a caller's cancellation) becomes a clear, retryable error.
+    if (err instanceof DOMException && err.name === "TimeoutError")
+      throw new ApiError(504, "TIMEOUT", "The server took too long to respond. Please try again.");
+    throw err;
+  }
 
   if (res.status === 204) return { data: undefined as T };
   const payload = (await res.json().catch(() => null)) as
@@ -136,7 +164,7 @@ async function request<T>(
   // A stale CSRF cookie (e.g. secret rotated): fetch a fresh token and retry once.
   if (error?.code === "CSRF_INVALID" && !retried) {
     await fetchCsrfToken();
-    return request<T>(method, path, body, true);
+    return request<T>(method, path, body, true, opts);
   }
   if (res.status === 401 && !path.startsWith("/auth/")) for (const l of sessionListeners) l();
   throw new ApiError(

@@ -372,7 +372,9 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
     async (req) => {
       const specs = req.body.specs;
       // Capacities are recognised from text ("1.5 ton capacity" → capacity_ton).
-      const isCapacity = (n: string) => /capacity|volume|load/i.test(n);
+      // A canonical key sent back by the category filters (capacity_l: "7") is kept as is.
+      const isCapacity = (n: string) =>
+        /capacity|volume|load/i.test(n) && !/^capacity_(l|kg|ton|gb)$/.test(n);
       const attributes = canonicalAttributes(
         specs.map((s) => `${s.value} ${s.name}`).join(" , "),
         Object.fromEntries(specs.filter((s) => !isCapacity(s.name)).map((s) => [s.name, s.value])),

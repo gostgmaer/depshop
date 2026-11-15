@@ -5,3 +5,4 @@ export * from "./plans.js";
 export * from "./envelope.js";
 export * from "./contracts.js";
 export * from "./pricing-contracts.js";
+export * from "./spec-labels.js";

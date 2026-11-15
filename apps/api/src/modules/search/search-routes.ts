@@ -3,6 +3,7 @@ import {
   pageQuery,
   searchDetail,
   searchResultView,
+  searchResultsQuery,
   searchSourceRunView,
   searchView,
   AppError,
@@ -86,10 +87,10 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
     {
       schema: {
         tags: ["search"],
-        summary: "Ranked results (final or partial)",
+        summary: "Ranked results (final or partial); sort re-orders without re-ranking",
         security,
         params: idParam,
-        querystring: pageQuery.strict(),
+        querystring: searchResultsQuery,
         response: { 200: page(searchResultView) },
       },
     },

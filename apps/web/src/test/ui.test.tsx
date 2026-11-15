@@ -57,7 +57,11 @@ vi.mock("@/services", () => ({
         },
       ],
     })),
-    products: vi.fn(),
+    products: vi.fn(async () => ({
+      items: [],
+      pagination: { page: 1, pageSize: 5, total: 0, totalPages: 0 },
+    })),
+    categoryFilters: vi.fn(),
   },
   searches: {
     create: vi.fn(async () => ({ id: "40000000-0000-7000-8000-000000000009" })),
@@ -166,14 +170,13 @@ describe("4–5. search submission and filters", () => {
     expect(svc.searches.create).not.toHaveBeenCalled();
   });
 
-  it("sends explicit filters (budget in paise, ranking, specs) that win over the AI", async () => {
+  it("sends explicit filters (budget in paise, ranking) that win over the AI", async () => {
     const user = userEvent.setup();
     renderWithQuery(<AiSearchBar />);
     await user.click(screen.getByRole("button", { name: "Show filters" }));
     await user.type(screen.getByLabelText("Describe what you want to buy"), "smartphone");
-    await user.type(screen.getByLabelText("Max budget (₹)"), "35,000");
+    await user.type(screen.getByLabelText("Max price (₹)"), "35,000");
     await user.selectOptions(screen.getByLabelText("Ranking"), "highest_discount");
-    await user.selectOptions(screen.getByLabelText("RAM"), "8GB");
     await user.click(screen.getByRole("button", { name: /^Search/ }));
     await waitFor(() =>
       expect(svc.searches.create).toHaveBeenCalledWith({
@@ -181,7 +184,6 @@ describe("4–5. search submission and filters", () => {
         filters: {
           maxPricePaise: 3_500_000,
           sortMode: "highest_discount",
-          specs: [{ name: "ram", value: "8GB" }],
         },
       }),
     );
@@ -192,7 +194,7 @@ describe("4–5. search submission and filters", () => {
       toSearchInput({
         ...EMPTY_SEARCH,
         query: " tv ",
-        brands: "Sony, LG, Sony",
+        brands: ["Sony", "LG", "sony"],
         minPrice: "40,000.50",
       }),
     ).toEqual({
@@ -255,15 +257,17 @@ describe("6. search progress", () => {
     };
     renderWithQuery(<SearchProgressPanel detail={searchDetail()} live={live} running />);
     const list = screen.getByRole("list", { name: "Marketplace status" });
-    expect(within(list).getByText(/Done · 4 results/)).toBeInTheDocument();
+    expect(within(list).getByText(/Completed · 4 listings/)).toBeInTheDocument();
     expect(within(list).getByText("Failed")).toBeInTheDocument();
-    expect(screen.getByText(/results from the others are still shown/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/results from the other marketplaces are still shown/),
+    ).toBeInTheDocument();
   });
 });
 
 describe("7. product results", () => {
   it("shows verified facts and never presents a conditional offer as guaranteed", () => {
-    renderWithQuery(<ResultCard result={searchResult()} index={0} />);
+    renderWithQuery(<ResultCard result={searchResult()} />);
     expect(screen.getByText("Acme Nova 7 5G")).toBeInTheDocument();
     expect(screen.getByText("₹24,999")).toBeInTheDocument();
     expect(screen.getByText("16.66% off MRP")).toBeInTheDocument();
@@ -272,7 +276,9 @@ describe("7. product results", () => {
     expect(within(benefits).getByText("conditional · not guaranteed")).toBeInTheDocument();
     expect(within(benefits).getByText(/depends on your bank/)).toBeInTheDocument();
     expect(screen.getByText(/Price observed/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Compare prices/ })).toHaveAttribute(
+    expect(screen.getByText("8 GB RAM · 128 GB · Midnight Black")).toBeInTheDocument();
+    expect(screen.getByText(/Model AN7-5G/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Marketplaces for Acme Nova 7 5G/ })).toHaveAttribute(
       "href",
       "/compare?product=10000000-0000-7000-8000-000000000001&variant=20000000-0000-7000-8000-000000000001",
     );
@@ -319,7 +325,9 @@ describe("9b. watchlist deletion", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete Diwali phones" }));
     await user.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete watchlist" }),
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Delete watchlist",
+      }),
     );
     await waitFor(() =>
       expect(svc.watchlists.remove).toHaveBeenCalledWith("50000000-0000-7000-8000-000000000001"),

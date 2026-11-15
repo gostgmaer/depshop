@@ -7,7 +7,13 @@
  * Run: node e2e/mock-api.ts   (Node ≥ 23 strips TypeScript types natively)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { productPricing, searchDetail, searchResult } from "../src/test/fixtures.ts";
+import {
+  categoryFilters,
+  productPricing,
+  searchDetail,
+  searchResult,
+  searchResultVariant,
+} from "../src/test/fixtures.ts";
 
 const PORT = Number(process.env.MOCK_API_PORT ?? 4599);
 const USER = {
@@ -82,6 +88,13 @@ const product = {
       sku: null,
       gtin: null,
     },
+    {
+      id: "20000000-0000-7000-8000-000000000002",
+      variantKey: "ram=12|storage=256",
+      attributes: { ram_gb: 12, storage_gb: 256, color: "midnight black" },
+      sku: null,
+      gtin: null,
+    },
   ],
 };
 
@@ -110,6 +123,8 @@ const server = createServer((req, res) => {
   // ── public catalog ──
   if (path === "/categories/tree")
     return send(res, 200, ok([{ ...product.category, children: [] }]));
+  const filters = /^\/categories\/([a-z0-9-]+)\/filters$/.exec(path);
+  if (filters) return send(res, 200, ok(categoryFilters(filters[1])));
   if (path === "/sources/status")
     return send(
       res,
@@ -193,9 +208,11 @@ const server = createServer((req, res) => {
         searchFinished
           ? searchDetail({
               status: "PARTIAL",
-              resultCount: 1,
+              resultCount: 2,
+              completedAt: new Date().toISOString(),
+              ranking: { mode: "best_value", chosenBy: "ai" },
               summary:
-                "Found 1 matching offer. Top pick: Acme Nova 7 5G on Mock Store 1 at ₹24,999.",
+                "Found 2 matching offers. Top pick: Acme Nova 7 5G on Mock Store 1 at ₹24,999.",
               sourceRuns: [
                 {
                   source: {
@@ -229,14 +246,37 @@ const server = createServer((req, res) => {
       ),
     );
   if (path === `/search/${SEARCH_ID}/results`)
-    return send(res, 200, searchFinished ? page([searchResult()]) : page([]));
+    return send(
+      res,
+      200,
+      searchFinished
+        ? page([
+            searchResult(1),
+            searchResultVariant(
+              2,
+              2,
+              { ram_gb: 12, storage_gb: 256, color: "midnight black" },
+              2_999_900,
+            ),
+          ])
+        : page([]),
+    );
   if (path === `/search/${SEARCH_ID}/events`) {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const events = [
+      { type: "node_started", node: "intent_extractor" },
+      { type: "node_finished", node: "intent_extractor" },
+      { type: "node_finished", node: "query_validator" },
+      { type: "node_finished", node: "search_planner" },
+      { type: "node_finished", node: "source_discovery" },
       { type: "node_started", node: "parallel_search" },
       { type: "sources_planned", sources: ["mock_1", "mock_2"], skipped: ["flipkart"] },
       { type: "source_finished", source: "mock_1", status: "SUCCEEDED", resultCount: 1 },
       { type: "source_finished", source: "mock_2", status: "FAILED", resultCount: 0 },
+      { type: "node_finished", node: "parallel_search" },
+      { type: "node_finished", node: "deduplicate" },
+      { type: "node_finished", node: "calculate_discounts" },
+      { type: "node_finished", node: "rank_deals" },
     ];
     let i = 0;
     const timer = setInterval(() => {

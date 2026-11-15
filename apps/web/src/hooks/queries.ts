@@ -6,6 +6,7 @@
  */
 import { type CreateSearchInput, TERMINAL_SEARCH_STATUSES } from "@dealmind/shared";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { SearchResultSort } from "@/types/api";
 import {
   type ProductQuery,
   alerts,
@@ -28,6 +29,10 @@ export const keys = {
   searches: (page: number) => ["searches", page] as const,
   search: (id: string) => ["search", id] as const,
   searchResults: (id: string) => ["search", id, "results"] as const,
+  searchResultsPage: (id: string, page: number, sort: SearchResultSort) =>
+    ["search", id, "results", page, sort] as const,
+  categoryFilters: (slug: string) => ["categories", slug, "filters"] as const,
+  suggestions: (q: string) => ["products", "suggest", q] as const,
   watchlists: ["watchlists"] as const,
   watchlist: (id: string) => ["watchlists", id] as const,
   alerts: (status?: string) => ["alerts", status ?? "all"] as const,
@@ -63,6 +68,23 @@ export const usePriceHistory = (id: string, variantId?: string, days = 90) =>
     queryKey: keys.history(id, variantId, days),
     queryFn: () => catalog.history(id, { ...(variantId ? { variantId } : {}), days }),
   });
+/** Category filters change only when the catalog does: cached for 5 minutes. */
+export const useCategoryFilters = (slug: string | undefined) =>
+  useQuery({
+    queryKey: keys.categoryFilters(slug ?? ""),
+    queryFn: ({ signal }) => catalog.categoryFilters(slug!, { signal }),
+    enabled: Boolean(slug),
+    staleTime: 5 * 60_000,
+  });
+/** Catalog products matching typed text (the caller debounces; stale requests are aborted). */
+export const useProductSuggestions = (q: string) =>
+  useQuery({
+    queryKey: keys.suggestions(q),
+    queryFn: ({ signal }) => catalog.products({ q, pageSize: 5 }, { signal }),
+    enabled: q.trim().length >= 3,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
 export const useSourceStatus = () =>
   useQuery({ queryKey: keys.sourceStatus, queryFn: catalog.sourceStatus, staleTime: 60_000 });
 
@@ -80,12 +102,18 @@ export const useSearch = (id: string) =>
     queryFn: () => searches.get(id),
     refetchInterval: (q) => (isTerminal(q.state.data?.status) ? false : 3_000),
   });
-export const useSearchResults = (id: string, status?: string) =>
+export const useSearchResults = (
+  id: string,
+  status?: string,
+  page = 1,
+  sort: SearchResultSort = "rank",
+) =>
   useQuery({
-    queryKey: keys.searchResults(id),
-    queryFn: () => searches.results(id),
+    queryKey: keys.searchResultsPage(id, page, sort),
+    queryFn: ({ signal }) => searches.results(id, { page, sort }, { signal }),
     enabled: status !== undefined && status !== "PENDING",
     refetchInterval: isTerminal(status) ? false : 4_000,
+    placeholderData: keepPreviousData,
   });
 
 export function useCreateSearch() {

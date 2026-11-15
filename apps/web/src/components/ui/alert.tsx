@@ -5,6 +5,7 @@ const tones = {
   error: "border-danger/30 bg-danger/10 text-danger",
   success: "border-primary/30 bg-primary/10 text-foreground",
   info: "border-border bg-muted text-foreground",
+  warning: "border-warning/30 bg-warning-soft text-warning",
 } as const;
 
 export function Alert({

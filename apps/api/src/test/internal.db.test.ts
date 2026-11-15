@@ -140,6 +140,15 @@ describe("marketplace + intelligence (deterministic services reused)", () => {
       ],
     });
     expect(res.json()).toEqual({ attributes: { ram_gb: 8, storage_gb: 256, capacity_ton: 1.5 } });
+    // Values sent back by the category filters (canonical keys) round-trip unchanged.
+    const back = await call("POST", "/intelligence/canonical-specs", {
+      specs: [
+        { name: "ram_gb", value: "8 GB" },
+        { name: "capacity_l", value: "7" },
+        { name: "panel_type", value: "OLED" },
+      ],
+    });
+    expect(back.json()).toEqual({ attributes: { ram_gb: 8, capacity_l: "7", panel_type: "OLED" } });
   });
 
   it("normalizes, deduplicates into product/variant groups, prices and ranks by offer id only", async () => {
