@@ -205,6 +205,8 @@ model ProductVariant {
   variantKey String
   attributes Json     @default("{}")
   sku        String?
+  /// Manufacturer part number (identifies one configuration, e.g. "SM-S931BZBCINS").
+  mpn        String?
   gtin       String?  @unique
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -220,6 +222,7 @@ model ProductVariant {
   /// Specification filters use JSONB containment (attributes @> {...}).
   @@index([attributes(ops: JsonbPathOps)], type: Gin, map: "ProductVariant_attributes_gin_idx")
   @@index([sku])
+  @@index([mpn])
 }
 
 // ═══════════════════════════════ SHOPPING (global) ═══════════════════════════════
@@ -310,9 +313,13 @@ enum StockStatus {
 /// How an incoming listing was matched to the catalog.
 enum MatchMethod {
   IDENTIFIER
+  /// Manufacturer part number (one configuration).
+  MPN
   MODEL_NUMBER
   NORMALIZED_TITLE
   FUZZY_TITLE
+  /// Optional embedding similarity (pgvector); never auto-merges.
+  SEMANTIC
   MANUAL
   NEW_PRODUCT
 }
@@ -326,6 +333,8 @@ model ProductOffer {
   sourceId          String      @db.Uuid
   externalId        String
   productUrl        String
+  /// productUrl without tracking parameters; detects one listing under two external ids.
+  canonicalUrl      String?
   /// Original marketplace title, preserved verbatim.
   title             String
   sellerName        String?
@@ -360,6 +369,7 @@ model ProductOffer {
   affiliateClicks AffiliateClick[]
 
   @@unique([sourceId, externalId])
+  @@index([sourceId, canonicalUrl])
   @@index([variantId, sellingPricePaise])
   @@index([productId, sellingPricePaise])
   @@index([trackedUntil])
@@ -400,6 +410,11 @@ model ProductMatchReview {
   evidence           Json              @default("{}")
   status             MatchReviewStatus @default(PENDING)
   reviewedAt         DateTime?
+  /// Audit record of the decision that sent this listing to review.
+  auditId            String?           @db.Uuid
+  /// Human reviewer (admin user id); never an AI.
+  reviewedBy         String?           @db.Uuid
+  reviewNote         String?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
@@ -408,6 +423,89 @@ model ProductMatchReview {
 
   @@unique([sourceId, externalId])
   @@index([status, createdAt])
+}
+
+enum MatchConfidence {
+  /// 98–100
+  VERY_HIGH
+  /// 90–97
+  HIGH
+  /// 75–89: manual review
+  REVIEW
+  /// < 75: do not merge
+  LOW
+}
+
+enum MatchDecisionKind {
+  /// Same product (existing or new variant) — applied automatically.
+  AUTO_MERGE
+  /// No safe candidate: a new product.
+  NEW_PRODUCT
+  /// Uncertain: held for a human reviewer.
+  MANUAL_REVIEW
+  /// Compared and judged different (e.g. a critical attribute conflicts).
+  NO_MATCH
+  /// The listing duplicates an existing offer of the same source.
+  DUPLICATE_OFFER
+  /// A human reviewer's resolution of an earlier MANUAL_REVIEW.
+  REVIEW_RESOLVED
+}
+
+enum MatchSubjectKind {
+  /// An incoming marketplace listing vs the catalog.
+  LISTING
+  /// Two existing catalog products (duplicate detection).
+  PRODUCT_PAIR
+}
+
+enum MatchOrigin {
+  IMPORT
+  INTERNAL_API
+  DUPLICATE_SCAN
+  REVIEW
+}
+
+/// Append-only audit of every matching decision (UPDATE rejected by trigger).
+/// Product/variant ids are kept as plain ids so history survives merges.
+model ProductMatchAudit {
+  id                 String            @id @default(uuid(7)) @db.Uuid
+  subject            MatchSubjectKind
+  origin             MatchOrigin
+  sourceId           String?           @db.Uuid
+  externalId         String?
+  /// The listing as compared (LISTING subjects).
+  listing            Json?
+  /// PRODUCT_PAIR: the first product.
+  productAId         String?           @db.Uuid
+  /// The best candidate (LISTING) or the second product (PRODUCT_PAIR).
+  candidateProductId String?           @db.Uuid
+  candidateVariantId String?           @db.Uuid
+  /// What was written as a result (if anything).
+  resultProductId    String?           @db.Uuid
+  resultVariantId    String?           @db.Uuid
+  /// 0–10000 (= score 0.00–100.00).
+  scoreBp            Int
+  confidence         MatchConfidence
+  decision           MatchDecisionKind
+  method             MatchMethod
+  evidence           Json              @default("{}")
+  conflicts          Json              @default("[]")
+  engineVersion      String
+  /// REVIEW_RESOLVED rows point at the decision they resolve.
+  reviewOfId         String?           @db.Uuid
+  /// Human reviewer (admin user id) for REVIEW_RESOLVED rows.
+  reviewer           String?           @db.Uuid
+  note               String?
+  createdAt          DateTime          @default(now())
+
+  reviewOf ProductMatchAudit?  @relation("MatchAuditReview", fields: [reviewOfId], references: [id], onDelete: Restrict)
+  reviews  ProductMatchAudit[] @relation("MatchAuditReview")
+
+  @@index([sourceId, externalId])
+  @@index([candidateProductId])
+  @@index([productAId])
+  @@index([decision, createdAt])
+  @@index([reviewOfId])
 }
 
 // ═══════════════════════════════ SEARCH (user-owned) ═══════════════════════════════

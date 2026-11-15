@@ -26,6 +26,10 @@ export async function setupTestDatabase(): Promise<string> {
 
   const db = new PrismaClient({ datasources: { db: { url } } });
   try {
+    // Non-Prisma schemas (matching embeddings, agent checkpoints) go too.
+    for (const schema of ["matching", "agent_checkpoints"]) {
+      await db.$executeRawUnsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    }
     await db.$executeRawUnsafe("DROP SCHEMA IF EXISTS public CASCADE");
     await db.$executeRawUnsafe("CREATE SCHEMA public");
   } finally {
@@ -49,6 +53,11 @@ export async function truncateAll(prisma: PrismaClient): Promise<void> {
     SELECT tablename FROM pg_tables
     WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
   if (tables.length === 0) return;
-  const list = tables.map((t) => `"public"."${t.tablename}"`).join(", ");
+  const extra = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT 1 AS n FROM pg_tables WHERE schemaname = 'matching' AND tablename = 'product_embeddings'`;
+  const list = [
+    ...tables.map((t) => `"public"."${t.tablename}"`),
+    ...(extra.length ? ["matching.product_embeddings"] : []),
+  ].join(", ");
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
 }

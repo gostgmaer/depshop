@@ -1,7 +1,7 @@
 import { createPrismaClient, type PrismaClient, seedReferenceData } from "@dealmind/db";
 import { resolveTestDatabaseUrl, truncateAll } from "@dealmind/db/testing";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { SAMPLE_SOURCE, sampleListings, seedSampleCatalog } from "../sample-data.js";
+import { SAMPLE_SOURCE, sampleListings, seedSampleCatalog } from "../../sample-data/sample-data.js";
 
 const prisma: PrismaClient = createPrismaClient({ url: resolveTestDatabaseUrl() });
 afterAll(() => prisma.$disconnect());

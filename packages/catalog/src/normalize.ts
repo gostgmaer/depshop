@@ -8,17 +8,22 @@
 
 /** NFKC, lower-case, "&" → "and", punctuation → spaces, collapsed whitespace. */
 export function normalizeText(input: string): string {
-  return input
-    .replace(/[™®©]/g, "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[’'`]/g, "")
-    .replace(/[^\p{L}\p{N}.+]+/gu, " ")
-    .replace(/(?<!\d)\.|\.(?!\d)/g, " ") // keep decimal points (e.g. 1.5 ton) only
-    .replace(/\+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    input
+      .replace(/[™®©]/g, "")
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/&/g, " and ")
+      .replace(/[’'`]/g, "")
+      .replace(/[^\p{L}\p{N}.+]+/gu, " ")
+      .replace(/(?<!\d)\.|\.(?!\d)/g, " ") // keep decimal points (e.g. 1.5 ton) only
+      // "S25+" / "Note 13 Pro+" name a different line: "+" after a token that is
+      // not followed by a capacity means "plus" ("8GB+128GB" stays a separator).
+      .replace(/([\p{L}\p{N}])\+(?!\s*\d+(?:\.\d+)?\s*(?:gb|tb|mb)\b)/gu, "$1 plus ")
+      .replace(/\+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 /** Trims and collapses whitespace in a display string (original casing kept). */
@@ -236,16 +241,20 @@ export interface Colour {
 export function normalizeColour(raw: string | null | undefined): Colour | null {
   if (!raw) return null;
   const name = cleanDisplay(raw);
-  const words = normalizeText(name).split(" ").filter(Boolean);
+  // Spelling variants share a key ("Space Gray" = "Space Grey").
+  const SPELLING: Record<string, string> = { gray: "grey", colour: "color" };
+  const words = normalizeText(name)
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => SPELLING[w] ?? w);
   if (words.length === 0) return null;
-  let family: string | null = null;
-  // The last colour word usually carries the hue ("Titanium Blue" → blue).
-  for (const w of [...words].reverse()) {
-    if ((COLOR_FAMILIES as readonly string[]).includes(w)) family = w;
-    else if (COLOR_SYNONYMS[w]) family = COLOR_SYNONYMS[w];
-    if (family) break;
-  }
-  return { name, key: words.join("-"), family };
+  const familyOf = (w: string) =>
+    (COLOR_FAMILIES as readonly string[]).includes(w) ? w : (COLOR_SYNONYMS[w] ?? null);
+  const families = words.map(familyOf).filter((f): f is NonNullable<typeof f> => f !== null);
+  // A real hue wins over a finish ("Titanium Blue" / "Blue Titanium" → blue).
+  const family = families.find((f) => f !== "titanium") ?? families[0] ?? null;
+  // Order-insensitive key: "Titanium Blue" and "Blue Titanium" are one colour.
+  return { name, key: [...words].sort().join("-"), family };
 }
 
 function isColourWord(word: string): boolean {
@@ -278,6 +287,16 @@ export function parseMemoryFromTitle(title: string): { ram_gb?: number; storage_
       out.storage_gb = parseCapacityGb(`${pair[3]}${pair[4]}`) ?? undefined;
     }
   }
+  if (out.ram_gb !== undefined && out.storage_gb === undefined) {
+    // "12GB RAM, 256GB" — RAM is labelled; exactly one other unlabelled
+    // capacity (≥ 16 GB, not itself RAM) is the storage. More than one → ambiguous.
+    const others = [
+      ...t.matchAll(/(\d+(?:\.\d+)?)\s*(gb|tb)\b(?!\s*(?:lpddr\d*x?\s*|ddr\d\s*)?ram)/gi),
+    ]
+      .map((m) => parseCapacityGb(`${m[1]}${m[2]}`))
+      .filter((gb): gb is number => gb !== null && gb >= 16);
+    if (others.length === 1) out.storage_gb = others[0];
+  }
   return out;
 }
 
@@ -309,9 +328,23 @@ const CAPACITY_KEYS = new Set(["ram_gb", "storage_gb"]);
  * Canonical variant attributes from source-provided attributes plus explicit
  * title patterns. Provided attributes win over title parsing.
  */
+/** A title segment that is only a colour name ("… - Black", "(Navy, 12GB, …)"). */
+export function colourFromTitle(title: string): string | undefined {
+  for (const segment of title.split(/[(),\-–|/]+/)) {
+    const s = segment.trim();
+    if (!s || /\d/.test(s) || s.split(/\s+/).length > 3) continue;
+    if (normalizeColour(s)?.family) return s;
+  }
+  return undefined;
+}
+
+/** Categories where a single unlabelled capacity in a title is the storage. */
+const STORAGE_CATEGORIES = new Set(["smartphones", "tablets", "wearables"]);
+
 export function canonicalAttributes(
   title: string,
   provided: Record<string, unknown> = {},
+  categorySlug?: string | null,
 ): VariantAttributes {
   const attrs: VariantAttributes = {
     ...parseApplianceCapacity(title),
@@ -338,6 +371,27 @@ export function canonicalAttributes(
     }
     if (typeof rawValue === "number" || typeof rawValue === "string") {
       attrs[key] = typeof rawValue === "string" ? cleanDisplay(rawValue) : rawValue;
+    }
+  }
+  if (attrs.color === undefined) {
+    // Colour stated only in the title ("(Midnight Black, 8GB RAM, …)", "… - Black")
+    // must be part of the variant, or Black and Blue would share a variant key.
+    const colour = normalizeColour(colourFromTitle(title));
+    if (colour?.family) {
+      attrs.color = colour.name;
+      attrs.color_family = colour.family;
+    }
+  }
+  if (attrs.ram_gb === undefined && attrs.storage_gb === undefined) {
+    // A single unlabelled capacity ("Apple iPhone 15 (128 GB)") must never be
+    // dropped, or 128 GB and 256 GB variants would share a key. In phone-like
+    // categories it is the storage; elsewhere it stays a generic capacity.
+    const caps = [...title.matchAll(/(\d+(?:\.\d+)?)\s*(gb|tb)\b/gi)]
+      .map((m) => parseCapacityGb(`${m[1]}${m[2]}`))
+      .filter((gb): gb is number => gb !== null);
+    if (caps.length && new Set(caps).size === 1) {
+      if (categorySlug && STORAGE_CATEGORIES.has(categorySlug)) attrs.storage_gb = caps[0]!;
+      else attrs.capacity_gb = caps[0]!;
     }
   }
   return attrs;
@@ -493,4 +547,32 @@ export function attributeConflicts(a: VariantAttributes, b: VariantAttributes): 
   return Object.keys(a)
     .filter((k) => k in b && String(a[k]).toLowerCase() !== String(b[k]).toLowerCase())
     .sort();
+}
+
+// ── URLs ──────────────────────────────────────────────────────────────────
+
+/** Query parameters that only track attribution (never identify a listing). */
+const TRACKING_PARAMS =
+  /^(utm_[a-z]+|aff[a-z_]*|affid|affextparam\d*|tag|ref|ref_|gclid|fbclid|cmpid|campaign|source|srsltid|_encoding|psc)$/i;
+
+/**
+ * Canonical form of a product URL for duplicate-offer detection: lower-case
+ * host without "www.", no fragment, no tracking parameters, remaining
+ * parameters sorted, no trailing slash. Identity parameters (e.g. pid) stay.
+ */
+export function canonicalUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const params = [...url.searchParams.entries()]
+    .filter(([k]) => !TRACKING_PARAMS.test(k))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const query = params.length ? `?${new URLSearchParams(params).toString()}` : "";
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  return `https://${host}${path}${query}`;
 }

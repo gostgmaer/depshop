@@ -16,8 +16,8 @@
  * Refuses to run when NODE_ENV=production.
  */
 import type { PrismaClient } from "@dealmind/db";
-import { CatalogImporter, type ImportSummary } from "./importer.js";
-import type { SourceListing } from "./listing.js";
+import { CatalogImporter, type ImportSummary } from "../matching/deduplication/importer.js";
+import type { SourceListing } from "@dealmind/catalog";
 
 export const SAMPLE_SOURCE = {
   slug: "dealmind_sample",

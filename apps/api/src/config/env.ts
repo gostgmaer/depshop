@@ -106,6 +106,8 @@ const envSchema = z
     AGENT_SERVICE_TOKEN: z.string().min(32).optional(),
     /** HMAC secret for signed user contexts (shared by worker, agent and API). */
     AGENT_USER_CONTEXT_SECRET: z.string().min(32).optional(),
+    /** HMAC secret for signed reviewer contexts (admin backend only; never given to the agent). */
+    REVIEW_CONTEXT_SECRET: z.string().min(32).optional(),
 
     // ── Connectors (executor runs here for the internal API) ────────────
     CONNECTORS_ENABLE_MOCKS: z.enum(["true", "false"]).optional(),

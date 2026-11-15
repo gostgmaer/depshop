@@ -15,9 +15,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
-    "seed:sample": "dotenv -e ../../.env -- node dist/seed-sample-cli.js"
+    "test": "vitest run"
   },
   "dependencies": {
     "@dealmind/db": "workspace:*",

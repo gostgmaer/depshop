@@ -265,9 +265,19 @@ importers:
       '@dealmind/catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@dealmind/db':
+        specifier: workspace:*
+        version: link:../db
       '@dealmind/shared':
         specifier: workspace:*
         version: link:../shared
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      dotenv-cli:
+        specifier: ^8.0.0
+        version: 8.0.0
 
   packages/queue:
     dependencies:

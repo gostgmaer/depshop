@@ -34,6 +34,8 @@ export const sourceListingSchema = z
     productUrl: httpUrl,
     brand: z.string().trim().min(1).max(100),
     modelNumber: z.string().trim().min(1).max(100).optional(),
+    /** Manufacturer part number (one configuration), when the source publishes it. */
+    mpn: z.string().trim().min(2).max(100).optional(),
     /** Barcode as published (GTIN-8/12/13/14); invalid check digits are dropped. */
     barcode: z.string().trim().max(20).optional(),
     categorySlug: z.string().trim().min(1).max(100).optional(),
@@ -71,6 +73,9 @@ export interface NormalizedListing {
   discriminators: string[];
   modelNumber: string | null;
   modelKey: string | null;
+  /** Manufacturer part number (configuration-level identifier) and its key. */
+  mpn: string | null;
+  mpnKey: string | null;
   /** brandKey:modelKey — deterministic product key when a model number is known. */
   fingerprint: string | null;
   identifiers: Identifiers;
@@ -82,7 +87,7 @@ export function normalizeListing(listing: ValidListing): NormalizedListing {
   const brand = normalizeBrand(listing.brand);
   const bKey = brandKey(brand);
   const mKey = modelKey(listing.modelNumber);
-  const attributes = canonicalAttributes(listing.title, listing.attributes);
+  const attributes = canonicalAttributes(listing.title, listing.attributes, listing.categorySlug);
   const colour = normalizeColour(typeof attributes.color === "string" ? attributes.color : null);
   // The model number itself is not a discriminator (titles include it inconsistently).
   const titleForAnalysis = listing.modelNumber
@@ -98,6 +103,8 @@ export function normalizeListing(listing: ValidListing): NormalizedListing {
     discriminators,
     modelNumber: listing.modelNumber ? cleanDisplay(listing.modelNumber) : null,
     modelKey: mKey,
+    mpn: listing.mpn ? cleanDisplay(listing.mpn) : null,
+    mpnKey: modelKey(listing.mpn),
     fingerprint: mKey ? `${bKey}:${mKey}` : null,
     identifiers: classifyBarcode(listing.barcode),
     attributes,

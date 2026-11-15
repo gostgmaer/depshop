@@ -5,8 +5,11 @@ copy or edit it, and there is no tenant, organization or membership concept
 anywhere in it. User features (watchlists, alerts, searches) reference shared
 variants and offers by id.
 
-Code: `packages/catalog` (`@dealmind/catalog`: normalization, matching,
-import, sample data, cache keys), `apps/api/src/modules/catalog` (read APIs),
+Code: `packages/catalog` (`@dealmind/catalog`: listing contract,
+normalization, cache keys), `packages/intelligence/src/matching` (Phase 3.2
+matching engine, importer, duplicate detection, review workflow; see
+[MATCHING.md](MATCHING.md)), `packages/intelligence/src/sample-data`,
+`apps/api/src/modules/catalog` (read APIs),
 `apps/api/src/modules/admin/admin-catalog-routes.ts` (review queue).
 
 ## Data model
@@ -45,27 +48,13 @@ For each listing from an **ACTIVE** source (anything else raises
    - Brand aliases map to one canonical brand (`MI` → Xiaomi, `Samsung Electronics` → Samsung, `Hewlett-Packard` → HP; sub-brands like Redmi and POCO stay separate).
    - Model numbers are canonicalized (`SM-S921B/DS` → `SMS921BDS`).
    - Barcodes are check-digit validated and filed as GTIN-8/14, EAN-13 or UPC-A; invalid codes are dropped.
-   - RAM and storage are parsed only from explicit patterns (`8GB RAM`, `8GB+128GB`, `1 TB SSD`). A lone "128 GB" is ambiguous and not assigned.
+   - RAM and storage are parsed from explicit patterns (`8GB RAM`, `8GB+128GB`, `1 TB SSD`). A lone capacity ("128 GB") is storage for phones, tablets and wearables and `capacity_gb` otherwise, so 128 GB and 256 GB never share a variant key. A labelled RAM plus exactly one other capacity ≥ 16 GB makes that capacity storage.
+   - `+` is kept as "plus" (`S25+` ≠ `S25`) unless it joins capacities (`8GB+128GB`).
    - Appliance capacities (L, kg, ton) are parsed.
-   - Colours: the published name is kept, plus a key and a coarse family (`Titanium Blue` → `blue`).
+   - Colours: the published name is kept, plus a spelling- and order-insensitive key (`Gray`/`Grey`, `Black Titanium`/`Titanium Black`) and a coarse family (`Titanium Blue` → `blue`). A colour named only in the title is used when no attribute is provided.
+   - Offer URLs are canonicalized (tracking parameters and `www.` removed, parameters sorted) to detect duplicate offers.
    - The display name drops variant descriptors, and `normalizedName` keeps the brand, line, generation tokens and qualifiers.
-3. **Match** (`CatalogMatcher`), in priority order:
-   1. Barcode on a variant or product, in any equivalent form (UPC-A ≡ `0`+EAN-13 ≡ `00`+GTIN-14). The exact variant is pinned.
-   2. Brand + model-number fingerprint (confidence 9800).
-   3. Brand + exact normalized name (confidence 9500).
-   4. Brand + pg_trgm similarity of normalized names (confidence = similarity × 10000).
-
-   **Guards that prevent wrong merges:**
-   - Every token with a digit (`15`, `s24`, `55inch`, `2024`) and every line qualifier (`pro`, `max`, `plus`, `ultra`, `lite`, `mini`, `fe`, `5g`, …) is a discriminator.
-   - If both sides have discriminators the other lacks (`iPhone 14` vs `15`), it's a different product.
-   - A one-sided difference (`Nova 7` vs `Nova 7 Pro`) is always sent to review and never auto-merged.
-   - A different model number is a different product.
-   - A barcode hit on another brand goes to review.
-   - RAM, storage, capacity and colour are variant attributes, so they produce separate variants of one product and are never merged into one variant.
-
-   **Thresholds** (configurable `MatchThresholds`, validated `reviewBp ≤ autoMatchBp ≤ 10000`): auto-match at 9200 bp or more; review from 7500 bp up to (not including) 9200; fuzzy candidates are only considered at pg_trgm similarity 0.55 or more. Anything below the review threshold becomes a new product. Semantic/embedding similarity is not used yet.
-
-   The method, confidence and evidence (identifier, fingerprint, similarity, conflicts, reason) are stored on the offer, or on the review.
+3. **Match** with the Phase 3.2 engine (`MatchingEngine`): GTIN/EAN/UPC → MPN → brand + model number → normalized title → pg_trgm → optional semantic, with category-aware critical-attribute guards and variant placement. Title similarity alone never auto-merges. Every decision is appended to `ProductMatchAudit`. Details, thresholds and measured accuracy: [MATCHING.md](MATCHING.md).
 
 4. **Write**, in one transaction per listing, serialized per brand with `pg_advisory_xact_lock` so concurrent imports can't create duplicate products. A unique-violation race is retried once.
    - Create the product (NEW) or fill only its still-empty fields (never overwrite).
@@ -77,7 +66,7 @@ For each listing from an **ACTIVE** source (anything else raises
 
 5. **Invalidate** the cache through `onProductsChanged(productIds)`. Use `invalidateProductCaches(redis, prefix, ids)` outside the API.
 
-**Manual review:** `resolveReview(id, {action: "match", productId} | {action: "create"} | {action: "reject"})` replays the stored listing through the same write path. Admin API:
+**Manual review:** `resolveReview(id, {action: "match", productId} | {action: "create"} | {action: "reject"}, reviewer)` replays the stored listing through the same write path and appends a `REVIEW_RESOLVED` audit row naming the human reviewer. Admin API:
 
 - `GET  /api/v1/admin/catalog/match-reviews?status=PENDING`
 - `POST /api/v1/admin/catalog/match-reviews/:id/resolve` (ADMIN only, audited as `admin.catalog_match_review_resolved`)
@@ -164,7 +153,7 @@ otherwise.
 
 - **No live marketplace data.** No connectors exist yet (Phase 3), all real sources are DISABLED, and the only offers are labeled sample data. The worker completes searches with zero results and a `SKIPPED`/`NO_CONNECTOR` run per active source.
 - **Barcodes are stored on variants.** The importer never sets product-level `gtin`/`ean`/`upc`, because marketplace barcodes identify a sellable variant. The product columns exist for curated data.
-- **Deterministic matching only.** It's tuned on the cases in the tests, not on a real marketplace corpus; thresholds will need calibration once connectors provide data. There's no semantic (embedding) matching yet. Titles that write a model token differently (`Nova7` vs `Nova 7`) aren't merged automatically; they become separate products or go to review.
+- **Matching thresholds are tuned on a 46-pair labelled dataset and synthetic benchmarks**, not on a real marketplace corpus (see [MATCHING.md](MATCHING.md#limitations)).
 - **Product listing isn't cached.** At large scale, a denormalized offer summary maintained by the importer would replace the per-request aggregation.
 - **Some writes skip cache invalidation.** Admin category and product edits don't exist yet; when they do, they must call `invalidateCategories()`/`invalidateProducts()`. Until then, out-of-band SQL edits show after the TTL (tested).
 - **No admin UI for the review queue yet.** The API exists; the UI is Phase 10.

@@ -42,7 +42,8 @@ import {
   RedisResponseCache,
   createDefaultRegistry,
 } from "@dealmind/connectors";
-import { CatalogImporter, invalidateProductCaches } from "@dealmind/catalog";
+import { invalidateProductCaches } from "@dealmind/catalog";
+import { CatalogImporter, MatchReviewService, MatchService, MatchingEngine } from "@dealmind/intelligence";
 import { InternalIntelligence } from "./modules/internal/internal-intelligence.js";
 import { internalRoutes } from "./modules/internal/internal-routes.js";
 import { agentCanceller } from "./modules/internal/agent-client.js";
@@ -356,9 +357,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       allowMocks: env.CONNECTORS_ALLOW_MOCKS,
       logger: app.log,
     });
-    const importer = new CatalogImporter(prisma, {
-      onProductsChanged: (ids) => invalidateProductCaches(redis, env.REDIS_KEY_PREFIX, ids),
-    });
+    const onProductsChanged = (ids: string[]) => invalidateProductCaches(redis, env.REDIS_KEY_PREFIX, ids);
+    const engine = new MatchingEngine();
+    const importer = new CatalogImporter(prisma, { engine, onProductsChanged });
     await app.register(internalRoutes, {
       prefix: "/internal/v1",
       prisma,
@@ -370,6 +371,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       sources,
       executor,
       intelligence: new InternalIntelligence(prisma, importer),
+      matches: new MatchService(prisma, engine),
+      reviews: new MatchReviewService(prisma, importer, onProductsChanged),
+      reviewContextSecret: env.REVIEW_CONTEXT_SECRET ?? null,
       catalog,
       allowMocks: env.CONNECTORS_ALLOW_MOCKS,
     });

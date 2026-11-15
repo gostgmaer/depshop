@@ -187,3 +187,56 @@ class SearchRecord(CamelModel):
 class CategoryRef(CamelModel):
     slug: str
     name: str
+
+
+# ── Product matching (deterministic TypeScript engine; humans resolve reviews) ──
+
+MatchDecision = Literal["AUTO_MERGE", "MANUAL_REVIEW", "NEW_PRODUCT"]
+
+
+class MatchProductRef(CamelModel):
+    id: str | None = None
+    label: str
+    brand: str
+
+
+class MatchCandidate(CamelModel):
+    product_id: str | None = None
+    label: str
+    score: float
+    decision: str
+
+
+class MatchResult(CamelModel):
+    """One listing vs the shared catalog: a dry run (the catalog is not changed).
+    MANUAL_REVIEW means a human admin must decide; the agent never can."""
+
+    match_id: str
+    product_a: dict[str, Any]
+    product_b: MatchProductRef | None = None
+    score: float
+    score_bp: int
+    confidence: Literal["VERY_HIGH", "HIGH", "REVIEW", "LOW"]
+    decision: MatchDecision
+    method: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    variant: dict[str, Any] | None = None
+    candidates: list[MatchCandidate] = Field(default_factory=list)
+    review_id: str | None = None
+    deduplicated: bool = False
+
+
+class MatchRecord(CamelModel):
+    """Audit record of a match decision with its review status and resolutions."""
+
+    id: str
+    subject: str
+    origin: str
+    decision: str
+    method: str
+    score: float
+    candidate_product_id: str | None = None
+    result_product_id: str | None = None
+    review: dict[str, Any] | None = None
+    resolutions: list[dict[str, Any]] = Field(default_factory=list)

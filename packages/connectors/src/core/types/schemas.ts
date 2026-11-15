@@ -102,6 +102,8 @@ export const normalizedProductSchema = z
     imageUrl: httpUrl.optional(),
     categoryPath: z.array(z.string().max(100)).max(10).optional(),
     modelNumber: z.string().trim().min(1).max(100).optional(),
+    /** Manufacturer part number (one configuration), only when the source publishes it. */
+    mpn: z.string().trim().min(2).max(100).optional(),
     barcode: z.string().trim().max(20).optional(),
     sellingPricePaise: paise,
     mrpPaise: paise.optional(),

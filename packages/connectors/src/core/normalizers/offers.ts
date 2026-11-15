@@ -84,6 +84,7 @@ export function toSourceListing(p: NormalizedProduct, categorySlug?: string): So
     productUrl: p.productUrl,
     brand: p.brand,
     ...(p.modelNumber ? { modelNumber: p.modelNumber } : {}),
+    ...(p.mpn ? { mpn: p.mpn } : {}),
     ...(p.barcode ? { barcode: p.barcode } : {}),
     ...(categorySlug ? { categorySlug } : {}),
     ...(p.imageUrl ? { imageUrl: p.imageUrl } : {}),

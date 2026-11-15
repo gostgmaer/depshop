@@ -3,7 +3,7 @@
  * ADMIN role required (server-side). Resolving replays the stored listing
  * through the normal importer and invalidates the affected product caches.
  */
-import { CatalogImporter, SourceNotActiveError } from "@dealmind/catalog";
+import { CatalogImporter, ReviewInputError, SourceNotActiveError } from "@dealmind/intelligence";
 import type { PrismaClient } from "@dealmind/db";
 import { AppError, ErrorCode, pageQuery, paginationOf } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
@@ -124,8 +124,9 @@ export const adminCatalogRoutes: FastifyPluginAsyncZod<{
       }
       let outcome;
       try {
-        outcome = await importer.resolveReview(review.id, req.body);
+        outcome = await importer.resolveReview(review.id, req.body, { userId: getAuth(req).userId });
       } catch (err) {
+        if (err instanceof ReviewInputError) throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
         if (err instanceof SourceNotActiveError) {
           throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
         }

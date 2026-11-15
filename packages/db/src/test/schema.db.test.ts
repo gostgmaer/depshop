@@ -69,6 +69,7 @@ describe("schema: no multi-tenancy", () => {
         "PriceAlert",
         "PriceSnapshot",
         "Product",
+        "ProductMatchAudit",
         "ProductMatchReview",
         "ProductOffer",
         "ProductVariant",

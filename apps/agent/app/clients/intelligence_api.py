@@ -12,6 +12,8 @@ from app.schemas.internal import (
     CategoryRef,
     DedupResult,
     MarketplaceProduct,
+    MatchRecord,
+    MatchResult,
     NormalizedItem,
     OfferFacts,
     RankedOffer,
@@ -84,6 +86,42 @@ class IntelligenceApiClient:
             correlation_id=correlation_id,
         )
         return [RankedOffer.model_validate(r) for r in data["ranked"]]
+
+    # ── product matching (dry run; review decisions are for human admins only) ──
+    # There is deliberately no review method: resolving a MANUAL_REVIEW needs a
+    # reviewer context signed by the admin backend, which this service never has.
+
+    async def match(
+        self, listing: dict[str, Any], *, source_id: str | None = None, correlation_id: str
+    ) -> MatchResult:
+        body: dict[str, Any] = {"listing": listing}
+        if source_id:
+            body["sourceId"] = source_id
+        # Not retried: every call appends an audit record (and may queue a review).
+        data = await self._api.request(
+            "POST", "/intelligence/match", json=body, correlation_id=correlation_id, idempotent=False
+        )
+        return MatchResult.model_validate(data)
+
+    async def match_batch(self, items: list[dict[str, Any]], *, correlation_id: str) -> list[MatchResult]:
+        """items: [{"listing": {...}, "sourceId"?: str}]; sent in chunks of 100."""
+        out: list[MatchResult] = []
+        for start in range(0, len(items), 100):
+            data = await self._api.request(
+                "POST",
+                "/intelligence/match/batch",
+                json={"items": items[start : start + 100]},
+                correlation_id=correlation_id,
+                idempotent=False,
+            )
+            out.extend(MatchResult.model_validate(r) for r in data["results"])
+        return out
+
+    async def get_match(self, match_id: str, *, correlation_id: str) -> MatchRecord:
+        data = await self._api.request(
+            "GET", f"/intelligence/matches/{match_id}", correlation_id=correlation_id
+        )
+        return MatchRecord.model_validate(data)
 
     # ── user-owned records (signed user context + ownership re-checked by Fastify) ──
 

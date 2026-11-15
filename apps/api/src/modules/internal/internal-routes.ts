@@ -11,6 +11,13 @@
  *    POST /intelligence/deduplicate   catalog matching → shared offers, product/variant groups
  *    POST /intelligence/pricing       facts + genuine-discount assessment per offer id
  *    POST /intelligence/rank          deterministic ranking of offer ids
+ *  Matching (@dealmind/intelligence matching engine; dry run + audit trail)
+ *    POST /intelligence/match               match one listing against the shared catalog
+ *    POST /intelligence/match/batch         up to 100 listings (identical requests deduplicated)
+ *    GET  /intelligence/matches/:id         a match audit record, its review and resolutions
+ *    POST /intelligence/matches/:id/review  HUMAN-only: needs a reviewer context signed by
+ *                                           the admin backend (REVIEW_CONTEXT_SECRET, which
+ *                                           the agent never has) + an ACTIVE ADMIN user
  *  Private records (signed user context + ownership re-checked)
  *    GET  /searches/:id               the search, only for its owner
  *    POST /searches/:id/events        progress event → SSE subscribers
@@ -26,15 +33,32 @@ import {
   shoppingSearchRequestSchema,
 } from "@dealmind/connectors";
 import type { Prisma, PrismaClient } from "@dealmind/db";
-import { SORT_MODES } from "@dealmind/intelligence";
+import {
+  type MatchReviewService,
+  type MatchService,
+  ReviewInputError,
+  ReviewNotAllowedError,
+  SORT_MODES,
+  matchBatchSchema,
+  matchRequestSchema,
+  reviewRequestSchema,
+} from "@dealmind/intelligence";
 import { AppError, ErrorCode } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import type { Redis } from "ioredis";
 import { z } from "zod";
 import type { InternalIntelligence } from "./internal-intelligence.js";
-import { type UserContext, serviceAuth, verifyUserContext } from "./service-auth.js";
+import {
+  type UserContext,
+  serviceAuth,
+  verifyReviewerContext,
+  verifyUserContext,
+} from "./service-auth.js";
 
 export const USER_CONTEXT_HEADER = "x-dealmind-user-context";
+export const REVIEWER_CONTEXT_HEADER = "x-dealmind-reviewer-context";
+/** A reviewer context is a short-lived, per-decision grant. */
+const MAX_REVIEWER_CONTEXT_SECONDS = 15 * 60;
 
 export interface InternalDeps {
   prisma: PrismaClient;
@@ -48,6 +72,10 @@ export interface InternalDeps {
   intelligence: InternalIntelligence;
   catalog: CatalogService;
   allowMocks: boolean;
+  matches: MatchService;
+  reviews: MatchReviewService;
+  /** Unset → match reviews cannot be resolved through the internal API. */
+  reviewContextSecret: string | null;
 }
 
 const slug = z.string().regex(/^[a-z][a-z0-9_]{0,49}$/);
@@ -308,6 +336,69 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
     async (req) => ({
       ranked: await deps.intelligence.rank(req.body.query, req.body.mode, req.body.offerIds),
     }),
+  );
+
+  app.post(
+    "/intelligence/match",
+    { config: noRateLimit, schema: { body: matchRequestSchema } },
+    async (req) => deps.matches.match(req.body),
+  );
+
+  app.post(
+    "/intelligence/match/batch",
+    { config: noRateLimit, schema: { body: matchBatchSchema } },
+    async (req) => ({ results: await deps.matches.matchBatch(req.body.items) }),
+  );
+
+  app.get(
+    "/intelligence/matches/:id",
+    { config: noRateLimit, schema: { params: z.object({ id: uuid }) } },
+    async (req) => {
+      const match = await deps.reviews.getMatch(req.params.id);
+      if (!match) throw AppError.notFound("Match");
+      return match;
+    },
+  );
+
+  app.post(
+    "/intelligence/matches/:id/review",
+    {
+      config: noRateLimit,
+      schema: { params: z.object({ id: uuid }), body: reviewRequestSchema },
+    },
+    async (req) => {
+      // The service token alone (what the agent holds) is never enough to approve a merge.
+      const header = req.headers[REVIEWER_CONTEXT_HEADER];
+      const ctx =
+        deps.reviewContextSecret && typeof header === "string"
+          ? verifyReviewerContext(header, deps.reviewContextSecret)
+          : null;
+      if (!ctx) throw new AppError(ErrorCode.FORBIDDEN, "Signed human reviewer context required");
+      if (ctx.matchId !== req.params.id)
+        throw new AppError(ErrorCode.FORBIDDEN, "Reviewer context does not match this match");
+      if (ctx.exp - Date.now() / 1000 > MAX_REVIEWER_CONTEXT_SECONDS)
+        throw new AppError(ErrorCode.FORBIDDEN, "Reviewer context lifetime too long");
+      if (!(await deps.reviews.getMatch(req.params.id))) throw AppError.notFound("Match");
+      try {
+        const result = await deps.reviews.review(req.params.id, req.body.resolution, {
+          userId: ctx.reviewerUserId,
+          ...(req.body.note ? { note: req.body.note } : {}),
+        });
+        req.log.info(
+          { matchId: req.params.id, action: req.body.resolution.action },
+          "match review resolved",
+        );
+        return { matchId: req.params.id, action: req.body.resolution.action, ...result };
+      } catch (err) {
+        if (err instanceof ReviewNotAllowedError) throw new AppError(ErrorCode.FORBIDDEN, err.message);
+        if (err instanceof ReviewInputError) {
+          if (/already been reviewed|No pending review/.test(err.message))
+            throw AppError.conflict(err.message);
+          throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
+        }
+        throw err;
+      }
+    },
   );
 
   app.get(

@@ -15,10 +15,18 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
+    "seed:sample": "dotenv -e ../../.env -- node dist/sample-data/seed-sample-cli.js",
+    "bench:matching": "dotenv -e ../../.env -- node dist/matching/bench/run-bench.js"
   },
   "dependencies": {
     "@dealmind/catalog": "workspace:*",
-    "@dealmind/shared": "workspace:*"
+    "@dealmind/shared": "workspace:*",
+    "@dealmind/db": "workspace:*",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0"
   }
 }

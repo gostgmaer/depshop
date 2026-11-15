@@ -46,3 +46,45 @@ export function verifyUserContext(
     return null;
   }
 }
+
+/**
+ * Signed reviewer context: proves a HUMAN admin (verified by the admin backend
+ * session) asked for a match review decision. Signed with REVIEW_CONTEXT_SECRET,
+ * which only the Fastify admin layer holds — never the Python agent.
+ */
+export interface ReviewerContext {
+  reviewerUserId: string;
+  matchId: string;
+  exp: number;
+}
+
+export function signReviewerContext(ctx: ReviewerContext, secret: string): string {
+  const body = Buffer.from(JSON.stringify(ctx)).toString("base64url");
+  return `${body}.${createHmac("sha256", secret).update(`review:${body}`).digest("base64url")}`;
+}
+
+export function verifyReviewerContext(
+  token: string,
+  secret: string,
+  nowSeconds = Date.now() / 1000,
+): ReviewerContext | null {
+  const [body, sig, extra] = token.split(".");
+  if (!body || !sig || extra !== undefined) return null;
+  const expected = createHmac("sha256", secret).update(`review:${body}`).digest();
+  const given = Buffer.from(sig, "base64url");
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  try {
+    const ctx = JSON.parse(Buffer.from(body, "base64url").toString()) as Partial<ReviewerContext>;
+    if (
+      typeof ctx.reviewerUserId !== "string" ||
+      typeof ctx.matchId !== "string" ||
+      typeof ctx.exp !== "number" ||
+      ctx.exp < nowSeconds
+    ) {
+      return null;
+    }
+    return ctx as ReviewerContext;
+  } catch {
+    return null;
+  }
+}

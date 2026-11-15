@@ -81,6 +81,8 @@ class FakeBackend:
     in_flight: int = 0
     peak_in_flight: int = 0
     offers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    matches: dict[str, dict[str, Any]] = field(default_factory=dict)
+    catalog_gtins: dict[str, dict[str, Any]] = field(default_factory=dict)  # gtin → product ref
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -103,6 +105,8 @@ class FakeBackend:
                 return httpx.Response(
                     status, json={"success": False, "error": {"code": "X", "message": "boom"}}
                 )
+        if m := re.fullmatch(r"/intelligence/matches/([0-9a-f-]+)(/review)?", path):
+            return self._match_record(request, m.group(1), m.group(2) is not None)
         if m := re.fullmatch(r"/searches/([0-9a-f-]+)(/.*)?", path):
             return self._private(request, m.group(1), m.group(2) or "", body)
         route = getattr(self, "_" + path.strip("/").replace("/", "_").replace("-", "_"), None)
@@ -157,6 +161,75 @@ class FakeBackend:
             self.saved.setdefault(search_id, []).append(body)
             return httpx.Response(200, json={"saved": True})
         return httpx.Response(404)
+
+    def _match_record(self, request: httpx.Request, match_id: str, review: bool) -> httpx.Response:
+        if review:
+            # Mirrors Fastify: the service token alone can never resolve a review.
+            if not request.headers.get("x-dealmind-reviewer-context"):
+                return httpx.Response(
+                    403, json={"success": False, "error": {"code": "FORBIDDEN", "message": "reviewer"}}
+                )
+            return httpx.Response(500)
+        rec = self.matches.get(match_id)
+        if rec is None:
+            return httpx.Response(
+                404, json={"success": False, "error": {"code": "NOT_FOUND", "message": "Match"}}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": match_id,
+                "subject": "LISTING",
+                "origin": "INTERNAL_API",
+                "decision": rec["decision"],
+                "method": rec["method"],
+                "score": rec["score"],
+                "candidateProductId": (rec["productB"] or {}).get("id"),
+                "review": {"id": rec["reviewId"], "status": "PENDING"} if rec["reviewId"] else None,
+                "resolutions": [],
+            },
+        )
+
+    def _match_one(self, req: dict[str, Any]) -> dict[str, Any]:
+        listing = req["listing"]
+        known = self.catalog_gtins.get(listing.get("barcode", ""))
+        product_b: dict[str, Any] | None
+        if known:
+            decision, method, score, product_b = "AUTO_MERGE", "IDENTIFIER", 100.0, known
+        elif "pro" in listing["title"].lower().split():
+            decision, method, score = "MANUAL_REVIEW", "FUZZY_TITLE", 82.6
+            product_b = {
+                "id": "01000000-0000-7000-8000-000000000001",
+                "label": "Acme Nova 7",
+                "brand": "Acme",
+            }
+        else:
+            decision, method, score, product_b = "NEW_PRODUCT", "NEW_PRODUCT", 0.0, None
+        match_id = f"02000000-0000-7000-8000-{len(self.matches):012d}"
+        queued = decision == "MANUAL_REVIEW" and req.get("sourceId")
+        rec: dict[str, Any] = {
+            "matchId": match_id,
+            "productA": {"label": listing["title"], "brand": listing["brand"]},
+            "productB": product_b,
+            "score": score,
+            "scoreBp": int(score * 100),
+            "confidence": "VERY_HIGH" if score >= 98 else "REVIEW" if score >= 75 else "LOW",
+            "decision": decision,
+            "method": method,
+            "evidence": {},
+            "conflicts": [],
+            "variant": None,
+            "candidates": [],
+            "reviewId": "03000000-0000-7000-8000-000000000001" if queued else None,
+        }
+        self.matches[match_id] = rec
+        return rec
+
+    def _intelligence_match(self, body: Any) -> dict[str, Any]:
+        return self._match_one(body)
+
+    def _intelligence_match_batch(self, body: Any) -> dict[str, Any]:
+        return {"results": [self._match_one(i) for i in body["items"]]}
 
     # ── public routes (mirror /internal/v1) ──────────────────────────────
     def _categories(self, _body: Any) -> dict[str, Any]:

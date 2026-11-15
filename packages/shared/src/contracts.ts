@@ -18,9 +18,11 @@ export const stockStatus = z.enum(["IN_STOCK", "LIMITED", "OUT_OF_STOCK", "PREOR
 export type StockStatusValue = z.infer<typeof stockStatus>;
 export const matchMethod = z.enum([
   "IDENTIFIER",
+  "MPN",
   "MODEL_NUMBER",
   "NORMALIZED_TITLE",
   "FUZZY_TITLE",
+  "SEMANTIC",
   "MANUAL",
   "NEW_PRODUCT",
 ]);

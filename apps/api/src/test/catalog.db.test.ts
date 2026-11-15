@@ -3,13 +3,8 @@
  * Data is created through the real importer from a test source with the
  * fictional brand "Acme" plus the labeled development sample catalog.
  */
-import {
-  CatalogImporter,
-  type SourceListing,
-  catalogCacheKey,
-  invalidateProductCaches,
-  seedSampleCatalog,
-} from "@dealmind/catalog";
+import { type SourceListing, catalogCacheKey, invalidateProductCaches } from "@dealmind/catalog";
+import { CatalogImporter, seedSampleCatalog } from "@dealmind/intelligence";
 import { RedisMetricsStore } from "@dealmind/connectors";
 import { seedReferenceData } from "@dealmind/db";
 import type { ErrorResponseBody } from "@dealmind/shared";
@@ -545,7 +540,11 @@ describe("admin: manual match review", () => {
       status: "PENDING",
       method: "FUZZY_TITLE",
       candidateProduct: { name: "Acme Nova 7 5G" },
-      evidence: { conflicts: ["pro"] },
+      evidence: {
+        conflicts: [
+          expect.objectContaining({ attribute: "generation", a: "pro", severity: "soft" }),
+        ],
+      },
     });
     const id = list.data[0]!.id;
     const baseId = await productId("Acme Nova 7 5G");

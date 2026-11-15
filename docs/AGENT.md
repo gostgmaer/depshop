@@ -20,6 +20,7 @@ browser ─POST /api/v1/search─▶ Fastify ──creates Search(PENDING)──
                                                                     ├─ /sources/eligible, /marketplace/search  → @dealmind/connectors
                                                                     ├─ /intelligence/normalize|deduplicate     → @dealmind/catalog
                                                                     ├─ /intelligence/pricing|rank              → @dealmind/intelligence
+                                                                    ├─ /intelligence/match[/batch], matches/:id → matching engine (dry run)
                                                                     └─ /searches/:id/(events|agent-result)     → DB (ownership re-checked)
 browser ◀─GET /api/v1/search/:id/events (SSE)── Redis pub/sub ◀── progress events
 ```
@@ -66,12 +67,13 @@ The reducers accumulate across iterations. There is no tenant, organization or m
 
 ## Security model
 
-| Hop                     | Authentication                                                                   | Notes                                                                                                                                                                                                                                          |
-| ----------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| worker/API → agent      | `Authorization: Bearer AGENT_SERVICE_TOKEN` (constant-time compare)              | Internal network only: no published port, no Traefik labels                                                                                                                                                                                    |
-| agent → Fastify         | `Authorization: Bearer INTERNAL_API_TOKEN`                                       | `/internal/v1` is registered only when the token and secret are configured. Traefik routes only `/api`. No cookies, no CSRF                                                                                                                    |
-| user identity           | **Signed user context** (HMAC-SHA256, `AGENT_USER_CONTEXT_SECRET`, short expiry) | The worker signs the authenticated owner of the search. The agent verifies it (and that it matches the search and execution). Fastify verifies it again and checks database ownership on every private call. A bare `user_id` is never trusted |
-| marketplace credentials | env of the TypeScript API/worker only                                            | Never passed to, or visible to, the agent                                                                                                                                                                                                      |
+| Hop                     | Authentication                                                                                                                           | Notes                                                                                                                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| worker/API → agent      | `Authorization: Bearer AGENT_SERVICE_TOKEN` (constant-time compare)                                                                      | Internal network only: no published port, no Traefik labels                                                                                                                                                                                    |
+| agent → Fastify         | `Authorization: Bearer INTERNAL_API_TOKEN`                                                                                               | `/internal/v1` is registered only when the token and secret are configured. Traefik routes only `/api`. No cookies, no CSRF                                                                                                                    |
+| user identity           | **Signed user context** (HMAC-SHA256, `AGENT_USER_CONTEXT_SECRET`, short expiry)                                                         | The worker signs the authenticated owner of the search. The agent verifies it (and that it matches the search and execution). Fastify verifies it again and checks database ownership on every private call. A bare `user_id` is never trusted |
+| match reviews           | **Not possible for the agent**: needs a reviewer context signed with `REVIEW_CONTEXT_SECRET` (admin backend only) + an ACTIVE ADMIN user | The agent client has `match`, `match_batch`, `get_match` and no review method; see [MATCHING.md](MATCHING.md)                                                                                                                                  |
+| marketplace credentials | env of the TypeScript API/worker only                                                                                                    | Never passed to, or visible to, the agent                                                                                                                                                                                                      |
 
 The persisted results contain offer ids only. `pricePaiseAtSearch` and `mrpPaiseAtSearch` are read from the database by Fastify.
 
@@ -136,7 +138,7 @@ Docker: `docker compose --profile app up` builds `apps/agent/Dockerfile` (non-ro
 
 ## Tests
 
-- **Python:** 47 pytest tests with mocked LLM responses and a contract-faithful fake of the internal API. They cover all 18 required categories, plus checkpoint resume, cancellation, timeout and narration grounding. A token signed by the TypeScript `signUserContext` must verify in Python, and Python must produce the identical token.
+- **Python:** 53 pytest tests (6 for the matching client, including "the service token alone cannot resolve a review") with mocked LLM responses and a contract-faithful fake of the internal API. They cover all 18 required categories, plus checkpoint resume, cancellation, timeout and narration grounding. A token signed by the TypeScript `signUserContext` must verify in Python, and Python must produce the identical token.
 - **TypeScript:** 13 internal-API integration tests (real PostgreSQL + Redis + mock connectors), 3 search-API tests and 6 worker supervision tests.
 - **Cross-language E2E:** run against a disposable database. The built Fastify API, the BullMQ worker and the Python agent (Postgres checkpointer) processed a real queued search. A run looked like this:
   - result COMPLETED;

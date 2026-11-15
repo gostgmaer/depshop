@@ -3,7 +3,6 @@
  * agent receives is computed here from source/database data; the agent can
  * only reference offers by id, never supply prices.
  */
-import type { CatalogImporter } from "@dealmind/catalog";
 import { normalizeListing, sourceListingSchema } from "@dealmind/catalog";
 import { type NormalizedProduct, toSourceListing } from "@dealmind/connectors";
 import type { PrismaClient } from "@dealmind/db";
@@ -13,6 +12,7 @@ import {
   type SortMode,
   assessPrice,
   rankDeals,
+  type CatalogImporter,
 } from "@dealmind/intelligence";
 import { paiseFromDb, paiseFromDbOrNull } from "@dealmind/shared";
 

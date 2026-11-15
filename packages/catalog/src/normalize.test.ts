@@ -80,6 +80,17 @@ describe("units, colours and variant attributes", () => {
       ram_gb: 16,
       storage_gb: 1024,
     });
+    // Labelled RAM + one unlabelled capacity → that capacity is the storage.
+    expect(parseMemoryFromTitle("Samsung Galaxy S25 5G, 12GB RAM, 256GB, Navy")).toEqual({
+      ram_gb: 12,
+      storage_gb: 256,
+    });
+    expect(parseMemoryFromTitle("Samsung S25 5G Smartphone, 256 GB, 12 GB RAM, Blue")).toEqual({
+      ram_gb: 12,
+      storage_gb: 256,
+    });
+    // Two unlabelled capacities next to RAM stay ambiguous.
+    expect(parseMemoryFromTitle("Phone 8GB RAM 128GB 256GB")).toEqual({ ram_gb: 8 });
     // A lone capacity is ambiguous: not assigned to RAM or storage.
     expect(parseMemoryFromTitle("Phone 128 GB")).toEqual({});
   });
@@ -87,7 +98,7 @@ describe("units, colours and variant attributes", () => {
   it("keeps the published colour name and derives a family", () => {
     expect(normalizeColour("Titanium Blue")).toEqual({
       name: "Titanium Blue",
-      key: "titanium-blue",
+      key: "blue-titanium",
       family: "blue",
     });
     expect(normalizeColour("Midnight")).toMatchObject({ family: "black" });
@@ -100,7 +111,7 @@ describe("units, colours and variant attributes", () => {
       Storage: "256 GB",
     });
     expect(a).toEqual({ ram_gb: 8, storage_gb: 256, color: "Onyx Black", color_family: "black" });
-    expect(variantKeyOf(a)).toBe("color=onyx-black|ram_gb=8|storage_gb=256");
+    expect(variantKeyOf(a)).toBe("color=black-onyx|ram_gb=8|storage_gb=256");
     expect(variantKeyOf({ storage_gb: 256, ram_gb: 8, color: "Onyx Black" })).toBe(variantKeyOf(a));
     expect(variantKeyOf({})).toBe("default");
   });
@@ -162,8 +173,8 @@ describe("listing validation and normalization", () => {
       brand: "Redmi",
       fingerprint: "redmi:2312DRA50I",
       identifiers: { ean: "4006381333931" },
-      attributes: { ram_gb: 8, storage_gb: 256 },
-      variantKey: "ram_gb=8|storage_gb=256",
+      attributes: { ram_gb: 8, storage_gb: 256, color: "Arctic White", color_family: "white" },
+      variantKey: "color=arctic-white|ram_gb=8|storage_gb=256",
     });
     expect(n.raw.stockStatus).toBe("UNKNOWN"); // not provided → unknown, never assumed
     expect(n.raw.specifications).toEqual({});
@@ -198,5 +209,24 @@ describe("display names", () => {
       "Levi's 511 Slim Fit Jeans",
     );
     expect(productDisplayName("Sony WH-1000XM5 (Wireless)")).toBe("Sony WH-1000XM5 (Wireless)");
+  });
+
+  it("never lets spelling, word order or a trailing plus hide a difference", () => {
+    expect(normalizeColour("Space Gray")?.key).toBe(normalizeColour("Space Grey")?.key);
+    expect(normalizeColour("Blue Titanium")).toMatchObject({
+      key: "blue-titanium",
+      family: "blue",
+    });
+    expect(normalizeText("Samsung Galaxy S25+ 5G")).toBe("samsung galaxy s25 plus 5g");
+    expect(normalizeText("Redmi Note 13 Pro+")).toBe("redmi note 13 pro plus");
+    expect(normalizeText("8GB+128GB")).toBe("8gb 128gb");
+  });
+
+  it("keeps a lone unlabelled capacity (storage for phones, capacity_gb elsewhere)", () => {
+    expect(
+      canonicalAttributes("Apple iPhone 15 (128 GB) - Black", {}, "smartphones"),
+    ).toMatchObject({ storage_gb: 128 });
+    expect(canonicalAttributes("Acme USB Drive 64 GB")).toMatchObject({ capacity_gb: 64 });
+    expect(canonicalAttributes("Acme Phone 128 GB / 256 GB")).not.toHaveProperty("capacity_gb");
   });
 });
