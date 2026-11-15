@@ -28,7 +28,7 @@ export function HistoryView() {
       ) : q.isError ? (
         <ErrorState message="Couldn't load your search history." onRetry={() => void q.refetch()} />
       ) : q.data.items.length ? (
-        <div className="rounded-xl border border-border bg-surface p-2 shadow-[var(--shadow-card)]">
+        <div className="rounded-xl border border-border bg-surface p-2 shadow-(--shadow-card)">
           <ul className="flex flex-col">
             {q.data.items.map((s) => (
               <SearchRow key={s.id} s={s} />

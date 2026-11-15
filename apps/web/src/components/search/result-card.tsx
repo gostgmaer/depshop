@@ -28,7 +28,7 @@ export function ResultCard({ result, index }: { result: SearchResultView; index:
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: Math.min(index, 8) * 0.03 }}
-      className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)] sm:flex-row"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card) sm:flex-row"
       aria-labelledby={`result-${offer.id}`}
     >
       <div className="flex gap-4 sm:w-[45%]">

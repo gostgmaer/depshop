@@ -24,7 +24,7 @@ export function NotificationList({
   onRead: (id: string) => void;
 }) {
   return (
-    <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface shadow-[var(--shadow-card)]">
+    <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface shadow-(--shadow-card)">
       {items.map((n) => (
         <li key={n.id} className={cn("flex gap-3 px-4 py-3", !n.readAt && "bg-accent-soft/40")}>
           <span

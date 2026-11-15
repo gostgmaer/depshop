@@ -50,7 +50,7 @@ export function AlertsView() {
           {q.data.items.map((a) => (
             <li
               key={a.id}
-              className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)]"
+              className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card)"
             >
               <BellRing
                 aria-hidden

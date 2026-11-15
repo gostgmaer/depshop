@@ -5,7 +5,7 @@ export function Card({ className, ...props }: ComponentProps<"section">) {
   return (
     <section
       className={cn(
-        "rounded-xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] sm:p-6",
+        "rounded-xl border border-border bg-surface p-5 shadow-(--shadow-card) sm:p-6",
         className,
       )}
       {...props}

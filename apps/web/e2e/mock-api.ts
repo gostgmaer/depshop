@@ -164,7 +164,18 @@ const server = createServer((req, res) => {
       })),
     );
     const prices = points.map((p) => p.sellingPricePaise);
-    return send(res, 200, ok({ productId: PRODUCT_ID, from: new Date(to - 30 * day).toISOString(), to: new Date(to).toISOString(), points, lowestPricePaise: Math.min(...prices), highestPricePaise: Math.max(...prices) }));
+    return send(
+      res,
+      200,
+      ok({
+        productId: PRODUCT_ID,
+        from: new Date(to - 30 * day).toISOString(),
+        to: new Date(to).toISOString(),
+        points,
+        lowestPricePaise: Math.min(...prices),
+        highestPricePaise: Math.max(...prices),
+      }),
+    );
   }
 
   // ── user-owned (session required) ──

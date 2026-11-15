@@ -79,7 +79,7 @@ export function ProductView({ id }: { id: string }) {
 
   return (
     <>
-      <section className="flex flex-col gap-5 rounded-xl border border-border bg-surface p-5 shadow-[var(--shadow-card)] md:flex-row">
+      <section className="flex flex-col gap-5 rounded-xl border border-border bg-surface p-5 shadow-(--shadow-card) md:flex-row">
         <ProductImage src={p.imageUrl} alt={p.name} size={160} />
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div>

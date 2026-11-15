@@ -2,6 +2,7 @@
 
 import { CheckCircle2, CircleDashed, CircleSlash, Clock4, Loader2, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { useSourceStatus } from "@/hooks/queries";
 import {
   STAGE_LABEL,
   type SearchProgress as Progress,
@@ -38,10 +39,19 @@ export interface SourceRow {
 }
 
 /** Live (SSE) statuses while running; persisted source runs once finished. */
-export function mergeSources(detail: SearchDetail | undefined, live: Progress): SourceRow[] {
+export function mergeSources(
+  detail: SearchDetail | undefined,
+  live: Progress,
+  names: Record<string, string> = {},
+): SourceRow[] {
   const rows = new Map<string, SourceRow>();
   for (const [slug, s] of Object.entries(live.sources)) {
-    rows.set(slug, { slug, name: slug, status: s.status, resultCount: s.resultCount });
+    rows.set(slug, {
+      slug,
+      name: names[slug] ?? slug,
+      status: s.status,
+      resultCount: s.resultCount,
+    });
   }
   for (const r of detail?.sourceRuns ?? []) {
     rows.set(r.source.slug, {
@@ -76,7 +86,9 @@ export function SearchProgressPanel({
   live: Progress;
   running: boolean;
 }) {
-  const sources = mergeSources(detail, live);
+  const status = useSourceStatus();
+  const names = Object.fromEntries((status.data?.sources ?? []).map((x) => [x.slug, x.name]));
+  const sources = mergeSources(detail, live, names);
   const stage = live.stage ? (STAGE_LABEL[live.stage] ?? live.stage) : running ? "Starting…" : null;
   return (
     <section
@@ -136,7 +148,7 @@ export function SearchProgressPanel({
         </p>
       )}
       {sources.some((s) => s.status === "FAILED" || s.status === "TIMED_OUT") ? (
-        <Badge tone="warning" className="self-start">
+        <Badge tone="warning" className="self-start whitespace-normal">
           Some marketplaces failed — results from the others are still shown
         </Badge>
       ) : null}

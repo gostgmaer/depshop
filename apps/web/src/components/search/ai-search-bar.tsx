@@ -83,7 +83,7 @@ export function AiSearchBar({
     >
       <div
         className={cn(
-          "relative flex items-center gap-2 rounded-2xl border border-border bg-surface p-2 shadow-[var(--shadow-card)] transition-shadow",
+          "relative flex items-center gap-2 rounded-2xl border border-border bg-surface p-2 shadow-(--shadow-card) transition-shadow",
           "focus-within:border-accent/50 focus-within:ring-4 focus-within:ring-accent/10",
         )}
       >

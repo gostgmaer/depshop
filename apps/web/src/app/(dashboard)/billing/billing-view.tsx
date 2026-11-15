@@ -126,7 +126,7 @@ export function BillingView() {
                 <li
                   key={p.code}
                   className={cn(
-                    "flex flex-col gap-3 rounded-xl border bg-surface p-5 shadow-[var(--shadow-card)]",
+                    "flex flex-col gap-3 rounded-xl border bg-surface p-5 shadow-(--shadow-card)",
                     current ? "border-primary/50" : "border-border",
                   )}
                 >

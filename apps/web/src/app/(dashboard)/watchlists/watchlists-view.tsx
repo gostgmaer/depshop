@@ -69,7 +69,7 @@ export function WatchlistsView() {
           {lists.data.items.map((w) => (
             <li
               key={w.id}
-              className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)]"
+              className="flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card)"
             >
               <Star aria-hidden className="size-5 text-warning" />
               <Link href={`/watchlists/${w.id}`} className="min-w-0 flex-1 hover:underline">

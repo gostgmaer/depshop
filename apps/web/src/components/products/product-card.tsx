@@ -40,7 +40,7 @@ export function ProductImage({
 
 export function ProductCard({ product }: { product: ProductSummary }) {
   return (
-    <article className="group relative flex h-full flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)] transition-colors hover:border-primary/40">
+    <article className="group relative flex h-full flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card) transition-colors hover:border-primary/40">
       <div className="flex items-start gap-3">
         <ProductImage src={product.imageUrl} alt={product.name} size={72} />
         <div className="min-w-0">

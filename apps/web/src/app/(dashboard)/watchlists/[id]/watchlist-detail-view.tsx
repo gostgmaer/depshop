@@ -38,7 +38,7 @@ export function WatchlistDetailView({ id }: { id: string }) {
           {w.items.map((i) => (
             <li
               key={i.id}
-              className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)]"
+              className="flex flex-wrap items-center gap-4 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card)"
             >
               <ProductImage src={i.product.imageUrl} alt="" size={56} />
               <div className="min-w-0 flex-1">

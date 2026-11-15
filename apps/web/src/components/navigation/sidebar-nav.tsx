@@ -16,7 +16,7 @@ export function Logo({ className }: { className?: string }) {
     >
       <span
         aria-hidden
-        className="grid size-7 place-items-center rounded-lg bg-gradient-to-br from-primary to-accent text-[13px] font-bold text-primary-foreground"
+        className="grid size-7 place-items-center rounded-lg bg-linear-to-br from-primary to-accent text-[13px] font-bold text-primary-foreground"
       >
         D
       </span>

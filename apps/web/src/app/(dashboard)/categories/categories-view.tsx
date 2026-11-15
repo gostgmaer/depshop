@@ -29,7 +29,7 @@ export function CategoriesView() {
           {q.data.map((c) => (
             <li
               key={c.id}
-              className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-[var(--shadow-card)]"
+              className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-(--shadow-card)"
             >
               <Link
                 href={`/categories/${c.slug}`}
