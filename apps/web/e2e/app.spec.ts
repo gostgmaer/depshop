@@ -69,7 +69,11 @@ test("8. product page compares marketplaces by delivered price", async ({ page }
   await expect(page.getByRole("heading", { name: "Acme Nova 7 5G", level: 1 })).toBeVisible();
   await expect(page.getByLabel("Current best offer")).toContainText("₹24,539");
   await expect(page.getByText("Lowest delivered").first()).toBeVisible();
-  await expect(page.getByText("No price history yet")).toBeVisible();
+  const chart = page.getByRole("img", { name: /Price history from/ });
+  await expect(chart).toBeVisible();
+  await chart.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("status").filter({ hasText: "Mock Store 1" })).toBeVisible();
 });
 
 for (const scheme of ["light", "dark"] as const) {

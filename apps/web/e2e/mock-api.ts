@@ -147,19 +147,25 @@ const server = createServer((req, res) => {
   if (path === "/products") return send(res, 200, page([product]));
   if (path === `/products/${PRODUCT_ID}`) return send(res, 200, ok(product));
   if (path === `/products/${PRODUCT_ID}/pricing`) return send(res, 200, ok(productPricing()));
-  if (path === `/products/${PRODUCT_ID}/history`)
-    return send(
-      res,
-      200,
-      ok({
-        productId: PRODUCT_ID,
-        from: new Date(Date.now() - 30 * 86_400_000).toISOString(),
-        to: new Date().toISOString(),
-        points: [],
-        lowestPricePaise: null,
-        highestPricePaise: null,
-      }),
+  if (path === `/products/${PRODUCT_ID}/history`) {
+    // Deterministic synthetic series (fictional): two mock stores over 30 days.
+    const day = 86_400_000;
+    const to = Date.now();
+    const points = [1, 2].flatMap((n) =>
+      Array.from({ length: 10 }, (_, i) => ({
+        offerId: `00000000-0000-7000-8000-00000000000${n}`,
+        variantId: "20000000-0000-7000-8000-000000000001",
+        sourceSlug: `mock_${n}`,
+        mrpPaise: 2_999_900,
+        sellingPricePaise: 2_699_900 - i * 20_000 - (n - 1) * 50_000,
+        shippingPaise: 0,
+        stockStatus: "IN_STOCK",
+        observedAt: new Date(to - (30 - i * 3) * day).toISOString(),
+      })),
     );
+    const prices = points.map((p) => p.sellingPricePaise);
+    return send(res, 200, ok({ productId: PRODUCT_ID, from: new Date(to - 30 * day).toISOString(), to: new Date(to).toISOString(), points, lowestPricePaise: Math.min(...prices), highestPricePaise: Math.max(...prices) }));
+  }
 
   // ── user-owned (session required) ──
   if (!signedIn(req)) return send(res, 401, err("UNAUTHENTICATED", "Sign in"));
