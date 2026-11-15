@@ -40,6 +40,9 @@ import {
 import type { CacheService } from "../../lib/cache.js";
 import { type Paginated, iso, paginated } from "../../utils/http.js";
 
+/** Observations returned per history request (newest kept when exceeded). */
+const HISTORY_MAX_POINTS = 5_000;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CatalogCacheTtls {
@@ -544,7 +547,7 @@ export class CatalogService {
 
   async getPriceHistory(
     productId: string,
-    q: { days: number; variantId?: string; source?: string },
+    q: { days: number | "all"; variantId?: string; source?: string },
   ) {
     await this.productStatic(productId);
     const key = this.cache.catalogKey(
@@ -556,27 +559,36 @@ export class CatalogService {
     );
     return this.cached(key, this.options.ttl.history, async () => {
       const to = this.now();
-      const from = new Date(to.getTime() - q.days * 86_400_000);
-      const snapshots = await this.prisma.priceSnapshot.findMany({
-        where: {
-          observedAt: { gte: from },
-          offer: {
-            productId,
-            ...(q.variantId ? { variantId: q.variantId } : {}),
-            source: { status: "ACTIVE", ...(q.source ? { slug: q.source } : {}) },
-          },
-        },
+      const offer = {
+        productId,
+        ...(q.variantId ? { variantId: q.variantId } : {}),
+        source: { status: "ACTIVE" as const, ...(q.source ? { slug: q.source } : {}) },
+      };
+      const first = await this.prisma.priceSnapshot.findFirst({
+        where: { offer },
+        orderBy: { observedAt: "asc" },
+        select: { observedAt: true },
+      });
+      const from =
+        q.days === "all" ? (first?.observedAt ?? to) : new Date(to.getTime() - q.days * 86_400_000);
+      // Newest first, so a cap drops the oldest observations, never the current ones.
+      const newest = await this.prisma.priceSnapshot.findMany({
+        where: { observedAt: { gte: from }, offer },
         include: {
           offer: { select: { id: true, variantId: true, source: { select: { slug: true } } } },
         },
-        orderBy: { observedAt: "asc" },
-        take: 5_000,
+        orderBy: [{ observedAt: "desc" }, { id: "desc" }],
+        take: HISTORY_MAX_POINTS + 1,
       });
+      const truncated = newest.length > HISTORY_MAX_POINTS;
+      const snapshots = newest.slice(0, HISTORY_MAX_POINTS).reverse();
       const prices = snapshots.map((s) => paiseFromDb(s.sellingPricePaise));
       return {
         productId,
-        from: from.toISOString(),
+        from: (truncated && snapshots[0] ? snapshots[0].observedAt : from).toISOString(),
         to: to.toISOString(),
+        trackingSince: first ? first.observedAt.toISOString() : null,
+        truncated,
         points: snapshots.map((s) => ({
           offerId: s.offer.id,
           variantId: s.offer.variantId,

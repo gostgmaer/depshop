@@ -3,6 +3,9 @@
  *   /categories, /products, /sources
  */
 import {
+  AppError,
+  compareQuery,
+  compareView,
   productPricingQuery,
   productPricingView,
   categoryDetail,
@@ -21,7 +24,7 @@ import {
   sourceView,
   variantView,
 } from "@dealmind/shared";
-import { type PricingService, compareOffers } from "@dealmind/intelligence";
+import { type PricingService, compareOffers, recommend } from "@dealmind/intelligence";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { ok, page } from "../../utils/http.js";
@@ -155,10 +158,17 @@ export const productRoutes: FastifyPluginAsyncZod<{
       },
     },
     async (req) => {
-      const offers = await catalog.getOffers(req.params.id, req.query);
+      const offers = await catalog.getOffers(req.params.id, {
+        ...(req.query.variantId ? { variantId: req.query.variantId } : {}),
+        includeStale: req.query.includeStale,
+      });
       // Anonymous pricing: no user eligibility is known, so no conditional benefit is applied.
       const candidates = await pricing.candidates(offers.map((o) => o.id));
       const byId = new Map(candidates.map((c) => [c.offerId, c.pricing]));
+      // Stale offers may be listed (flagged) but never count as current: comparisons and
+      // recommendations use fresh offers only.
+      const fresh = new Set(offers.filter((o) => !o.isStale).map((o) => o.id));
+      const current = candidates.filter((c) => fresh.has(c.offerId));
       const priced = offers
         .filter((o) => byId.has(o.id))
         .map((o) => ({ offer: o, pricing: byId.get(o.id)! }))
@@ -167,11 +177,12 @@ export const productRoutes: FastifyPluginAsyncZod<{
             a.pricing.prices.deliveredPaise - b.pricing.prices.deliveredPaise ||
             a.offer.id.localeCompare(b.offer.id),
         );
-      const cmp = compareOffers(candidates);
+      const cmp = compareOffers(current);
       return {
         productId: req.params.id,
         variantId: req.query.variantId ?? null,
         offers: priced,
+        recommendations: recommend(current, { now: pricing.clock() }),
         comparison: {
           cheapestDelivered: cmp.cheapestDelivered,
           cheapestVerifiedPayable: cmp.cheapestVerifiedPayable,
@@ -242,5 +253,56 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
       },
     },
     async (req) => catalog.getSource(req.params.id),
+  );
+};
+
+/**
+ * GET /compare?items=productId:variantId,… — deterministic recommendations
+ * across 1–4 picked variants (public catalog data; no user data involved).
+ */
+export const compareRoutes: FastifyPluginAsyncZod<{
+  catalog: CatalogService;
+  pricing: PricingService;
+}> = async (app, { catalog, pricing }) => {
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["catalog"],
+        summary:
+          "Best-deal recommendations across picked variants (lowest delivered, highest verified " +
+          "direct discount, best value, best historical position); affiliate-neutral",
+        querystring: compareQuery,
+        response: { 200: ok(compareView) },
+      },
+    },
+    async (req) => {
+      const items = await Promise.all(
+        req.query.items.map(async (item) => {
+          const variants = await catalog.getVariants(item.productId); // 404 for unknown products
+          if (!variants.some((v) => v.id === item.variantId)) throw AppError.notFound("Variant");
+          const offers = await catalog.getOffers(item.productId, { variantId: item.variantId });
+          return { ...item, offerIds: offers.filter((o) => !o.isStale).map((o) => o.id) };
+        }),
+      );
+      const candidates = await pricing.candidates(items.flatMap((i) => i.offerIds));
+      const now = pricing.clock();
+      return {
+        items: items.map((i) => {
+          const own = recommend(
+            candidates.filter((c) => i.offerIds.includes(c.offerId)),
+            { now },
+          ).items.find((r) => r.kind === "lowest_delivered");
+          return {
+            productId: i.productId,
+            variantId: i.variantId,
+            offerCount: i.offerIds.length,
+            cheapestOfferId: own?.offerId ?? null,
+            cheapestDeliveredPaise: own?.deliveredPricePaise ?? null,
+          };
+        }),
+        recommendations: recommend(candidates, { now }),
+      };
+    },
   );
 };

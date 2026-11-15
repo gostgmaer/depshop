@@ -1,10 +1,10 @@
 import {
   addWatchlistItemInput,
   createWatchlistInput,
-  pageQuery,
   renameWatchlistInput,
   watchlistDetail,
   watchlistView,
+  watchlistListQuery,
 } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -41,9 +41,9 @@ export const watchlistRoutes: FastifyPluginAsyncZod<{ watchlists: WatchlistServi
     {
       schema: {
         tags: ["watchlists"],
-        summary: "Your watchlists",
+        summary: "Your watchlists (optionally only those containing a variant)",
         security,
-        querystring: pageQuery.strict(),
+        querystring: watchlistListQuery,
         response: { 200: page(watchlistView) },
       },
     },

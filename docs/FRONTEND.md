@@ -1,4 +1,4 @@
-# Web app (Phases 4.1–4.2)
+# Web app (Phases 4.1–4.3)
 
 `apps/web` is a Next.js 15 App Router app (React 19, TypeScript strict).
 It is styled with Tailwind CSS 4 and uses shadcn/ui-style components built on
@@ -288,3 +288,91 @@ The 14 Vitest categories:
 - **Voice input** depends on browser support (Chromium/Safari). Its recognition runs in the browser vendor's service.
 - **Sorting is in memory.** It handles at most 200 stored results per search; the agent stores up to 100.
 - **The E2E mock's pricing endpoint ignores `variantId`,** so in the browser test both compare columns show the same mock prices. The real API prices each variant separately (covered by API tests).
+
+## Product comparison and price intelligence (Phase 4.3)
+
+### Product page (`/products/[id]`)
+
+- **Overview:**
+  - image, brand, name, model ("Model not stated" when missing), category link;
+  - launch date when the catalog has it;
+  - variant buttons (the URL keeps `variant`; an id that isn't this product's falls back to the first variant).
+- **Best offer and recommendations.** The lowest eligible delivered price, with its price breakdown. **Best deal recommendations** shows four deterministic labels with data-based reasons, or why no offer qualifies, plus which offers weren't considered and why.
+- **Marketplace comparison:**
+  - columns: marketplace, seller, selling price, MRP ("not verified" when invalid), direct discount, shipping, delivered price, availability, conditional offers (separate from discounts), and product link (sample stores have none);
+  - a table on large screens, cards on smaller ones;
+  - "Include offers not seen recently" (`?stale=1`) adds stale offers marked **Not current · last seen …**, never "lowest".
+- **Price history** (`price-history-panel.tsx`), with `period`, `src` and `mrp` kept in the URL:
+  - periods 7D / 30D / 90D / 180D / 1Y / All;
+  - a marketplace selector, and an MRP line when the selected marketplace states one.
+- **Price statistics** for the selected marketplace, or the best offer's when "All" is selected. They come from `seriesStats` / `describeStats` in `@dealmind/shared` (integer paise and basis points, tested):
+  - current, previous, lowest, highest and average (mean of N observations);
+  - change over the period, trend, a price-change log, and gaps longer than 48 h;
+  - statements such as "Lowest observed price in the last 90 days.", "Price is 3.84% below its average in the last 90 days (₹25,999, 10 observations).", or "Price increased by ₹1,500 since the previous observation (6 Oct 2026)."
+  - "All" is phrased as "since tracking began on …" and states that it isn't all-time.
+- **Verified price claims** from the pricing engine: windows with coverage, and a verified drop.
+- **Track this price:**
+  - watch, and a price alert with a target and an optional preferred marketplace;
+  - **your tracking history** for the variant (watchlists containing it, and your alerts with status and target), from `?variantId=` filters on the owner-scoped list endpoints.
+- **Specifications** grouped by what they describe and ordered for the category (`lib/spec-groups.ts`).
+
+### Price chart (`components/charts/price-history-chart.tsx`, Recharts 3.10)
+
+- **Data:** one step line per marketplace offer, from stored snapshots only. Dots are actual observations.
+- **No interpolation.** A line is drawn between two observations only when they are **at most 48 h apart** (the engine's coverage rule); longer gaps break the line, so nothing unobserved looks verified.
+- **Reference lines and tooltip.** For one marketplace: dashed lines for its lowest, average and highest. The tooltip says when a shown price was observed, or "no observation".
+- **Visual rules kept from 4.1:** validated series colours following the marketplace, a legend with dash patterns, thin lines, a recessive grid, one axis with round ticks, and a "Show as table" view.
+- **Keyboard:** Recharts' accessibility layer makes the chart focusable, and the arrow keys step through observations. The SVG has a text summary.
+- **Loading:** the chart is lazy-loaded (`next/dynamic`), so Recharts isn't in the product page's first load (222 kB; it would be 336 kB with it).
+
+### Compare page (`/compare?items=productId:variantId,…`)
+
+- **Picks:** 1–4. Add products on the page (debounced catalog search, then a variant), and remove any column.
+- **Recommendations across the picks** come from `GET /compare`.
+- **Rows:**
+  - brand, model, variant, category, launch date;
+  - current lowest price and marketplace, current marketplace offers;
+  - direct discount, conditional offers (not discounts), historical price position, availability;
+  - then **category-aware specification groups**: phones (performance, memory, camera, battery, display), laptops (CPU, memory, GPU, display), TVs (display/panel, platform, connectivity), and appliances (capacity, energy, features).
+- **Honest comparison:**
+  - Rows with different stated values are marked **Differs**.
+  - A value stated by only some products is **not treated as the same or different** ("Not stated by every product").
+  - Picks are labelled same variant, different variant or different product.
+  - Products from different categories get a warning that their specifications aren't directly comparable.
+- **Layout:** a table on large screens, one card per product on smaller ones.
+- **Single-product mode:** `/compare?product=…` (one variant across marketplaces) still works.
+
+### Phase 4.3 tests
+
+| Kind                                       | Count                   | What                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vitest + RTL (`src/test/product.test.tsx`) | 17                      | All 14 required categories (see list below)                                                                                                                                                                                                                                                   |
+| Playwright                                 | 18 (9 × desktop/mobile) | Product page (offers, stale toggle, periods, marketplace stats, chart keyboard tooltip, no overflow) and compare page (recommendations, variant warning, table or cards, picker). axe covers 12 pages in light and dark mode, including a product page with stale offers, all history and MRP |
+| API DB (`product-intelligence.db.test.ts`) | 5                       | History periods and `all`, `trackingSince`, newest kept above the cap, stale offers never lowest or recommended, `GET /compare` (per item, overall, 404/422), owner-scoped tracking filters                                                                                                   |
+| Intelligence                               | 3                       | Recommendations: labels and reasons, stale/out-of-stock never recommended with reasons when none qualify, order-independence                                                                                                                                                                  |
+| Shared                                     | 4                       | Series statistics and wording (never all-time), trend thresholds, history/compare query validation                                                                                                                                                                                            |
+
+The 14 Vitest categories:
+
+1. detail rendering;
+2. variant selection, including an invalid id;
+3. marketplace fields;
+4. lowest-price marking;
+5. chart and stats;
+6. missing data (gaps, empty period);
+7. marketplace-specific history and MRP;
+8. comparison with recommendations and the add-product picker;
+9. category grouping for four categories, and a cross-category warning;
+10. watchlist tracking history;
+11. alert creation (target and marketplace, rupees to paise);
+12. mobile cards;
+13. stale offers;
+14. API errors (recoverable 5xx, 404, history failure).
+
+### Phase 4.3 limitations
+
+- **Mock or sample data only:** no authorized marketplace connector exists yet, so real marketplace rows can't appear.
+- **Tracking history** shows your current watchlists and alerts, not a log of past changes (no such audit exists for users).
+- **Spec grouping** uses key names (e.g. "Processor", `ram_gb`). Values aren't converted across units, so "6.6 inch" vs "16.8 cm" would show as different.
+- **The average is the mean of observations,** not time-weighted, as labelled.
+- **The E2E mock prices every variant the same.** Per-variant pricing is covered by the API tests.

@@ -4,8 +4,12 @@
  */
 import type { CreateSearchInput } from "@dealmind/shared";
 import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
+/** History period: days, or every stored observation. */
+export type HistoryDays = number | "all";
+
 import type {
   CategoryDetail,
+  CompareView,
   CategoryFiltersView,
   CategoryNode,
   Notification,
@@ -63,9 +67,18 @@ export const catalog = {
     ),
   product: (id: string) => api<ProductDetail>("GET", `/products/${id}`),
   variants: (id: string) => api<Variant[]>("GET", `/products/${id}/variants`),
-  pricing: (id: string, variantId?: string) =>
-    api<ProductPricingView>("GET", `/products/${id}/pricing${queryString({ variantId })}`),
-  history: (id: string, opts: { variantId?: string; days?: number } = {}) =>
+  pricing: (id: string, variantId?: string, opts: { includeStale?: boolean } = {}) =>
+    api<ProductPricingView>(
+      "GET",
+      `/products/${id}/pricing${queryString({ variantId, includeStale: opts.includeStale ? "true" : undefined })}`,
+    ),
+  /** Deterministic recommendations across 1–4 picked variants. */
+  compare: (items: { productId: string; variantId: string }[]) =>
+    api<CompareView>(
+      "GET",
+      `/compare${queryString({ items: items.map((i) => `${i.productId}:${i.variantId}`).join(",") })}`,
+    ),
+  history: (id: string, opts: { variantId?: string; days?: HistoryDays } = {}) =>
     api<PriceHistory>("GET", `/products/${id}/history${queryString(opts)}`),
   sourceStatus: () => api<SourceStatus>("GET", "/sources/status"),
 };
@@ -93,7 +106,8 @@ export const searches = {
 // ── Watchlists (user-owned) ───────────────────────────────────────────────
 
 export const watchlists = {
-  list: () => apiPage<Watchlist>(`/watchlists${queryString({ pageSize: 100 })}`),
+  list: (opts: { variantId?: string } = {}) =>
+    apiPage<Watchlist>(`/watchlists${queryString({ pageSize: 100, variantId: opts.variantId })}`),
   get: (id: string) => api<WatchlistDetail>("GET", `/watchlists/${id}`),
   create: (name: string) => api<Watchlist>("POST", "/watchlists", { name }),
   rename: (id: string, name: string) => api<Watchlist>("PATCH", `/watchlists/${id}`, { name }),
@@ -110,8 +124,8 @@ export const watchlists = {
 // ── Price alerts (user-owned) ─────────────────────────────────────────────
 
 export const alerts = {
-  list: (status?: "ACTIVE" | "TRIGGERED" | "PAUSED", page = 1) =>
-    apiPage<PriceAlert>(`/alerts${queryString({ status, page, pageSize: 50 })}`),
+  list: (status?: "ACTIVE" | "TRIGGERED" | "PAUSED", page = 1, variantId?: string) =>
+    apiPage<PriceAlert>(`/alerts${queryString({ status, page, pageSize: 50, variantId })}`),
   create: (input: { variantId: string; targetPricePaise: number; sourceId?: string }) =>
     api<PriceAlert>("POST", "/alerts", input),
   update: (id: string, input: { targetPricePaise?: number; sourceId?: string | null }) =>

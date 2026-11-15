@@ -30,7 +30,12 @@ import {
 } from "./lib/login-throttle.js";
 import { AlertService } from "./modules/alerts/alert-service.js";
 import { alertRoutes } from "./modules/alerts/alert-routes.js";
-import { categoryRoutes, productRoutes, sourceRoutes } from "./modules/catalog/catalog-routes.js";
+import {
+  categoryRoutes,
+  compareRoutes,
+  productRoutes,
+  sourceRoutes,
+} from "./modules/catalog/catalog-routes.js";
 import { CatalogService } from "./modules/catalog/catalog-service.js";
 import {
   type ConnectorRegistry,
@@ -332,6 +337,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
       await v1.register(productRoutes, { prefix: "/products", catalog, pricing });
+      await v1.register(compareRoutes, { prefix: "/compare", catalog, pricing });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
       await v1.register(searchRoutes, {
         prefix: "/search",

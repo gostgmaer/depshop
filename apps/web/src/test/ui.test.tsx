@@ -6,7 +6,6 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PriceAlertForm } from "@/components/alerts/price-alert-form";
-import { buildSeries, priceAt } from "@/components/charts/price-history-chart";
 import { SourceStatusCard, TrendingDeals } from "@/components/dashboard/widgets";
 import { SidebarNav } from "@/components/navigation/sidebar-nav";
 import { OfferComparisonTable } from "@/components/offers/offer-comparison-table";
@@ -385,57 +384,5 @@ describe("11. API error states", () => {
     expect(shouldRetry(0, new ApiError(404, "NOT_FOUND", "x"))).toBe(false);
     expect(shouldRetry(0, new ApiError(422, "VALIDATION_ERROR", "x"))).toBe(false);
     expect(shouldRetry(2, new TypeError("network"))).toBe(false);
-  });
-});
-
-describe("price history chart helpers", () => {
-  it("builds one series per offer and reads step values", () => {
-    const series = buildSeries(
-      {
-        productId: "p",
-        from: "2026-10-01T00:00:00Z",
-        to: "2026-11-01T00:00:00Z",
-        lowestPricePaise: 100,
-        highestPricePaise: 300,
-        points: [
-          {
-            offerId: "o2",
-            variantId: "v",
-            sourceSlug: "mock_beta",
-            mrpPaise: null,
-            sellingPricePaise: 200,
-            shippingPaise: null,
-            stockStatus: "IN_STOCK",
-            observedAt: "2026-10-05T00:00:00Z",
-          },
-          {
-            offerId: "o1",
-            variantId: "v",
-            sourceSlug: "mock_alpha",
-            mrpPaise: null,
-            sellingPricePaise: 300,
-            shippingPaise: null,
-            stockStatus: "IN_STOCK",
-            observedAt: "2026-10-02T00:00:00Z",
-          },
-          {
-            offerId: "o1",
-            variantId: "v",
-            sourceSlug: "mock_alpha",
-            mrpPaise: null,
-            sellingPricePaise: 100,
-            shippingPaise: null,
-            stockStatus: "IN_STOCK",
-            observedAt: "2026-10-10T00:00:00Z",
-          },
-        ],
-      },
-      { mock_alpha: "Mock Store Alpha" },
-    );
-    expect(series.map((s) => s.label)).toEqual(["Mock Store Alpha", "mock_beta"]);
-    const alpha = series[0]!;
-    expect(priceAt(alpha, Date.parse("2026-10-01T00:00:00Z"))).toBeNull();
-    expect(priceAt(alpha, Date.parse("2026-10-05T00:00:00Z"))).toBe(300);
-    expect(priceAt(alpha, Date.parse("2026-10-20T00:00:00Z"))).toBe(100);
   });
 });

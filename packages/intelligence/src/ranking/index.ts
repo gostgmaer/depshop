@@ -5,3 +5,4 @@ export * from "./filters/hard-filters.js";
 export * from "./scorers/scorers.js";
 export * from "./strategies/strategies.js";
 export * from "./explainers/explain.js";
+export * from "./recommend.js";

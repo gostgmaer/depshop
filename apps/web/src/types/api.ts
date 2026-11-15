@@ -28,6 +28,8 @@ import type { z } from "zod";
 
 export type {
   CategoryFiltersView,
+  CompareView,
+  RecommendationsView,
   CategoryNode,
   EvaluatedBenefitView,
   OfferPricingView,

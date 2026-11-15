@@ -6,3 +6,4 @@ export * from "./envelope.js";
 export * from "./contracts.js";
 export * from "./pricing-contracts.js";
 export * from "./spec-labels.js";
+export * from "./price-stats.js";

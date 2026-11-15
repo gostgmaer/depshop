@@ -9,6 +9,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   categoryFilters,
+  priceHistory,
+  productDetail,
+  recommendations,
   productPricing,
   searchDetail,
   searchResult,
@@ -55,48 +58,7 @@ function send(
 const signedIn = (req: IncomingMessage) =>
   (req.headers.cookie ?? "").includes("dm_session=e2e-session");
 
-const product = {
-  id: PRODUCT_ID,
-  name: "Acme Nova 7 5G",
-  brand: "Acme",
-  modelNumber: null,
-  imageUrl: null,
-  category: {
-    id: "70000000-0000-7000-8000-000000000001",
-    slug: "smartphones",
-    name: "Smartphones",
-    description: null,
-    imageUrl: null,
-    parentId: null,
-  },
-  launchDate: null,
-  lowestPricePaise: 2_453_900,
-  offerCount: 2,
-  inStock: true,
-  sampleData: false,
-  description: "Fictional E2E test product.",
-  manufacturer: null,
-  gtin: null,
-  ean: null,
-  upc: null,
-  specifications: { Display: "6.6 inch" },
-  variants: [
-    {
-      id: "20000000-0000-7000-8000-000000000001",
-      variantKey: "ram=8|storage=128",
-      attributes: { ram_gb: 8, storage_gb: 128, color: "midnight black" },
-      sku: null,
-      gtin: null,
-    },
-    {
-      id: "20000000-0000-7000-8000-000000000002",
-      variantKey: "ram=12|storage=256",
-      attributes: { ram_gb: 12, storage_gb: 256, color: "midnight black" },
-      sku: null,
-      gtin: null,
-    },
-  ],
-};
+const product = productDetail({ sampleData: false, modelNumber: null });
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
@@ -122,7 +84,7 @@ const server = createServer((req, res) => {
 
   // ── public catalog ──
   if (path === "/categories/tree")
-    return send(res, 200, ok([{ ...product.category, children: [] }]));
+    return send(res, 200, ok([{ ...product.category!, children: [] }]));
   const filters = /^\/categories\/([a-z0-9-]+)\/filters$/.exec(path);
   if (filters) return send(res, 200, ok(categoryFilters(filters[1])));
   if (path === "/sources/status")
@@ -161,37 +123,28 @@ const server = createServer((req, res) => {
     );
   if (path === "/products") return send(res, 200, page([product]));
   if (path === `/products/${PRODUCT_ID}`) return send(res, 200, ok(product));
-  if (path === `/products/${PRODUCT_ID}/pricing`) return send(res, 200, ok(productPricing()));
-  if (path === `/products/${PRODUCT_ID}/history`) {
-    // Deterministic synthetic series (fictional): two mock stores over 30 days.
-    const day = 86_400_000;
-    const to = Date.now();
-    const points = [1, 2].flatMap((n) =>
-      Array.from({ length: 10 }, (_, i) => ({
-        offerId: `00000000-0000-7000-8000-00000000000${n}`,
-        variantId: "20000000-0000-7000-8000-000000000001",
-        sourceSlug: `mock_${n}`,
-        mrpPaise: 2_999_900,
-        sellingPricePaise: 2_699_900 - i * 20_000 - (n - 1) * 50_000,
-        shippingPaise: 0,
-        stockStatus: "IN_STOCK",
-        observedAt: new Date(to - (30 - i * 3) * day).toISOString(),
-      })),
-    );
-    const prices = points.map((p) => p.sellingPricePaise);
+  if (path === `/products/${PRODUCT_ID}/pricing`)
     return send(
       res,
       200,
-      ok({
-        productId: PRODUCT_ID,
-        from: new Date(to - 30 * day).toISOString(),
-        to: new Date(to).toISOString(),
-        points,
-        lowestPricePaise: Math.min(...prices),
-        highestPricePaise: Math.max(...prices),
-      }),
+      ok(productPricing({ stale: url.searchParams.get("includeStale") === "true" })),
     );
+  if (path === `/products/${PRODUCT_ID}/history`) {
+    const days = url.searchParams.get("days") ?? "90";
+    const h = priceHistory();
+    const from =
+      days === "all"
+        ? h.trackingSince!
+        : new Date(Date.now() - Number(days) * 86_400_000).toISOString();
+    const points = h.points.filter((p) => p.observedAt >= from);
+    return send(res, 200, ok({ ...h, from, points }));
   }
+  if (path === "/compare")
+    return send(
+      res,
+      200,
+      ok({ items: [], recommendations: recommendations("00000000-0000-7000-8000-000000000002") }),
+    );
 
   // ── user-owned (session required) ──
   if (!signedIn(req)) return send(res, 401, err("UNAUTHENTICATED", "Sign in"));

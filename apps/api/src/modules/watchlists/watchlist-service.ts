@@ -70,8 +70,11 @@ export class WatchlistService {
     }
   }
 
-  async list(userId: string, q: PageQuery) {
-    const where = { userId };
+  async list(userId: string, q: PageQuery & { variantId?: string | undefined }) {
+    const where = {
+      userId,
+      ...(q.variantId ? { items: { some: { userId, variantId: q.variantId } } } : {}),
+    };
     const [rows, total] = await Promise.all([
       this.prisma.watchlist.findMany({
         where,

@@ -8,6 +8,7 @@ import { type CreateSearchInput, TERMINAL_SEARCH_STATUSES } from "@dealmind/shar
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SearchResultSort } from "@/types/api";
 import {
+  type HistoryDays,
   type ProductQuery,
   alerts,
   billing,
@@ -21,9 +22,10 @@ export const keys = {
   categories: ["categories"] as const,
   products: (q: ProductQuery) => ["products", q] as const,
   product: (id: string) => ["product", id] as const,
-  pricing: (id: string, variantId?: string) =>
-    ["product", id, "pricing", variantId ?? "all"] as const,
-  history: (id: string, variantId?: string, days = 90) =>
+  pricing: (id: string, variantId?: string, includeStale = false) =>
+    ["product", id, "pricing", variantId ?? "all", includeStale ? "stale" : "fresh"] as const,
+  compare: (items: string) => ["compare", items] as const,
+  history: (id: string, variantId?: string, days: HistoryDays = 90) =>
     ["product", id, "history", variantId ?? "all", days] as const,
   sourceStatus: ["sources", "status"] as const,
   searches: (page: number) => ["searches", page] as const,
@@ -36,6 +38,8 @@ export const keys = {
   watchlists: ["watchlists"] as const,
   watchlist: (id: string) => ["watchlists", id] as const,
   alerts: (status?: string) => ["alerts", status ?? "all"] as const,
+  variantAlerts: (variantId: string) => ["alerts", "variant", variantId] as const,
+  variantWatchlists: (variantId: string) => ["watchlists", "variant", variantId] as const,
   notifications: (unread?: boolean, page = 1) => ["notifications", unread ?? "all", page] as const,
   unread: ["notifications", "unread"] as const,
   plans: ["billing", "plans"] as const,
@@ -56,18 +60,42 @@ export const useProducts = (q: ProductQuery, enabled = true) =>
 export const useProduct = (id: string) =>
   useQuery({ queryKey: keys.product(id), queryFn: () => catalog.product(id) });
 /** Prices are short-lived: refetched every minute while the page is open. */
-export const useProductPricing = (id: string, variantId?: string) =>
+export const useProductPricing = (id: string, variantId?: string, includeStale = false) =>
   useQuery({
-    queryKey: keys.pricing(id, variantId),
-    queryFn: () => catalog.pricing(id, variantId),
+    queryKey: keys.pricing(id, variantId, includeStale),
+    queryFn: () => catalog.pricing(id, variantId, { includeStale }),
+    placeholderData: keepPreviousData,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
-export const usePriceHistory = (id: string, variantId?: string, days = 90) =>
+export const usePriceHistory = (id: string, variantId?: string, days: HistoryDays = 90) =>
   useQuery({
     queryKey: keys.history(id, variantId, days),
     queryFn: () => catalog.history(id, { ...(variantId ? { variantId } : {}), days }),
+    placeholderData: keepPreviousData,
   });
+/** Recommendations across picked variants (catalog data; shareable, cached briefly). */
+export const useCompare = (items: { productId: string; variantId: string }[]) =>
+  useQuery({
+    queryKey: keys.compare(items.map((i) => `${i.productId}:${i.variantId}`).join(",")),
+    queryFn: () => catalog.compare(items),
+    enabled: items.length > 0,
+    staleTime: 30_000,
+  });
+/** Your alerts and watchlists for one variant (tracking history; owner-scoped by the API). */
+export const useVariantTracking = (variantId: string | undefined) => {
+  const alertsQ = useQuery({
+    queryKey: keys.variantAlerts(variantId ?? ""),
+    queryFn: () => alerts.list(undefined, 1, variantId),
+    enabled: Boolean(variantId),
+  });
+  const listsQ = useQuery({
+    queryKey: keys.variantWatchlists(variantId ?? ""),
+    queryFn: () => watchlists.list({ variantId }),
+    enabled: Boolean(variantId),
+  });
+  return { alerts: alertsQ, watchlists: listsQ };
+};
 /** Category filters change only when the catalog does: cached for 5 minutes. */
 export const useCategoryFilters = (slug: string | undefined) =>
   useQuery({
@@ -136,7 +164,7 @@ export function useCancelSearch(id: string) {
 
 // ── Watchlists ──
 export const useWatchlists = () =>
-  useQuery({ queryKey: keys.watchlists, queryFn: watchlists.list });
+  useQuery({ queryKey: keys.watchlists, queryFn: () => watchlists.list() });
 export const useWatchlist = (id: string) =>
   useQuery({
     queryKey: keys.watchlist(id),

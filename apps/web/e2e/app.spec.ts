@@ -103,16 +103,69 @@ test("4.2 category filters, live steps, sort, grid and comparison selection", as
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test("8. product page compares marketplaces by delivered price", async ({ page }) => {
+test("4.3 product intelligence: offers, stale toggle, history periods, chart keyboard", async ({
+  page,
+}) => {
   await signIn(page, "/products/10000000-0000-7000-8000-000000000001");
   await expect(page.getByRole("heading", { name: "Acme Nova 7 5G", level: 1 })).toBeVisible();
   await expect(page.getByLabel("Current best offer")).toContainText("₹24,539");
+  await expect(page.getByLabel("Lowest delivered price", { exact: true })).toContainText(
+    "Mock Store 2",
+  );
   await expect(page.getByText("Lowest delivered").first()).toBeVisible();
-  const chart = page.getByRole("img", { name: /Price history from/ });
+
+  // Stale offers only on request, and never "lowest".
+  await page.getByRole("checkbox", { name: "Include offers not seen recently" }).click();
+  await expect(page).toHaveURL(/stale=1/);
+  await expect(page.getByText("Not current").filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByLabel("Current best offer")).toContainText("₹24,539");
+
+  // Periods and marketplace-specific history from stored observations.
+  await page.getByRole("button", { name: "7D" }).click();
+  await expect(page).toHaveURL(/period=7/);
+  await page.getByRole("button", { name: "All" }).click();
+  await expect(page.getByText(/so these are not all-time figures/)).toBeVisible();
+  await page.getByLabel("Marketplace", { exact: true }).selectOption("mock_1");
+  await expect(page).toHaveURL(/src=mock_1/);
+  const stats = page.getByRole("region", { name: "Price statistics" });
+  await expect(stats).toContainText("Selected marketplace");
+  await expect(stats).toContainText("Mock Store 1");
+
+  // The chart is keyboard-operable: arrow keys step through observations.
+  const chart = page.getByRole("application", { name: /Price history from/ });
   await expect(chart).toBeVisible();
   await chart.focus();
-  await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("status").filter({ hasText: "Mock Store 1" })).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("status").filter({ hasText: "Mock Store 1" }).first()).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("4.3 compare page: recommendations, variant warning, add-product picker", async ({
+  page,
+  isMobile,
+}) => {
+  await signIn(
+    page,
+    "/compare?items=10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000001,10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000002",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Best deal across these products" }),
+  ).toBeVisible();
+  await expect(page.getByText(/different variants of the same product/)).toBeVisible();
+  if (isMobile) {
+    await expect(page.getByRole("list", { name: "Compared products" })).toBeVisible();
+  } else {
+    await expect(page.getByRole("table")).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: /Acme Nova 7 5G/ }).first()).toBeVisible();
+  }
+  await expect(page.getByRole("heading", { name: "Add a product" })).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
 });
 
 for (const scheme of ["light", "dark"] as const) {
@@ -132,6 +185,7 @@ for (const scheme of ["light", "dark"] as const) {
       "/categories",
       "/compare",
       "/search/40000000-0000-7000-8000-000000000001",
+      "/products/10000000-0000-7000-8000-000000000001?stale=1&period=all&src=mock_1&mrp=1",
       "/compare?items=10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000001,10000000-0000-7000-8000-000000000001:20000000-0000-7000-8000-000000000002",
     ];
     const found: string[] = [];

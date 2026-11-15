@@ -5,6 +5,9 @@
  */
 import type {
   CategoryFiltersView,
+  PriceHistory,
+  ProductDetail,
+  RecommendationsView,
   PricingResultView,
   ProductPricingView,
   SearchDetail,
@@ -195,13 +198,92 @@ export function searchResult(rank = 1): SearchResultView {
   };
 }
 
-export function productPricing(): ProductPricingView {
+export function recommendations(cheapestId: string): RecommendationsView {
+  return {
+    considered: 2,
+    excluded: [],
+    basis:
+      "Computed by the deterministic pricing and ranking engines from observed marketplace data. Affiliate commission is not an input.",
+    items: [
+      {
+        kind: "lowest_delivered",
+        offerId: cheapestId,
+        productId: "10000000-0000-7000-8000-000000000001",
+        variantId: "20000000-0000-7000-8000-000000000001",
+        marketplace: { slug: "mock_2", name: "Mock Store 2" },
+        deliveredPricePaise: 2_453_900,
+        reasons: [
+          "₹24,539 delivered (selling price + shipping + mandatory fees) on Mock Store 2.",
+          "₹460 less than the next cheapest (Mock Store 1).",
+        ],
+        unavailableReason: null,
+      },
+      {
+        kind: "highest_direct_discount",
+        offerId: cheapestId,
+        productId: "10000000-0000-7000-8000-000000000001",
+        variantId: "20000000-0000-7000-8000-000000000001",
+        marketplace: { slug: "mock_2", name: "Mock Store 2" },
+        deliveredPricePaise: 2_453_900,
+        reasons: ["16.66% off its stated MRP of ₹29,999 on Mock Store 2."],
+        unavailableReason: null,
+      },
+      {
+        kind: "best_value",
+        offerId: cheapestId,
+        productId: "10000000-0000-7000-8000-000000000001",
+        variantId: "20000000-0000-7000-8000-000000000001",
+        marketplace: { slug: "mock_2", name: "Mock Store 2" },
+        deliveredPricePaise: 2_453_900,
+        reasons: ["Highest best-value score (8200/10000) among 2 offers."],
+        unavailableReason: null,
+      },
+      {
+        kind: "best_history_position",
+        offerId: null,
+        productId: null,
+        variantId: null,
+        marketplace: null,
+        deliveredPricePaise: null,
+        reasons: [],
+        unavailableReason:
+          "Not enough price history (at least 3 observations covering half of the last 90 days) to compare positions.",
+      },
+    ],
+  };
+}
+
+/** Two current offers; with `stale`, a cheaper offer last seen 3 days ago (never "lowest"). */
+export function productPricing(opts: { stale?: boolean } = {}): ProductPricingView {
   const a = offer(1, 2_499_900);
   const b = offer(2, 2_449_900);
+  const old = {
+    ...offer(3, 1_999_900),
+    observedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    isStale: true,
+  };
   return {
     productId: a.productId,
     variantId: a.variantId,
+    recommendations: recommendations(b.id),
     offers: [
+      ...(opts.stale
+        ? [
+            {
+              offer: old,
+              pricing: pricing({
+                offerId: old.id,
+                observedAt: old.observedAt,
+                prices: {
+                  ...pricing().prices,
+                  basePaise: 1_999_900,
+                  deliveredPaise: 1_999_900,
+                  bestVerifiedPayablePaise: 1_999_900,
+                },
+              }),
+            },
+          ]
+        : []),
       {
         offer: b,
         pricing: pricing({
@@ -362,4 +444,95 @@ export function categoryFilters(slug = "smartphones"): CategoryFiltersView {
         ratingsAvailable: false,
         productCount: 4,
       };
+}
+
+/**
+ * Deterministic observations (fictional): Mock Store 1 daily for 10 days with
+ * a 5-day gap, Mock Store 2 every 3 days. MRP stated by store 1 only.
+ */
+export function priceHistory(to = Date.now()): PriceHistory {
+  const day = 86_400_000;
+  const at = (d: number) => new Date(to - d * day).toISOString();
+  const s1 = [20, 19, 18, 17, 11, 10, 9, 8, 1, 0].map((d, i) => ({
+    offerId: "00000000-0000-7000-8000-000000000001",
+    variantId: "20000000-0000-7000-8000-000000000001",
+    sourceSlug: "mock_1",
+    mrpPaise: 2_999_900,
+    sellingPricePaise: [
+      2_699_900, 2_699_900, 2_649_900, 2_649_900, 2_599_900, 2_599_900, 2_549_900, 2_549_900,
+      2_499_900, 2_499_900,
+    ][i]!,
+    shippingPaise: 0,
+    stockStatus: "IN_STOCK" as const,
+    observedAt: at(d),
+  }));
+  const s2 = [21, 18, 15, 12, 9, 6, 3, 0].map((d, i) => ({
+    offerId: "00000000-0000-7000-8000-000000000002",
+    variantId: "20000000-0000-7000-8000-000000000001",
+    sourceSlug: "mock_2",
+    mrpPaise: null,
+    sellingPricePaise: 2_449_900 + (i % 2) * 10_000,
+    shippingPaise: 4_000,
+    stockStatus: "IN_STOCK" as const,
+    observedAt: at(d),
+  }));
+  const points = [...s1, ...s2].sort((a, b) => a.observedAt.localeCompare(b.observedAt));
+  const prices = points.map((p) => p.sellingPricePaise);
+  return {
+    productId: "10000000-0000-7000-8000-000000000001",
+    from: at(30),
+    to: at(0),
+    points,
+    lowestPricePaise: Math.min(...prices),
+    highestPricePaise: Math.max(...prices),
+    trackingSince: at(21),
+    truncated: false,
+  };
+}
+
+/** Fictional product detail (two variants; specifications as a marketplace states them). */
+export function productDetail(over: Partial<ProductDetail> = {}): ProductDetail {
+  return {
+    id: "10000000-0000-7000-8000-000000000001",
+    name: "Acme Nova 7 5G",
+    brand: "Acme",
+    modelNumber: "AN7-5G",
+    imageUrl: null,
+    category: {
+      id: "70000000-0000-7000-8000-000000000001",
+      slug: "smartphones",
+      name: "Smartphones",
+      description: null,
+      imageUrl: null,
+      parentId: null,
+    },
+    launchDate: null,
+    lowestPricePaise: 2_453_900,
+    offerCount: 2,
+    inStock: true,
+    sampleData: true,
+    description: "Fictional test product.",
+    manufacturer: null,
+    gtin: null,
+    ean: null,
+    upc: null,
+    specifications: { Processor: "Acme X1", Display: "6.6 inch AMOLED", Battery: "5000 mAh" },
+    variants: [
+      {
+        id: "20000000-0000-7000-8000-000000000001",
+        variantKey: "ram=8|storage=128",
+        attributes: { ram_gb: 8, storage_gb: 128, color: "midnight black" },
+        sku: null,
+        gtin: null,
+      },
+      {
+        id: "20000000-0000-7000-8000-000000000002",
+        variantKey: "ram=12|storage=256",
+        attributes: { ram_gb: 12, storage_gb: 256, color: "midnight black" },
+        sku: null,
+        gtin: null,
+      },
+    ],
+    ...over,
+  };
 }

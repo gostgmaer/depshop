@@ -1,5 +1,7 @@
 /** The test fixtures must satisfy the real API contracts (so UI tests can't drift from the API). */
 import {
+  priceHistory as priceHistorySchema,
+  productDetail as productDetailSchema,
   categoryFilters as categoryFiltersSchema,
   productPricingView,
   searchDetail as searchDetailSchema,
@@ -7,6 +9,8 @@ import {
 } from "@dealmind/shared";
 import { describe, expect, it } from "vitest";
 import {
+  priceHistory,
+  productDetail,
   categoryFilters,
   productPricing,
   searchDetail,
@@ -23,6 +27,9 @@ describe("fixtures match the shared Zod contracts", () => {
       searchResultView.safeParse(searchResultVariant(2, 2, { ram_gb: 12 }, 2_999_900)).success,
     ).toBe(true);
     expect(categoryFiltersSchema.safeParse(categoryFilters()).success).toBe(true);
+    expect(productPricingView.safeParse(productPricing({ stale: true })).success).toBe(true);
+    expect(priceHistorySchema.safeParse(priceHistory()).success).toBe(true);
+    expect(productDetailSchema.safeParse(productDetail()).success).toBe(true);
     expect(categoryFiltersSchema.safeParse(categoryFilters("washing-machines")).success).toBe(true);
   });
 });

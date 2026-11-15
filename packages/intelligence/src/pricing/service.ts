@@ -33,6 +33,11 @@ export class PricingService {
   ) {}
 
   /** Category id → slugs from the category up to the root (cached 5 minutes). */
+  /** The clock pricing uses (so callers rank/recommend at the same instant). */
+  clock(): Date {
+    return this.now();
+  }
+
   private async paths(): Promise<Map<string, string[]>> {
     const t = Date.now();
     if (this.categoryPaths && t - this.categoryPaths.at < 300_000) return this.categoryPaths.byId;

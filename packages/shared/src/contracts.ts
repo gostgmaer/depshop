@@ -256,13 +256,96 @@ export type OfferView = z.infer<typeof offerView>;
 export const offerPricingView = z.object({ offer: offerView, pricing: pricingResultSchema });
 export type OfferPricingView = z.infer<typeof offerPricingView>;
 
-export const productPricingQuery = z.object({ variantId: uuid.optional() }).strict();
+export const productPricingQuery = z
+  .object({
+    variantId: uuid.optional(),
+    /** Also list offers not observed recently (flagged isStale; never recommended or "lowest"). */
+    includeStale: z
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
+      .default("false"),
+  })
+  .strict();
+
+export const recommendationView = z.object({
+  kind: z.enum([
+    "lowest_delivered",
+    "highest_direct_discount",
+    "best_value",
+    "best_history_position",
+  ]),
+  offerId: uuid.nullable(),
+  productId: uuid.nullable(),
+  variantId: uuid.nullable(),
+  marketplace: z.object({ slug: z.string(), name: z.string() }).nullable(),
+  deliveredPricePaise: paise.nullable(),
+  reasons: z.array(z.string()),
+  unavailableReason: z.string().nullable(),
+});
+export const recommendationsView = z.object({
+  items: z.array(recommendationView),
+  considered: z.number().int(),
+  excluded: z.array(z.object({ reason: z.string(), count: z.number().int() })),
+  basis: z.string(),
+});
+export type RecommendationsView = z.infer<typeof recommendationsView>;
+
+/** `items=productId:variantId,…` (1–4 picks) for GET /compare. */
+export const compareQuery = z
+  .object({
+    items: z
+      .string()
+      .max(400)
+      .transform((raw, ctx) => {
+        const out: { productId: string; variantId: string }[] = [];
+        for (const part of raw.split(",").filter(Boolean)) {
+          const [productId, variantId, extra] = part.split(":");
+          if (
+            extra !== undefined ||
+            !uuid.safeParse(productId).success ||
+            !uuid.safeParse(variantId).success
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              message: `Invalid item "${part}" (use productId:variantId)`,
+            });
+            return z.NEVER;
+          }
+          if (!out.some((o) => o.variantId === variantId))
+            out.push({ productId: productId!, variantId: variantId! });
+        }
+        if (out.length < 1 || out.length > 4) {
+          ctx.addIssue({ code: "custom", message: "Compare 1 to 4 items" });
+          return z.NEVER;
+        }
+        return out;
+      }),
+  })
+  .strict();
+
+export const compareView = z.object({
+  items: z.array(
+    z.object({
+      productId: uuid,
+      variantId: uuid,
+      /** Fresh offers of this variant that were considered. */
+      offerCount: z.number().int(),
+      /** Lowest eligible delivered offer of this item (null when none is available). */
+      cheapestOfferId: uuid.nullable(),
+      cheapestDeliveredPaise: paise.nullable(),
+    }),
+  ),
+  recommendations: recommendationsView,
+});
+export type CompareView = z.infer<typeof compareView>;
 
 export const productPricingView = z.object({
   productId: uuid,
   variantId: uuid.nullable(),
   /** Fresh offers from active sources, cheapest delivered first. */
   offers: z.array(offerPricingView),
+  /** Deterministic best-deal picks among this variant's eligible offers. */
+  recommendations: recommendationsView,
   comparison: z.object({
     cheapestDelivered: uuid.nullable(),
     cheapestVerifiedPayable: uuid.nullable(),
@@ -280,9 +363,11 @@ export const priceHistoryQuery = z
       .string()
       .regex(/^[a-z][a-z0-9_]*$/)
       .optional(), // source slug
-    days: z.coerce.number().int().min(1).max(365).default(90),
+    /** 1–365 days, or "all" for every stored observation. */
+    days: z.union([z.literal("all"), z.coerce.number().int().min(1).max(365)]).default(90),
   })
   .strict();
+export type PriceHistoryQuery = z.infer<typeof priceHistoryQuery>;
 
 export const pricePoint = z.object({
   offerId: uuid,
@@ -302,6 +387,10 @@ export const priceHistory = z.object({
   points: z.array(pricePoint),
   lowestPricePaise: paise.nullable(),
   highestPricePaise: paise.nullable(),
+  /** First stored observation for this product/variant/source scope (any period); null when none. */
+  trackingSince: iso.nullable(),
+  /** True when the period had more observations than returned (the newest are always kept). */
+  truncated: z.boolean(),
 });
 
 // ── Shopping sources ──────────────────────────────────────────────────────
@@ -562,6 +651,8 @@ export type SearchEvent = z.infer<typeof searchEvent>;
 export const watchlistName = z.string().trim().min(1).max(80);
 export const createWatchlistInput = z.object({ name: watchlistName }).strict();
 export const renameWatchlistInput = z.object({ name: watchlistName }).strict();
+/** `variantId`: only your watchlists that contain this variant. */
+export const watchlistListQuery = pageQuery.extend({ variantId: uuid.optional() }).strict();
 export const addWatchlistItemInput = z
   .object({ variantId: uuid, note: z.string().trim().max(500).optional() })
   .strict();
@@ -606,7 +697,9 @@ export const updateAlertInput = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field" });
 
-export const alertListQuery = pageQuery.extend({ status: alertStatus.optional() }).strict();
+export const alertListQuery = pageQuery
+  .extend({ status: alertStatus.optional(), variantId: uuid.optional() })
+  .strict();
 
 export const alertView = z.object({
   id: uuid,

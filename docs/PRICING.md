@@ -186,6 +186,23 @@ ranked deal has:
   - observation time.
 - `versusNext`: the deciding difference against the next deal, e.g. "₹260 lower delivered price than #2 (Store C)".
 
+## Recommendations
+
+`recommend(candidates)` (`packages/intelligence/src/ranking/recommend.ts`) picks four labels using the ranking engine itself, so its hard filters apply: stale, out-of-stock and indicative-price offers are never recommended, and excluded offers are counted by reason.
+
+| Label                            | How it is picked                                                                                            | Reasons shown                                                                              |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Lowest delivered price           | `lowest_price` rank 1                                                                                       | Delivered price and composition; the gap to the next cheapest                              |
+| Highest verified direct discount | First `highest_discount` offer with a discount from a valid stated MRP                                      | % off the MRP; whether price history confirms it (genuine / MRP-only / not enough history) |
+| Best value                       | `best_value` rank 1                                                                                         | Score out of 10,000 and the engine's top factors                                           |
+| Best historical price position   | Highest history component (position in the offer's own 90-day range; needs ≥ 3 observations covering ≥ 50%) | The lowest-observed claim or range position, vs the 30-day average, and coverage           |
+
+- **When nothing qualifies,** the label says why (for example "No current offer has a discount from a valid, stated MRP"). Nothing is substituted.
+- **No affiliate or commission input exists** in this module.
+- **Where it's used:**
+  - `GET /products/:id/pricing` across one variant's marketplaces;
+  - `GET /compare` across picked variants.
+
 ## Internal API (service token, `/internal/v1`)
 
 | Endpoint                                     | Body / result                                                                                                                                                                                                                        |

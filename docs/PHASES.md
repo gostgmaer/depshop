@@ -19,6 +19,7 @@ those pass.
 | 3.3 | Pricing, genuine-discount and deal-ranking engine: BigInt price ladder, conditional-offer validation, EMI transparency, coverage-aware price history, 6 ranking modes with hard filters and explanations, internal pricing/ranking APIs, signed ranking provenance, Python integration, tests, benchmarks                                                                                                                                | **Done** (see gaps below) |
 | 4.1 | Frontend dashboard: app shell (sidebar + mobile sheet), dashboard, AI search with filters and live SSE progress, results, products/categories, product intelligence page with comparison and history chart, compare, watchlists, alerts, history, notifications, settings, billing; Vitest/RTL + Playwright (axe)                                                                                                                        | **Done** (see gaps below) |
 | 4.2 | AI shopping search and real-time results: autocomplete (debounced catalog + history), optional voice input, category-driven dynamic filters, availability/launch/discount filters, ranking explanations, step timeline from real agent events, per-marketplace status with skip reasons, list/grid/sort/pagination, partial/expired/failed states, multi-product comparison with variant guards, edit/re-run, duplicate-submission guard | **Done** (see gaps below) |
+| 4.3 | Product comparison and price intelligence: product page (variants, full marketplace comparison with stale handling, deterministic recommendations, tracking history), Recharts history (7D–1Y–All, per marketplace, MRP, no interpolation across >48 h gaps) with period statistics, multi-product compare with category-aware specs and add-product picker, `GET /compare`, history `all`/newest-kept fix                               | **Done** (see gaps below) |
 | 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                                                                                                                                                                                                                                                                              | Partially done (1.4)      |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                                                                                                                                                                                                                                                                                         | Not started               |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches                                                                                                                                                                                                                                                               | Not started               |
@@ -420,3 +421,40 @@ See [FRONTEND.md](FRONTEND.md#ai-shopping-search-phase-42).
 4. **No rating filter** (no verified rating data).
 5. **The E2E mock prices every variant the same;** real per-variant pricing is covered by API tests.
 6. **Phase 4.1 gaps 2–5 still apply,** and **the local dev database still needs the pending reset.**
+
+## Phase 4.3 — Product comparison and price intelligence (delivered)
+
+See [FRONTEND.md](FRONTEND.md#product-comparison-and-price-intelligence-phase-43), [PRICING.md](PRICING.md#recommendations) and [CATALOG.md](CATALOG.md).
+
+- **Intelligence:** `recommend()` gives four affiliate-neutral labels built on the ranking engine's hard filters, with reasons from data. `PricingService.clock()`.
+- **API:**
+  - `GET /products/:id/history` takes `days=all` and returns `trackingSince` and `truncated`. It now **keeps the newest observations** above the 5,000 cap; it previously kept the oldest.
+  - `GET /products/:id/pricing` takes `includeStale` and returns `recommendations`; its comparison uses fresh offers only.
+  - New `GET /compare?items=…`.
+  - `?variantId=` filters on `GET /alerts` and `GET /watchlists` (owner-scoped).
+- **Shared:**
+  - `seriesStats` / `describeStats` (period statistics and wording);
+  - recommendation and compare contracts;
+  - the history `all` period.
+- **Web:**
+  - product page sections, offer table, price-history panel and Recharts chart (lazy-loaded);
+  - recommendations card, tracking panel, category spec groups;
+  - multi-product compare with picker and mobile cards.
+- **Verification:**
+  - `pnpm check --force` 40/40.
+  - Web: tsc and eslint clean; Vitest 80 (17 new), Playwright 18 (axe on 12 pages in light and dark mode), production build OK. Product page first load 222 kB.
+  - API DB 108 (5 new); intelligence 53 unit + 26 DB (3 new); shared 40 (4 new).
+  - pytest unchanged (61; the agent wasn't modified).
+- **Found and fixed:**
+  - The history query dropped the newest observations past 5,000.
+  - A cheaper stale offer could have been marked lowest, because `compareOffers` doesn't exclude stale offers; the route now passes fresh offers only.
+  - The all-history note and statement used different start dates (the product's vs the marketplace's).
+  - Y-axis ticks fell on odd values.
+  - A watchlist `queryFn` would have received TanStack's context object as options.
+
+### Phase 4.3 — known gaps
+
+1. **Data is mock or sample only.** Real marketplace rows (Amazon India, Flipkart, Croma, Reliance Digital, Tata CLiQ) need authorized connectors.
+2. **Tracking history is current state only** (watchlists and alerts), not a change log.
+3. **Spec comparison isn't unit-aware** across differently stated units.
+4. **Alerts are still not evaluated** (Phase 7); there are still no payments; **the local dev DB still needs the pending reset.**

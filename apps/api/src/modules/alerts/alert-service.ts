@@ -118,9 +118,16 @@ export class AlertService {
 
   async list(
     userId: string,
-    q: PageQuery & { status?: "ACTIVE" | "TRIGGERED" | "PAUSED" | undefined },
+    q: PageQuery & {
+      status?: "ACTIVE" | "TRIGGERED" | "PAUSED" | undefined;
+      variantId?: string | undefined;
+    },
   ) {
-    const where = { userId, ...(q.status ? { status: q.status } : {}) };
+    const where = {
+      userId,
+      ...(q.status ? { status: q.status } : {}),
+      ...(q.variantId ? { variantId: q.variantId } : {}),
+    };
     const [rows, total] = await Promise.all([
       this.prisma.priceAlert.findMany({
         where,
