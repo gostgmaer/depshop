@@ -87,3 +87,18 @@ async def test_pricing_batches_are_chunked_and_carry_no_prices(backend: FakeBack
     assert [len(c["offerIds"]) for c in calls] == [400, 50]
     assert all(set(c) == {"offerIds"} for c in calls)
     assert await client.rank("q", "best_value", [], correlation_id="c") is None
+
+
+async def test_ui_sort_mode_and_specs_are_explicit_overrides(
+    backend: FakeBackend, ids: Ids, make_service: Any
+) -> None:
+    service = make_service(
+        ScriptedLlm(intent_dict(sort_mode="best_value"), {"summary": "Found acme results."})
+    )
+    req = ids.request(
+        "acme nova", filters={"sortMode": "highest_discount", "specs": [{"name": "ram", "value": "8GB"}]}
+    )
+    await run_to_end(service, req)
+    rank_call = backend.calls_to("/intelligence/ranking/rank")[-1]
+    assert rank_call["mode"] == "highest_discount"
+    assert rank_call["filters"]["requiredSpecs"] == {"ram_gb": 8}

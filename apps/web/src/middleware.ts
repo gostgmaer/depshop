@@ -11,4 +11,18 @@ export function middleware(request: NextRequest) {
   return NextResponse.next({ request: { headers } });
 }
 
-export const config = { matcher: ["/settings/:path*"] };
+export const config = {
+  matcher: [
+    "/dashboard/:path*",
+    "/search/:path*",
+    "/products/:path*",
+    "/categories/:path*",
+    "/compare/:path*",
+    "/watchlists/:path*",
+    "/alerts/:path*",
+    "/history/:path*",
+    "/notifications/:path*",
+    "/settings/:path*",
+    "/billing/:path*",
+  ],
+};

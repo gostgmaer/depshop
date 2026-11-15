@@ -1,0 +1,14 @@
+1:"$Sreact.fragment"
+2:I[5341,[],""]
+3:I[25,[],""]
+4:I[8449,["9289","static/chunks/9289-da1572b5c52dc67a.js","6103","static/chunks/6103-540d24623ad12da5.js","9664","static/chunks/9664-af80478aa73ba424.js","4813","static/chunks/4813-193d4fa9a070391c.js","408","static/chunks/408-b74d8e41eb3130fe.js","1604","static/chunks/1604-e87cbe6fc4f79695.js","8364","static/chunks/app/(dashboard)/alerts/page-5193b8181a35afce.js"],"AlertsView"]
+5:I[5104,[],"OutletBoundary"]
+7:I[7158,[],"AsyncMetadataOutlet"]
+9:I[5104,[],"ViewportBoundary"]
+b:I[5104,[],"MetadataBoundary"]
+c:"$Sreact.suspense"
+0:{"b":"AIjQFYwnP-H_BDlc2HXtc","f":[["children","(dashboard)","children","alerts",["alerts",{"children":["__PAGE__",{}]}],["alerts",["$","$1","c",{"children":[null,["$","$L2",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L3",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]]}],{"children":["__PAGE__",["$","$1","c",{"children":[["$","$L4",null,{}],null,["$","$L5",null,{"children":["$L6",["$","$L7",null,{"promise":"$@8"}]]}]]}],{},null,false]},null,false],["$","$1","h",{"children":[null,["$","$1","z4fiK_O8UXl0K9kO-Zi2Qv",{"children":[["$","$L9",null,{"children":"$La"}],null]}],["$","$Lb","z4fiK_O8UXl0K9kO-Zi2Qm",{"children":["$","div",null,{"hidden":true,"children":["$","$c",null,{"fallback":null,"children":"$Ld"}]}]}]]}],false]],"S":false}
+a:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
+6:null
+8:{"metadata":[["$","title","0",{"children":"Price alerts Â· DealMind AI"}],["$","meta","1",{"name":"description","content":"Compare prices across Indian shopping sites and find genuine deals."}],["$","meta","2",{"name":"robots","content":"noindex"}]],"error":null,"digest":"$undefined"}
+d:"$8:metadata"

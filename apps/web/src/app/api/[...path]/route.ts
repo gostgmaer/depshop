@@ -73,6 +73,12 @@ async function proxy(request: NextRequest, { params }: Context): Promise<Respons
   for (const cookie of upstream.headers.getSetCookie())
     responseHeaders.append("set-cookie", cookie);
 
+  // Server-Sent Events (search progress) are streamed through, never buffered.
+  if (upstream.headers.get("content-type")?.startsWith("text/event-stream") && upstream.body) {
+    responseHeaders.set("cache-control", "no-cache, no-transform");
+    responseHeaders.set("x-accel-buffering", "no");
+    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+  }
   const body =
     upstream.status === 204 || request.method === "HEAD" ? null : await upstream.arrayBuffer();
   return new Response(body, { status: upstream.status, headers: responseHeaders });

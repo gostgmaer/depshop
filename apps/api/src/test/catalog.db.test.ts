@@ -282,6 +282,56 @@ describe("product detail, variants, offers and history", () => {
     expect((await errorOf("/api/v1/products/not-a-uuid", 422)).code).toBe("VALIDATION_ERROR");
   });
 
+  it("prices fresh offers deterministically: delivered price, verified discount, unverified benefits", async () => {
+    await load([
+      listing({ externalId: "a", sellingPricePaise: 1_800_000 }),
+      listing({
+        externalId: "b",
+        sellingPricePaise: 1_700_000,
+        shippingPaise: 4_900,
+        offerConditions: {
+          bankOffers: [
+            {
+              type: "BANK_OFFER",
+              description: "₹1,000 off with HDFC Bank cards",
+              amountPaise: 100_000,
+              eligibleBanks: ["HDFC Bank"],
+              verified: true,
+            },
+          ],
+        },
+      }),
+    ]);
+    const id = await productId("Acme Nova 7 5G");
+    const p = await data<{
+      offers: { offer: Json; pricing: Json & { prices: Json; benefits: Json[] } }[];
+      comparison: Json;
+    }>(`/api/v1/products/${id}/pricing`);
+    expect(p.offers).toHaveLength(2);
+    // Cheapest DELIVERED first (₹17,049 incl. shipping vs ₹18,000).
+    expect(p.offers[0]!.pricing).toMatchObject({
+      prices: {
+        deliveredPaise: 1_704_900,
+        bankOfferPricePaise: null,
+        bestVerifiedPayablePaise: 1_704_900,
+      },
+      directDiscount: { status: "OK", amountPaise: 799_900, percentBp: 3_199 },
+    });
+    // Anonymous visitor: the user's bank is unknown, so the offer is not applied.
+    expect(p.offers[0]!.pricing.benefits[0]).toMatchObject({
+      status: "UNVERIFIED",
+      appliesToPayable: false,
+    });
+    expect(p.comparison).toMatchObject({
+      sameVariant: true,
+      cheapestDelivered: p.offers[0]!.offer.id,
+    });
+    expect(
+      (await ctx.app.inject({ method: "GET", url: `/api/v1/products/${id}/pricing?variantId=x` }))
+        .statusCode,
+    ).toBe(422);
+  });
+
   it("lists offers cheapest first, only from active sources, and never presents stale offers as live", async () => {
     await load([
       listing({ externalId: "a", sellingPricePaise: 1_800_000 }),

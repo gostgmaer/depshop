@@ -4,7 +4,12 @@
  * (nothing in localStorage). The only cookie read here is the CSRF token,
  * which is designed to be readable and is copied into the x-csrf-token header.
  */
-import { CSRF_HEADER, type ErrorResponseBody, type SuccessBody } from "@dealmind/shared";
+import {
+  CSRF_HEADER,
+  type ErrorResponseBody,
+  type PaginationMeta,
+  type SuccessBody,
+} from "@dealmind/shared";
 
 const CSRF_COOKIES = ["__Host-dm_csrf", "dm_csrf"];
 
@@ -45,12 +50,68 @@ async function fetchCsrfToken(): Promise<string> {
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
+export interface Page<T> {
+  items: T[];
+  pagination: PaginationMeta;
+}
+
+/** Builds "?a=1&b=x&b=y" from defined values (arrays repeat the key). */
+export function queryString(params: Record<string, unknown>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    const scalar = (x: unknown) =>
+      typeof x === "string" || typeof x === "number" || typeof x === "boolean" ? String(x) : null;
+    if (Array.isArray(v)) {
+      for (const x of v) {
+        const s = scalar(x);
+        if (s !== null) q.append(k, s);
+      }
+    } else {
+      const s = scalar(v);
+      if (s !== null) q.set(k, s);
+    }
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 export async function api<T>(
   method: Method,
   path: string,
   body?: unknown,
   retried = false,
 ): Promise<T> {
+  return (await request<T>(method, path, body, retried)).data;
+}
+
+/** A paginated GET: items plus the pagination meta of the envelope. */
+export async function apiPage<T>(path: string): Promise<Page<T>> {
+  const res = await request<T[]>("GET", path);
+  return {
+    items: res.data,
+    pagination: res.meta?.pagination ?? {
+      page: 1,
+      pageSize: res.data.length,
+      total: res.data.length,
+      totalPages: 1,
+    },
+  };
+}
+
+/** Listeners told when an authenticated call finds the session gone (expired/revoked). */
+const sessionListeners = new Set<() => void>();
+export function onSessionExpired(listener: () => void): () => void {
+  sessionListeners.add(listener);
+  return () => sessionListeners.delete(listener);
+}
+
+async function request<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  retried = false,
+): Promise<{ data: T; meta?: SuccessBody<T>["meta"] }> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (method !== "GET") {
     headers[CSRF_HEADER] = csrfFromCookie() ?? (await fetchCsrfToken());
@@ -65,18 +126,19 @@ export async function api<T>(
     ...(method === "GET" ? {} : { body: JSON.stringify(body ?? {}) }),
   });
 
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) return { data: undefined as T };
   const payload = (await res.json().catch(() => null)) as
     (Partial<SuccessBody<T>> & Partial<ErrorResponseBody>) | null;
   // Success responses are enveloped: { success: true, data, meta }.
-  if (res.ok) return payload?.data as T;
+  if (res.ok) return { data: payload?.data as T, ...(payload?.meta ? { meta: payload.meta } : {}) };
 
   const error = payload?.error;
   // A stale CSRF cookie (e.g. secret rotated): fetch a fresh token and retry once.
   if (error?.code === "CSRF_INVALID" && !retried) {
     await fetchCsrfToken();
-    return api<T>(method, path, body, true);
+    return request<T>(method, path, body, true);
   }
+  if (res.status === 401 && !path.startsWith("/auth/")) for (const l of sessionListeners) l();
   throw new ApiError(
     res.status,
     error?.code ?? "INTERNAL",
@@ -86,10 +148,7 @@ export async function api<T>(
 }
 
 /** Only allow same-site relative redirects (prevents open redirects via ?next=). */
-export function safeNextPath(
-  next: string | null | undefined,
-  fallback = "/settings/profile",
-): string {
+export function safeNextPath(next: string | null | undefined, fallback = "/dashboard"): string {
   if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\"))
     return fallback;
   return next;

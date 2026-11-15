@@ -106,7 +106,18 @@ async def test_persistence_is_idempotent_and_includes_observability(
         "generate_response",
     }
     assert run["metadata"]["iterations"] == 1
-    assert {e["type"] for e in backend.events[ids.search]} == {"node_started", "node_finished"}
+    events = backend.events[ids.search]
+    assert {e["type"] for e in events} == {
+        "node_started",
+        "node_finished",
+        "sources_planned",
+        "source_finished",
+    }
+    planned = next(e for e in events if e["type"] == "sources_planned")
+    finished = [e for e in events if e["type"] == "source_finished"]
+    # Every searched marketplace reports its own outcome (UI shows per-source progress).
+    assert {e["source"] for e in finished} <= set(planned["sources"])
+    assert all(e["status"] in ("SUCCEEDED", "FAILED", "TIMED_OUT", "SKIPPED") for e in finished)
 
 
 async def test_resume_from_checkpoint_after_a_transient_failure(

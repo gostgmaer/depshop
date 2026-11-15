@@ -10,11 +10,11 @@ Never silently changes the user's requirements:
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, get_args
 
 from app.nodes.deps import AgentDeps
 from app.providers.rules import CATEGORY_WORDS, MARKETPLACES
-from app.schemas.intent import ExtractedIntent, ShoppingFilters, Validation
+from app.schemas.intent import ExtractedIntent, ShoppingFilters, SortMode, Validation
 from app.schemas.internal import CategoryRef
 from app.state.state import ShoppingSearchState
 from app.utils.money import is_stated
@@ -83,8 +83,14 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
     if both:
         contradictions.append(f"The same brand is both required and excluded: {', '.join(sorted(both))}.")
 
+    # Specs chosen in the UI are explicit requirements too (canonicalized the same way).
+    ui_specs = [
+        {"name": str(s["name"]), "value": str(s["value"])}
+        for s in explicit.get("specs") or []
+        if isinstance(s, dict) and s.get("name") and s.get("value")
+    ]
     required = await deps.intelligence.canonical_specs(
-        [s.model_dump() for s in intent.required_specifications], correlation_id=cid
+        [s.model_dump() for s in intent.required_specifications] + ui_specs, correlation_id=cid
     )
     excluded = await deps.intelligence.canonical_specs(
         [s.model_dump() for s in intent.excluded_specifications], correlation_id=cid
@@ -97,6 +103,7 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
     category = explicit.get("category") if isinstance(explicit.get("category"), str) else None
     category = category or match_category(intent, categories)
 
+    explicit_sort = explicit.get("sortMode") if explicit.get("sortMode") in get_args(SortMode) else None
     sources = explicit.get("sourceSlugs")
     source_slugs = (
         list(sources) if isinstance(sources, list) else (marketplace_slugs(intent.marketplaces) or None)
@@ -121,7 +128,7 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
         if intent.min_discount_percent is not None
         else None,
         genuine_discount_only=intent.genuine_discount_only,
-        sort_mode=intent.sort_mode,
+        sort_mode=explicit_sort if explicit_sort else intent.sort_mode,
         source_slugs=source_slugs,
         excluded_source_slugs=excluded_sources,
         compare_same_product=intent.compare_same_product,

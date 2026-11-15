@@ -1,0 +1,410 @@
+/**
+ * Component tests (React Testing Library). The API is mocked at the typed
+ * service layer with contract-checked fixtures (see contracts.test.ts).
+ */
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PriceAlertForm } from "@/components/alerts/price-alert-form";
+import { buildSeries, priceAt } from "@/components/charts/price-history-chart";
+import { SourceStatusCard, TrendingDeals } from "@/components/dashboard/widgets";
+import { SidebarNav } from "@/components/navigation/sidebar-nav";
+import { OfferComparisonTable } from "@/components/offers/offer-comparison-table";
+import { WatchlistButton } from "@/components/products/watchlist-button";
+import { AiSearchBar } from "@/components/search/ai-search-bar";
+import { ResultCard } from "@/components/search/result-card";
+import { SearchProgressPanel } from "@/components/search/search-progress";
+import { toSearchInput, EMPTY_SEARCH } from "@/components/search/search-input";
+import { ErrorState } from "@/components/ui/misc";
+import { initialProgress, progressReducer } from "@/hooks/use-search-events";
+import { ApiError } from "@/lib/api";
+import { shouldRetry } from "@/app/providers";
+import * as services from "@/services";
+import { productPricing, searchDetail, searchResult } from "./fixtures";
+import { renderWithQuery } from "./render";
+import { navigation } from "./setup";
+
+vi.mock("@/services", () => ({
+  catalog: {
+    categoryTree: vi.fn(async () => []),
+    sourceStatus: vi.fn(async () => ({
+      totalSources: 3,
+      activeSources: 1,
+      healthySources: 1,
+      sources: [
+        {
+          slug: "mock_alpha",
+          name: "Mock Store Alpha",
+          status: "ACTIVE",
+          connectorStatus: "ACTIVE",
+          statusReason: null,
+          isSample: true,
+          integrationKind: "MOCK",
+          health: "HEALTHY",
+          lastHealthCheckAt: null,
+        },
+        {
+          slug: "flipkart",
+          name: "Flipkart",
+          status: "PENDING_CREDENTIALS",
+          connectorStatus: "PENDING_CREDENTIALS",
+          statusReason: "Affiliate API token not configured",
+          isSample: false,
+          integrationKind: "AFFILIATE_FEED",
+          health: "UNKNOWN",
+          lastHealthCheckAt: null,
+        },
+      ],
+    })),
+    products: vi.fn(),
+  },
+  searches: {
+    create: vi.fn(async () => ({ id: "40000000-0000-7000-8000-000000000009" })),
+    list: vi.fn(async () => ({
+      items: [],
+      pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
+    })),
+    eventsUrl: (id: string) => `/api/v1/search/${id}/events`,
+  },
+  watchlists: {
+    list: vi.fn(async () => ({
+      items: [
+        {
+          id: "50000000-0000-7000-8000-000000000001",
+          name: "Diwali phones",
+          itemCount: 2,
+          createdAt: "",
+          updatedAt: "",
+        },
+      ],
+      pagination: { page: 1, pageSize: 100, total: 1, totalPages: 1 },
+    })),
+    create: vi.fn(),
+    addItem: vi.fn(async () => ({})),
+  },
+  alerts: { create: vi.fn(async () => ({})) },
+  notifications: { unreadCount: vi.fn(async () => ({ unread: 0 })) },
+  billing: { usage: vi.fn() },
+}));
+const svc = services as unknown as {
+  searches: { create: ReturnType<typeof vi.fn> };
+  watchlists: { addItem: ReturnType<typeof vi.fn> };
+  alerts: { create: ReturnType<typeof vi.fn> };
+};
+
+beforeEach(() => {
+  navigation.pathname = "/dashboard";
+});
+
+describe("1. dashboard rendering", () => {
+  it("shows marketplace status honestly, with mock data labelled", async () => {
+    renderWithQuery(<SourceStatusCard />);
+    expect(await screen.findByText("Mock Store Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Mock data")).toBeInTheDocument();
+    expect(screen.getByText("Affiliate API token not configured")).toBeInTheDocument();
+    expect(screen.getByText("1 of 3 marketplaces searchable")).toBeInTheDocument();
+  });
+
+  it("never invents trending deals", () => {
+    renderWithQuery(<TrendingDeals />);
+    expect(screen.getByText("Not available yet")).toBeInTheDocument();
+  });
+});
+
+describe("2. navigation", () => {
+  it("marks the current section and links every main area", () => {
+    navigation.pathname = "/products/10000000-0000-7000-8000-000000000001";
+    renderWithQuery(<SidebarNav />);
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    for (const name of [
+      "Dashboard",
+      "AI Search",
+      "Categories",
+      "Compare",
+      "Watchlists",
+      "Price Alerts",
+      "Search History",
+      "Notifications",
+      "Settings",
+      "Subscription",
+    ]) {
+      expect(within(nav).getByRole("link", { name: new RegExp(name) })).toBeInTheDocument();
+    }
+    // Product pages belong to Categories.
+    expect(within(nav).getByRole("link", { name: "Categories" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(within(nav).getByRole("link", { name: "Dashboard" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+});
+
+describe("4–5. search submission and filters", () => {
+  it("submits the natural-language query and opens the live results page", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<AiSearchBar />);
+    await user.type(
+      screen.getByLabelText("Describe what you want to buy"),
+      "cheapest 1.5-ton inverter AC",
+    );
+    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await waitFor(() =>
+      expect(svc.searches.create).toHaveBeenCalledWith({ query: "cheapest 1.5-ton inverter AC" }),
+    );
+    expect(navigation.push).toHaveBeenCalledWith("/search/40000000-0000-7000-8000-000000000009");
+  });
+
+  it("validates the query before calling the API", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<AiSearchBar />);
+    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    expect(await screen.findByText("Describe what you are looking for")).toBeInTheDocument();
+    expect(svc.searches.create).not.toHaveBeenCalled();
+  });
+
+  it("sends explicit filters (budget in paise, ranking, specs) that win over the AI", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<AiSearchBar />);
+    await user.click(screen.getByRole("button", { name: "Show filters" }));
+    await user.type(screen.getByLabelText("Describe what you want to buy"), "smartphone");
+    await user.type(screen.getByLabelText("Max budget (₹)"), "35,000");
+    await user.selectOptions(screen.getByLabelText("Ranking"), "highest_discount");
+    await user.selectOptions(screen.getByLabelText("RAM"), "8GB");
+    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await waitFor(() =>
+      expect(svc.searches.create).toHaveBeenCalledWith({
+        query: "smartphone",
+        filters: {
+          maxPricePaise: 3_500_000,
+          sortMode: "highest_discount",
+          specs: [{ name: "ram", value: "8GB" }],
+        },
+      }),
+    );
+  });
+
+  it("maps form values to the strict API contract", () => {
+    expect(
+      toSearchInput({
+        ...EMPTY_SEARCH,
+        query: " tv ",
+        brands: "Sony, LG, Sony",
+        minPrice: "40,000.50",
+      }),
+    ).toEqual({
+      query: "tv",
+      filters: { minPricePaise: 4_000_050, brands: ["Sony", "LG"] },
+    });
+  });
+});
+
+describe("6. search progress", () => {
+  it("tracks marketplaces through the SSE events", () => {
+    let s = progressReducer(initialProgress, {
+      kind: "event",
+      event: { type: "node_started", node: "parallel_search", at: "" },
+    });
+    s = progressReducer(s, {
+      kind: "event",
+      event: {
+        type: "sources_planned",
+        sources: ["mock_alpha", "mock_beta"],
+        skipped: ["flipkart"],
+        at: "",
+      },
+    });
+    s = progressReducer(s, {
+      kind: "event",
+      event: {
+        type: "source_finished",
+        source: "mock_alpha",
+        status: "SUCCEEDED",
+        resultCount: 4,
+        at: "",
+      },
+    });
+    s = progressReducer(s, {
+      kind: "event",
+      event: {
+        type: "source_finished",
+        source: "mock_beta",
+        status: "FAILED",
+        resultCount: 0,
+        at: "",
+      },
+    });
+    expect(s.stage).toBe("parallel_search");
+    expect(s.sources).toEqual({
+      mock_alpha: { status: "SUCCEEDED", resultCount: 4 },
+      mock_beta: { status: "FAILED", resultCount: 0 },
+      flipkart: { status: "SKIPPED", resultCount: 0 },
+    });
+  });
+
+  it("stays usable when a marketplace fails", () => {
+    const live = {
+      ...initialProgress,
+      sources: {
+        mock_alpha: { status: "SUCCEEDED" as const, resultCount: 4 },
+        mock_beta: { status: "FAILED" as const, resultCount: 0 },
+      },
+    };
+    renderWithQuery(<SearchProgressPanel detail={searchDetail()} live={live} running />);
+    const list = screen.getByRole("list", { name: "Marketplace status" });
+    expect(within(list).getByText(/Done · 4 results/)).toBeInTheDocument();
+    expect(within(list).getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText(/results from the others are still shown/)).toBeInTheDocument();
+  });
+});
+
+describe("7. product results", () => {
+  it("shows verified facts and never presents a conditional offer as guaranteed", () => {
+    renderWithQuery(<ResultCard result={searchResult()} index={0} />);
+    expect(screen.getByText("Acme Nova 7 5G")).toBeInTheDocument();
+    expect(screen.getByText("₹24,999")).toBeInTheDocument();
+    expect(screen.getByText("16.66% off MRP")).toBeInTheDocument();
+    expect(screen.getByText("Lowest observed price in the last 30 days")).toBeInTheDocument();
+    const benefits = screen.getByRole("list", { name: "Offers and benefits" });
+    expect(within(benefits).getByText("conditional · not guaranteed")).toBeInTheDocument();
+    expect(within(benefits).getByText(/depends on your bank/)).toBeInTheDocument();
+    expect(screen.getByText(/Price observed/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Compare prices/ })).toHaveAttribute(
+      "href",
+      "/compare?product=10000000-0000-7000-8000-000000000001&variant=20000000-0000-7000-8000-000000000001",
+    );
+  });
+});
+
+describe("8. offer comparison", () => {
+  it("orders by delivered price and marks the lowest", () => {
+    renderWithQuery(<OfferComparisonTable data={productPricing()} />);
+    const table = screen.getByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(within(rows[0]!).getByText("Mock Store 2")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("Lowest delivered")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("₹24,539")).toBeInTheDocument();
+  });
+});
+
+describe("9. watchlist actions", () => {
+  it("adds the variant to the chosen watchlist", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<WatchlistButton variantId="20000000-0000-7000-8000-000000000001" />);
+    await user.click(screen.getByRole("button", { name: /Watch/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /Diwali phones/ }));
+    await waitFor(() =>
+      expect(svc.watchlists.addItem).toHaveBeenCalledWith(
+        "50000000-0000-7000-8000-000000000001",
+        "20000000-0000-7000-8000-000000000001",
+        undefined,
+      ),
+    );
+    expect(await screen.findByText("Added to watchlist")).toBeInTheDocument();
+  });
+});
+
+describe("10. price alert creation", () => {
+  it("parses rupees to integer paise and creates the alert", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <PriceAlertForm
+        variantId="20000000-0000-7000-8000-000000000001"
+        currentPricePaise={2_499_900}
+        sources={[{ id: "30000000-0000-7000-8000-000000000001", name: "Mock Store 1" }]}
+      />,
+    );
+    await user.type(screen.getByLabelText("Target price (₹)"), "22,999.50");
+    await user.selectOptions(
+      screen.getByLabelText("Marketplace"),
+      "30000000-0000-7000-8000-000000000001",
+    );
+    await user.click(screen.getByRole("button", { name: "Create alert" }));
+    await waitFor(() =>
+      expect(svc.alerts.create).toHaveBeenCalledWith({
+        variantId: "20000000-0000-7000-8000-000000000001",
+        targetPricePaise: 2_299_950,
+        sourceId: "30000000-0000-7000-8000-000000000001",
+      }),
+    );
+    // Honest about alert evaluation not running yet.
+    expect(await screen.findByText(/not running yet/)).toBeInTheDocument();
+  });
+
+  it("rejects an unparseable amount", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<PriceAlertForm variantId="x" sources={[]} />);
+    await user.type(screen.getByLabelText("Target price (₹)"), "twenty");
+    await user.click(screen.getByRole("button", { name: "Create alert" }));
+    expect(await screen.findByText(/Enter an amount like/)).toBeInTheDocument();
+    expect(svc.alerts.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("11. API error states", () => {
+  it("offers a retry and only retries transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderWithQuery(<ErrorState message="Couldn't load deals." onRetry={onRetry} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load deals.");
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalled();
+    expect(shouldRetry(0, new ApiError(503, "DEPENDENCY_UNAVAILABLE", "x"))).toBe(true);
+    expect(shouldRetry(0, new ApiError(404, "NOT_FOUND", "x"))).toBe(false);
+    expect(shouldRetry(0, new ApiError(422, "VALIDATION_ERROR", "x"))).toBe(false);
+    expect(shouldRetry(2, new TypeError("network"))).toBe(false);
+  });
+});
+
+describe("price history chart helpers", () => {
+  it("builds one series per offer and reads step values", () => {
+    const series = buildSeries(
+      {
+        productId: "p",
+        from: "2026-10-01T00:00:00Z",
+        to: "2026-11-01T00:00:00Z",
+        lowestPricePaise: 100,
+        highestPricePaise: 300,
+        points: [
+          {
+            offerId: "o2",
+            variantId: "v",
+            sourceSlug: "mock_beta",
+            mrpPaise: null,
+            sellingPricePaise: 200,
+            shippingPaise: null,
+            stockStatus: "IN_STOCK",
+            observedAt: "2026-10-05T00:00:00Z",
+          },
+          {
+            offerId: "o1",
+            variantId: "v",
+            sourceSlug: "mock_alpha",
+            mrpPaise: null,
+            sellingPricePaise: 300,
+            shippingPaise: null,
+            stockStatus: "IN_STOCK",
+            observedAt: "2026-10-02T00:00:00Z",
+          },
+          {
+            offerId: "o1",
+            variantId: "v",
+            sourceSlug: "mock_alpha",
+            mrpPaise: null,
+            sellingPricePaise: 100,
+            shippingPaise: null,
+            stockStatus: "IN_STOCK",
+            observedAt: "2026-10-10T00:00:00Z",
+          },
+        ],
+      },
+      { mock_alpha: "Mock Store Alpha" },
+    );
+    expect(series.map((s) => s.label)).toEqual(["Mock Store Alpha", "mock_beta"]);
+    const alpha = series[0]!;
+    expect(priceAt(alpha, Date.parse("2026-10-01T00:00:00Z"))).toBeNull();
+    expect(priceAt(alpha, Date.parse("2026-10-05T00:00:00Z"))).toBe(300);
+    expect(priceAt(alpha, Date.parse("2026-10-20T00:00:00Z"))).toBe(100);
+  });
+});

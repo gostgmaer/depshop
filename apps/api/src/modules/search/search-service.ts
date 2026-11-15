@@ -7,6 +7,7 @@
  * Every query is scoped by the authenticated userId; another user's search is
  * reported as "not found".
  */
+import type { PricingResult, PricingService } from "@dealmind/intelligence";
 import type { PrismaClient } from "@dealmind/db";
 import { type JobQueues, QueueName, searchCancelKey } from "@dealmind/queue";
 import {
@@ -34,6 +35,8 @@ export interface SearchServiceOptions {
   redisPrefix: string;
   /** Best-effort cancellation of a running agent execution (Python agent API). */
   cancelExecution?: (executionId: string) => Promise<void>;
+  /** Current deterministic pricing for each result's offer. */
+  pricing?: PricingService;
 }
 const RESULTS_CACHE_TTL = 300;
 
@@ -255,11 +258,20 @@ export class SearchService {
           load,
         )
       : await load();
-    // Staleness is evaluated now, never frozen into the cache.
+    // Staleness and current pricing are evaluated now, never frozen into the cache.
     const now = Date.now();
+    const priced = this.options?.pricing
+      ? new Map(
+          (await this.options.pricing.calculate(page.items.map((i) => i.offer.id))).map((p) => [
+            p.offerId,
+            p,
+          ]),
+        )
+      : new Map<string, PricingResult>();
     return paginated(
       page.items.map((item) => ({
         ...item,
+        pricing: priced.get(item.offer.id) ?? null,
         offer: {
           ...item.offer,
           isStale: now - new Date(item.offer.observedAt).getTime() > this.offerStaleAfterMs,

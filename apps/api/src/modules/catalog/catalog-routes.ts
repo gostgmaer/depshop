@@ -3,6 +3,8 @@
  *   /categories, /products, /sources
  */
 import {
+  productPricingQuery,
+  productPricingView,
   categoryDetail,
   categoryNode,
   categoryView,
@@ -18,6 +20,7 @@ import {
   sourceView,
   variantView,
 } from "@dealmind/shared";
+import { type PricingService, compareOffers } from "@dealmind/intelligence";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { ok, page } from "../../utils/http.js";
@@ -67,10 +70,10 @@ export const categoryRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> 
   );
 };
 
-export const productRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
-  app,
-  { catalog },
-) => {
+export const productRoutes: FastifyPluginAsyncZod<{
+  catalog: CatalogService;
+  pricing: PricingService;
+}> = async (app, { catalog, pricing }) => {
   app.get(
     "/",
     {
@@ -122,6 +125,48 @@ export const productRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> =
       },
     },
     async (req) => catalog.getOffers(req.params.id, req.query),
+  );
+
+  app.get(
+    "/:id/pricing",
+    {
+      schema: {
+        tags: ["catalog"],
+        summary:
+          "Fresh offers with deterministic pricing: delivered price, verified direct discount, " +
+          "conditional benefits (with verification status), EMI costs and price-history claims",
+        params: idParam,
+        querystring: productPricingQuery,
+        response: { 200: ok(productPricingView) },
+      },
+    },
+    async (req) => {
+      const offers = await catalog.getOffers(req.params.id, req.query);
+      // Anonymous pricing: no user eligibility is known, so no conditional benefit is applied.
+      const candidates = await pricing.candidates(offers.map((o) => o.id));
+      const byId = new Map(candidates.map((c) => [c.offerId, c.pricing]));
+      const priced = offers
+        .filter((o) => byId.has(o.id))
+        .map((o) => ({ offer: o, pricing: byId.get(o.id)! }))
+        .sort(
+          (a, b) =>
+            a.pricing.prices.deliveredPaise - b.pricing.prices.deliveredPaise ||
+            a.offer.id.localeCompare(b.offer.id),
+        );
+      const cmp = compareOffers(candidates);
+      return {
+        productId: req.params.id,
+        variantId: req.query.variantId ?? null,
+        offers: priced,
+        comparison: {
+          cheapestDelivered: cmp.cheapestDelivered,
+          cheapestVerifiedPayable: cmp.cheapestVerifiedPayable,
+          highestDirectDiscount: cmp.highestDirectDiscount,
+          sameVariant: cmp.sameVariant,
+          notes: cmp.notes,
+        },
+      };
+    },
   );
 
   // "/history" is canonical; "/price-history" is kept as an alias for existing clients.

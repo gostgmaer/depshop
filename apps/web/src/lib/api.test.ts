@@ -27,11 +27,11 @@ const json = (status: number, body: unknown) =>
 describe("safeNextPath", () => {
   it.each([
     ["/settings/security", "/settings/security"],
-    [null, "/settings/profile"],
-    ["https://evil.example", "/settings/profile"],
-    ["//evil.example", "/settings/profile"],
+    [null, "/dashboard"],
+    ["https://evil.example", "/dashboard"],
+    ["//evil.example", "/dashboard"],
     // Browsers normalise "/\host" to "//host" (protocol-relative): must be rejected.
-    ["/\\evil.example", "/settings/profile"],
+    ["/\\evil.example", "/dashboard"],
     // A plain relative path is legitimate.
     ["/evil.example", "/evil.example"],
   ])("%s -> %s", (input, expected) => {

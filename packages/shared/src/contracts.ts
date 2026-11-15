@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { pageQuery } from "./envelope.js";
+import { pricingResultSchema } from "./pricing-contracts.js";
 import { PlanCode } from "./schemas.js";
 
 const uuid = z.string().uuid();
@@ -218,6 +219,31 @@ export const offerView = z.object({
 });
 export type OfferView = z.infer<typeof offerView>;
 
+/**
+ * An offer with its deterministic pricing (computed by the pricing engine from
+ * the database): delivered price, verified direct discount, conditional
+ * benefits with their verification status, EMI costs and history claims.
+ */
+export const offerPricingView = z.object({ offer: offerView, pricing: pricingResultSchema });
+export type OfferPricingView = z.infer<typeof offerPricingView>;
+
+export const productPricingQuery = z.object({ variantId: uuid.optional() }).strict();
+
+export const productPricingView = z.object({
+  productId: uuid,
+  variantId: uuid.nullable(),
+  /** Fresh offers from active sources, cheapest delivered first. */
+  offers: z.array(offerPricingView),
+  comparison: z.object({
+    cheapestDelivered: uuid.nullable(),
+    cheapestVerifiedPayable: uuid.nullable(),
+    highestDirectDiscount: uuid.nullable(),
+    sameVariant: z.boolean(),
+    notes: z.array(z.string()),
+  }),
+});
+export type ProductPricingView = z.infer<typeof productPricingView>;
+
 export const priceHistoryQuery = z
   .object({
     variantId: uuid.optional(),
@@ -324,6 +350,17 @@ export const sourceStatus = z.object({
 
 // ── Search (user-owned) ───────────────────────────────────────────────────
 
+export const SEARCH_SORT_MODES = [
+  "best_value",
+  "lowest_price",
+  "highest_discount",
+  "recently_launched",
+  "price_drop",
+  "trending_deals",
+  "relevance",
+] as const;
+export type SearchSortMode = (typeof SEARCH_SORT_MODES)[number];
+
 export const searchFilters = z
   .object({
     minPricePaise: paise.optional(),
@@ -333,6 +370,20 @@ export const searchFilters = z
     sourceSlugs: z
       .array(z.string().regex(/^[a-z][a-z0-9_]*$/))
       .max(20)
+      .optional(),
+    /** Ranking mode chosen in the UI (wins over the one the AI infers). */
+    sortMode: z.enum(SEARCH_SORT_MODES).optional(),
+    /** Required specifications chosen in the UI, as name/value text (canonicalized server-side). */
+    specs: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(40),
+            value: z.string().trim().min(1).max(60),
+          })
+          .strict(),
+      )
+      .max(10)
       .optional(),
   })
   .strict()
@@ -422,7 +473,31 @@ export const searchResultView = z.object({
   mrpPaiseAtSearch: paise.nullable(),
   offer: offerView,
   product: productRef,
+  /** Current pricing of the offer (null if it can no longer be priced). */
+  pricing: pricingResultSchema.nullable(),
 });
+export type SearchResultView = z.infer<typeof searchResultView>;
+
+/** Progress events of the search SSE stream (GET /search/:id/events). */
+export const searchEvent = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("node_started"), node: z.string(), at: z.string() }),
+  z.object({ type: z.literal("node_finished"), node: z.string(), at: z.string() }),
+  z.object({ type: z.literal("status"), status: z.string(), at: z.string() }),
+  z.object({
+    type: z.literal("sources_planned"),
+    sources: z.array(z.string()),
+    skipped: z.array(z.string()),
+    at: z.string(),
+  }),
+  z.object({
+    type: z.literal("source_finished"),
+    source: z.string(),
+    status: z.enum(["SUCCEEDED", "FAILED", "TIMED_OUT", "SKIPPED"]),
+    resultCount: z.number().int(),
+    at: z.string(),
+  }),
+]);
+export type SearchEvent = z.infer<typeof searchEvent>;
 
 // ── Watchlists (user-owned) ───────────────────────────────────────────────
 

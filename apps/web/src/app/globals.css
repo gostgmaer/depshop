@@ -1,28 +1,97 @@
 @import "tailwindcss";
 
+/*
+ * DealMind AI visual identity: "ink & emerald".
+ *  - ink neutrals with a faint blue cast;
+ *  - emerald  = savings, verified data, primary actions;
+ *  - indigo   = the AI (search, interpretation, explanations);
+ *  - amber    = conditional / unverified information (never a guarantee);
+ *  - red      = errors, unavailable.
+ */
 @theme {
-  --color-background: oklch(0.99 0 0);
-  --color-foreground: oklch(0.18 0.02 260);
-  --color-muted: oklch(0.96 0.005 260);
-  --color-muted-foreground: oklch(0.5 0.02 260);
-  --color-primary: oklch(0.55 0.17 155);
+  --font-sans:
+    "Inter", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+
+  --color-background: oklch(0.985 0.003 260);
+  --color-surface: oklch(1 0 0);
+  --color-foreground: oklch(0.2 0.025 265);
+  --color-muted: oklch(0.955 0.006 260);
+  --color-muted-foreground: oklch(0.5 0.02 262);
+  --color-border: oklch(0.905 0.008 260);
+  /* Light-mode text colours meet WCAG AA (≥ 4.5:1) on white and on their soft fills. */
+  --color-primary: oklch(0.47 0.12 158);
   --color-primary-foreground: oklch(0.99 0 0);
-  --color-border: oklch(0.91 0.005 260);
-  --color-danger: oklch(0.55 0.2 27);
+  --color-primary-soft: oklch(0.95 0.04 160);
+  --color-accent: oklch(0.49 0.2 275);
+  --color-accent-foreground: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.95 0.03 275);
+  --color-warning: oklch(0.5 0.12 62);
+  --color-warning-soft: oklch(0.96 0.05 85);
+  --color-danger: oklch(0.5 0.19 27);
+  --color-danger-soft: oklch(0.96 0.03 25);
+
+  /* Chart series (validated categorical order: blue, orange, aqua, yellow, magenta). */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+
   --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --shadow-card: 0 1px 2px oklch(0.2 0.02 265 / 0.04), 0 4px 16px oklch(0.2 0.02 265 / 0.04);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-background: oklch(0.16 0.01 260);
-    --color-foreground: oklch(0.96 0 0);
-    --color-muted: oklch(0.22 0.01 260);
-    --color-muted-foreground: oklch(0.7 0.01 260);
-    --color-border: oklch(0.3 0.01 260);
+    --color-background: oklch(0.155 0.015 265);
+    --color-surface: oklch(0.195 0.016 265);
+    --color-foreground: oklch(0.955 0.005 260);
+    --color-muted: oklch(0.24 0.016 265);
+    --color-muted-foreground: oklch(0.7 0.015 262);
+    --color-border: oklch(0.3 0.016 265);
+    --color-primary: oklch(0.7 0.15 158);
+    --color-primary-foreground: oklch(0.16 0.02 160);
+    --color-primary-soft: oklch(0.28 0.05 160);
+    --color-accent: oklch(0.7 0.15 275);
+    --color-accent-foreground: oklch(0.16 0.02 275);
+    --color-accent-soft: oklch(0.28 0.06 275);
+    --color-warning: oklch(0.78 0.13 80);
+    --color-warning-soft: oklch(0.3 0.05 80);
+    --color-danger: oklch(0.7 0.17 27);
+    --color-danger-soft: oklch(0.3 0.06 25);
+    --shadow-card: 0 1px 2px oklch(0 0 0 / 0.3);
+    --color-series-1: #3987e5;
+    --color-series-2: #d95926;
+    --color-series-3: #199e70;
+    --color-series-4: #c98500;
+    --color-series-5: #d55181;
   }
+}
+
+html {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   background: var(--color-background);
   color: var(--color-foreground);
+}
+
+/* Tabular figures for every price so columns line up. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -1,0 +1,10 @@
+data: {"type":"node_started","node":"parallel_search","at":"2026-11-15T10:37:34.785Z"}
+
+data: {"type":"sources_planned","sources":["mock_1","mock_2"],"skipped":["flipkart"],"at":"2026-11-15T10:37:35.036Z"}
+
+data: {"type":"source_finished","source":"mock_1","status":"SUCCEEDED","resultCount":1,"at":"2026-11-15T10:37:35.287Z"}
+
+data: {"type":"source_finished","source":"mock_2","status":"FAILED","resultCount":0,"at":"2026-11-15T10:37:35.549Z"}
+
+data: {"type":"status","status":"PARTIAL","at":"2026-11-15T10:37:35.811Z"}
+

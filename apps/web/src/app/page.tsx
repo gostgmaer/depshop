@@ -5,7 +5,7 @@ import { getServerUser } from "@/lib/server-session";
 const features = [
   {
     title: "One search, every store",
-    body: "Search Amazon India, Flipkart, Croma, Reliance Digital and Tata CLiQ in parallel.",
+    body: "Describe what you want once; DealMind searches every connected marketplace in parallel.",
   },
   {
     title: "Genuine discounts",
@@ -28,7 +28,7 @@ export default async function HomePage() {
         <div className="flex gap-2">
           {user ? (
             <Button size="sm" variant="outline" asChild>
-              <Link href="/settings/profile">Account</Link>
+              <Link href="/dashboard">Dashboard</Link>
             </Button>
           ) : (
             <>
@@ -43,8 +43,8 @@ export default async function HomePage() {
         </div>
       </nav>
       <section className="flex flex-col items-start gap-6 sm:py-12">
-        <span className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground">
-          Early preview
+        <span className="rounded-full border border-accent/25 bg-accent-soft px-3 py-1 text-xs text-accent">
+          Early preview · AI shopping intelligence for India
         </span>
         <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
           Shopping intelligence for India.
@@ -54,8 +54,8 @@ export default async function HomePage() {
           marketplaces and shows you the lowest real price.
         </p>
         <div className="flex gap-3">
-          <Button size="lg" disabled title="Search arrives in a later phase">
-            Start searching
+          <Button size="lg" variant="ai" asChild>
+            <Link href={user ? "/search" : "/register"}>Start searching</Link>
           </Button>
           <Button size="lg" variant="outline" asChild>
             <a href="#features">How it works</a>

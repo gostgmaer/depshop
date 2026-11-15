@@ -41,7 +41,7 @@ export function VerifyEmail() {
       <div className="flex flex-col gap-4">
         <Alert tone="success">{verify.data.message}</Alert>
         <Button asChild>
-          <Link href={me.data ? "/settings/profile" : "/login"}>
+          <Link href={me.data ? "/dashboard" : "/login"}>
             {me.data ? "Go to your settings" : "Sign in"}
           </Link>
         </Button>

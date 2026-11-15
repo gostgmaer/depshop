@@ -48,6 +48,7 @@ import {
   MatchReviewService,
   MatchService,
   MatchingEngine,
+  PricingService,
 } from "@dealmind/intelligence";
 import { InternalIntelligence } from "./modules/internal/internal-intelligence.js";
 import { internalRoutes } from "./modules/internal/internal-routes.js";
@@ -273,6 +274,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ),
   });
   const plans = new PlanService(prisma);
+  const pricing = new PricingService(prisma);
   const search = new SearchService(
     prisma,
     jobs,
@@ -283,6 +285,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     {
       redis,
       redisPrefix: env.REDIS_KEY_PREFIX,
+      pricing,
       ...(env.AGENT_SERVICE_URL && env.AGENT_SERVICE_TOKEN
         ? {
             cancelExecution: agentCanceller(
@@ -328,7 +331,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await v1.register(adminPlatformRoutes, { prefix: "/admin", prisma });
       await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
-      await v1.register(productRoutes, { prefix: "/products", catalog });
+      await v1.register(productRoutes, { prefix: "/products", catalog, pricing });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
       await v1.register(searchRoutes, {
         prefix: "/search",

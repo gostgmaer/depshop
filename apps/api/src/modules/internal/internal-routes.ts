@@ -569,10 +569,22 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
         params: z.object({ id: uuid }),
         body: z
           .object({
-            type: z.enum(["node_started", "node_finished", "status"]),
+            type: z.enum([
+              "node_started",
+              "node_finished",
+              "status",
+              "sources_planned",
+              "source_finished",
+            ]),
             node: z.string().max(50).optional(),
             status: z.string().max(30).optional(),
             message: z.string().max(300).optional(),
+            /** source_finished: one marketplace's outcome. */
+            source: slug.optional(),
+            resultCount: z.number().int().min(0).max(10_000).optional(),
+            /** sources_planned: eligible and skipped marketplaces. */
+            sources: z.array(slug).max(50).optional(),
+            skipped: z.array(slug).max(50).optional(),
             at: z.string().max(40),
           })
           .strict(),

@@ -69,6 +69,29 @@ NODES: dict[str, NodeFn] = {
 }
 
 
+def progress_events(node: str, update: dict[str, Any]) -> list[dict[str, Any]]:
+    """Marketplace-level progress for the UI (planned sources, then one event per source)."""
+    if node == "source_discovery":
+        return [
+            {
+                "type": "sources_planned",
+                "sources": list(update.get("selected_sources") or []),
+                "skipped": [s["sourceId"] for s in update.get("skipped_sources") or []],
+            }
+        ]
+    if node == "parallel_search":
+        return [
+            {
+                "type": "source_finished",
+                "source": r["sourceId"],
+                "status": r["status"],
+                "resultCount": int(r.get("resultCount") or 0),
+            }
+            for r in update.get("source_runs") or []
+        ]
+    return []
+
+
 async def _noop_emit(_event: dict[str, Any]) -> None:
     return None
 
@@ -93,6 +116,8 @@ def _wrap(
         update["execution_metadata"] = {**meta, "node_ms": {name: int(previous) + ms}}
         log.info("node_finished", node=name, ms=ms, execution_id=state["execution_id"])
         await emit({"type": "node_finished", "node": name})
+        for event in progress_events(name, update):
+            await emit(event)
         return update
 
     node.__name__ = name
