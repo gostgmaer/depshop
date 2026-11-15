@@ -16,10 +16,24 @@ from app.schemas.intent import ShoppingFilters
 from app.state.state import ShoppingSearchState
 
 
+def eligibility_of(filters: ShoppingFilters) -> dict[str, list[str]] | None:
+    """User-stated eligibility for conditional offers (absent keys = unknown, never assumed)."""
+    out: dict[str, list[str]] = {}
+    if filters.user_banks:
+        out["banks"] = filters.user_banks
+    if filters.user_card_types:
+        out["cardTypes"] = list(filters.user_card_types)
+    if filters.user_memberships:
+        out["memberships"] = filters.user_memberships
+    return out or None
+
+
 async def calculate_discounts(state: ShoppingSearchState, deps: AgentDeps) -> dict[str, Any]:
     filters = ShoppingFilters.model_validate(state["filters"])
     facts = await deps.intelligence.pricing(
-        state.get("candidate_offer_ids", []), correlation_id=state["execution_id"]
+        state.get("candidate_offer_ids", []),
+        eligibility=eligibility_of(filters),
+        correlation_id=state["execution_id"],
     )
     report = dict(state.get("filter_report") or {})
     removed: dict[str, int] = dict(report.get("removed") or {})
@@ -28,12 +42,13 @@ async def calculate_discounts(state: ShoppingSearchState, deps: AgentDeps) -> di
     cutoff = datetime.now(UTC) - timedelta(days=deps.recently_launched_days)
     unknown_launch = 0
     for f in facts:
-        p = f.pricing
+        p = f.pricing.assessment
         if filters.genuine_discount_only and p.verdict != "GENUINE":
             removed[f"discount_{p.verdict.lower()}"] = removed.get(f"discount_{p.verdict.lower()}", 0) + 1
             continue
         if filters.min_discount_bp is not None:
-            value = p.genuine_discount_bp if filters.genuine_discount_only else p.claimed_discount_bp
+            direct = f.pricing.direct_discount.percent_bp or 0
+            value = p.genuine_discount_bp if filters.genuine_discount_only else direct
             if value < filters.min_discount_bp:
                 removed["below_min_discount"] = removed.get("below_min_discount", 0) + 1
                 continue

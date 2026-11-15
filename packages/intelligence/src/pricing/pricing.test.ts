@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { assessPrice, effectivePricePaise, medianPaise, type PricePoint } from "./pricing.js";
-import { rankDeals, relevanceBp, type DealCandidate } from "../ranking/ranking.js";
 
 const now = new Date("2026-11-15T00:00:00Z");
 const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
@@ -56,68 +55,5 @@ describe("pricing engine", () => {
     expect(assessPrice({ sellingPricePaise: 100, mrpPaise: null }, [], now).reasons).toContain(
       "NO_MRP",
     );
-  });
-});
-
-function deal(
-  id: string,
-  over: Partial<DealCandidate> & { price?: number; verdictBp?: number } = {},
-): DealCandidate {
-  const price = over.price ?? 1_000_000;
-  const genuine = over.verdictBp ?? 0;
-  return {
-    id,
-    title: over.title ?? "Acme Nova 7 5G",
-    productId: `p-${id}`,
-    variantId: `v-${id}`,
-    sourceId: "s",
-    stockStatus: over.stockStatus ?? "IN_STOCK",
-    launchDate: over.launchDate ?? null,
-    pricing: {
-      sellingPricePaise: price,
-      effectivePricePaise: price,
-      mrpPaise: null,
-      claimedDiscountBp: 0,
-      claimedSavingsPaise: 0,
-      genuineDiscountBp: genuine,
-      verdict: genuine > 0 ? "GENUINE" : "INSUFFICIENT_HISTORY",
-      history: { points: 0, spanDays: 0, minPaise: null, medianPaise: null, maxPaise: null },
-      reasons: [],
-      ...over.pricing,
-    },
-  };
-}
-
-describe("ranking engine", () => {
-  it("scores relevance by query-token coverage", () => {
-    expect(relevanceBp("acme nova 5g", "Acme Nova 7 5G (8GB RAM)")).toBe(10_000);
-    expect(relevanceBp("acme nova pro", "Acme Nova 7")).toBe(6_666);
-  });
-
-  it("ranks deterministically per mode, in-stock first, stable ties", () => {
-    const deals = [
-      deal("a", { price: 2_000_000 }),
-      deal("b", { price: 1_000_000 }),
-      deal("c", { price: 1_500_000, verdictBp: 2_000 }),
-      deal("d", { price: 500_000, stockStatus: "OUT_OF_STOCK" }),
-      deal("e", { price: 1_200_000, launchDate: new Date("2026-10-01") }),
-    ];
-    const ids = (mode: Parameters<typeof rankDeals>[2]) =>
-      rankDeals("acme nova", deals, mode).map((r) => r.deal.id);
-    expect(ids("cheapest")).toEqual(["b", "e", "c", "a", "d"]);
-    expect(ids("highest_discount")[0]).toBe("c");
-    expect(ids("newest")[0]).toBe("e");
-    expect(ids("best_value")).toEqual(ids("best_value")); // stable
-    expect(ids("best_value").at(-1)).toBe("d"); // out of stock last even though cheapest
-    const ranked = rankDeals("acme nova", deals, "best_value");
-    expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3, 4, 5]);
-    expect(ranked[0]?.breakdown).toMatchObject({ relevance: 10_000 });
-  });
-
-  it("does not let an unverifiable MRP discount boost a deal", () => {
-    const fake = deal("fake", { price: 1_000_000, pricing: { claimedDiscountBp: 8_000 } as never });
-    const plain = deal("plain", { price: 1_000_000 });
-    const r = rankDeals("acme", [fake, plain], "best_value");
-    expect(r[0]?.score).toBe(r[1]?.score);
   });
 });

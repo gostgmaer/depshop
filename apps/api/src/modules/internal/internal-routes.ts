@@ -9,8 +9,13 @@
  *  Intelligence (deterministic; reuses @dealmind/catalog + @dealmind/intelligence)
  *    POST /intelligence/normalize     catalog normalization of items
  *    POST /intelligence/deduplicate   catalog matching → shared offers, product/variant groups
- *    POST /intelligence/pricing       facts + genuine-discount assessment per offer id
- *    POST /intelligence/rank          deterministic ranking of offer ids
+ *  Pricing & ranking (@dealmind/intelligence; offer ids + user-stated eligibility in, never prices)
+ *    POST /intelligence/pricing/calculate   full pricing of one offer
+ *    POST /intelligence/pricing/batch       … of up to 400 offers
+ *    GET  /intelligence/pricing/history/:offerId   history analytics + observations
+ *    POST /intelligence/ranking/rank        hard filters → mode strategy → explained ranking,
+ *                                           plus a signed ranking token (see ranking-token.ts)
+ *    POST /intelligence/ranking/compare     side-by-side comparison of 2–20 offers
  *  Matching (@dealmind/intelligence matching engine; dry run + audit trail)
  *    POST /intelligence/match               match one listing against the shared catalog
  *    POST /intelligence/match/batch         up to 100 listings (identical requests deduplicated)
@@ -38,7 +43,13 @@ import {
   type MatchService,
   ReviewInputError,
   ReviewNotAllowedError,
+  OfferNotFoundError,
   SORT_MODES,
+  eligibilityContextSchema,
+  hardFiltersSchema,
+  pricingResultSchema,
+  rankedDealSchema,
+  weightsSchema,
   matchBatchSchema,
   matchRequestSchema,
   reviewRequestSchema,
@@ -48,6 +59,12 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import type { Redis } from "ioredis";
 import { z } from "zod";
 import type { InternalIntelligence } from "./internal-intelligence.js";
+import {
+  RANKING_TOKEN_TTL_SECONDS,
+  matchesRanking,
+  signRankingToken,
+  verifyRankingToken,
+} from "./ranking-token.js";
 import {
   type UserContext,
   serviceAuth,
@@ -76,12 +93,77 @@ export interface InternalDeps {
   reviews: MatchReviewService;
   /** Unset → match reviews cannot be resolved through the internal API. */
   reviewContextSecret: string | null;
+  /** Signs ranking tokens; derived from SESSION_SECRET (never shared with the agent). */
+  rankingKey: Buffer;
 }
 
 const slug = z.string().regex(/^[a-z][a-z0-9_]{0,49}$/);
 const uuid = z.string().uuid();
 const items = z.array(normalizedProductSchema).max(400);
 const offerIds = z.array(uuid).min(1).max(400);
+const eligibility = eligibilityContextSchema.optional();
+const specValue = z.union([z.string().max(100), z.number()]);
+
+const offerFactsSchema = z.object({
+  offerId: uuid,
+  productId: uuid,
+  variantId: uuid,
+  sourceSlug: z.string(),
+  sourceName: z.string(),
+  isSample: z.boolean(),
+  title: z.string(),
+  productName: z.string(),
+  brand: z.string(),
+  productUrl: z.string(),
+  sellerName: z.string().nullable(),
+  stockStatus: z.enum(["IN_STOCK", "LIMITED", "OUT_OF_STOCK", "PREORDER", "UNKNOWN"]),
+  launchDate: z.string().nullable(),
+  variantAttributes: z.record(z.unknown()),
+  specifications: z.record(z.unknown()),
+  offerConditions: z.record(z.unknown()),
+  observedAt: z.string(),
+  pricing: pricingResultSchema,
+});
+
+const rankingRequestSchema = z
+  .object({
+    offerIds,
+    mode: z.enum(SORT_MODES),
+    query: z.string().max(500).optional(),
+    filters: hardFiltersSchema.optional(),
+    preferredSpecs: z.record(specValue).optional(),
+    priceBasis: z.enum(["delivered", "best_verified"]).optional(),
+    weights: weightsSchema.optional(),
+    maxPriceAgeHours: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 30)
+      .optional(),
+    recentlyLaunchedDays: z.number().int().min(7).max(3_650).optional(),
+    eligibility,
+  })
+  .strict();
+
+const rankingResponseSchema = z.object({
+  requestedMode: z.string(),
+  appliedMode: z.string(),
+  priceBasis: z.enum(["delivered", "best_verified"]),
+  weights: z.object({
+    price: z.number(),
+    specMatch: z.number(),
+    discount: z.number(),
+    history: z.number(),
+    relevance: z.number(),
+    quality: z.number(),
+  }),
+  ranked: z.array(rankedDealSchema.extend({ offer: offerFactsSchema })),
+  excluded: z.array(z.object({ offerId: uuid, reason: z.string(), detail: z.string().optional() })),
+  warnings: z.array(z.string()),
+  unknownOfferIds: z.array(uuid),
+  computedAt: z.string(),
+  rankingToken: z.string(),
+});
 
 /** Validated JSON records (zod: record of unknown) → Prisma JSON input. */
 const toJson = (v: Record<string, unknown>): Prisma.InputJsonObject => v as Prisma.InputJsonObject;
@@ -98,6 +180,8 @@ const agentResultSchema = z
     clarificationQuestion: z.string().max(500).nullable(),
     response: z.string().max(10_000).nullable(),
     warnings: z.array(z.string().max(500)).max(50).default([]),
+    /** Token from /intelligence/ranking/rank; required whenever rankedDeals is non-empty. */
+    rankingToken: z.string().max(50_000).nullable().default(null),
     rankedDeals: z
       .array(
         z
@@ -318,24 +402,89 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
   );
 
   app.post(
-    "/intelligence/pricing",
-    { config: noRateLimit, schema: { body: z.object({ offerIds }).strict() } },
-    async (req) => ({ offers: await deps.intelligence.offerFacts(req.body.offerIds) }),
-  );
-
-  app.post(
-    "/intelligence/rank",
+    "/intelligence/pricing/calculate",
     {
       config: noRateLimit,
       schema: {
-        body: z
-          .object({ query: z.string().min(1).max(500), mode: z.enum(SORT_MODES), offerIds })
-          .strict(),
+        body: z.object({ offerId: uuid, eligibility }).strict(),
+        response: { 200: z.object({ offer: offerFactsSchema }) },
       },
     },
-    async (req) => ({
-      ranked: await deps.intelligence.rank(req.body.query, req.body.mode, req.body.offerIds),
-    }),
+    async (req) => {
+      const [offer] = await deps.intelligence.offerFacts([req.body.offerId], req.body.eligibility);
+      if (!offer) throw AppError.notFound("Offer");
+      return { offer };
+    },
+  );
+
+  app.post(
+    "/intelligence/pricing/batch",
+    {
+      config: noRateLimit,
+      schema: {
+        body: z.object({ offerIds, eligibility }).strict(),
+        response: {
+          200: z.object({ offers: z.array(offerFactsSchema), unknownOfferIds: z.array(uuid) }),
+        },
+      },
+    },
+    async (req) => {
+      const offers = await deps.intelligence.offerFacts(req.body.offerIds, req.body.eligibility);
+      const known = new Set(offers.map((o) => o.offerId));
+      return {
+        offers,
+        unknownOfferIds: [...new Set(req.body.offerIds)].filter((id) => !known.has(id)),
+      };
+    },
+  );
+
+  app.get(
+    "/intelligence/pricing/history/:offerId",
+    {
+      config: noRateLimit,
+      schema: {
+        params: z.object({ offerId: uuid }),
+        querystring: z.object({ days: z.coerce.number().int().min(7).max(180).default(180) }),
+      },
+    },
+    async (req) => {
+      try {
+        return await deps.intelligence.pricing.history(req.params.offerId, req.query.days);
+      } catch (err) {
+        if (err instanceof OfferNotFoundError) throw AppError.notFound("Offer");
+        throw err;
+      }
+    },
+  );
+
+  app.post(
+    "/intelligence/ranking/rank",
+    {
+      config: noRateLimit,
+      schema: { body: rankingRequestSchema, response: { 200: rankingResponseSchema } },
+    },
+    async (req) => {
+      const { offerIds: ids, ...options } = req.body;
+      const result = await deps.intelligence.rank(ids, options);
+      const rankingToken = signRankingToken(
+        {
+          deals: result.ranked.map((d) => [d.offerId, d.rank, d.score]),
+          mode: result.appliedMode,
+          exp: Math.floor(Date.now() / 1000) + RANKING_TOKEN_TTL_SECONDS,
+        },
+        deps.rankingKey,
+      );
+      return { ...result, rankingToken };
+    },
+  );
+
+  app.post(
+    "/intelligence/ranking/compare",
+    {
+      config: noRateLimit,
+      schema: { body: z.object({ offerIds: z.array(uuid).min(2).max(20), eligibility }).strict() },
+    },
+    async (req) => deps.intelligence.pricing.compare(req.body.offerIds, req.body.eligibility),
   );
 
   app.post(
@@ -390,7 +539,8 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
         );
         return { matchId: req.params.id, action: req.body.resolution.action, ...result };
       } catch (err) {
-        if (err instanceof ReviewNotAllowedError) throw new AppError(ErrorCode.FORBIDDEN, err.message);
+        if (err instanceof ReviewNotAllowedError)
+          throw new AppError(ErrorCode.FORBIDDEN, err.message);
         if (err instanceof ReviewInputError) {
           if (/already been reviewed|No pending review/.test(err.message))
             throw AppError.conflict(err.message);
@@ -471,6 +621,18 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
         select: { id: true, sellingPricePaise: true, mrpPaise: true },
       });
       const byId = new Map(offers.map((o) => [o.id, o]));
+      // Rank and score must come from the TypeScript ranking engine, not the agent.
+      if (body.rankedDeals.length) {
+        const signed = body.rankingToken
+          ? verifyRankingToken(body.rankingToken, deps.rankingKey)
+          : null;
+        if (!signed || !matchesRanking(body.rankedDeals, signed)) {
+          throw new AppError(
+            ErrorCode.VALIDATION_ERROR,
+            "Ranked deals must match a ranking computed by /intelligence/ranking/rank",
+          );
+        }
+      }
       const missing = body.rankedDeals.filter((d) => !byId.has(d.offerId));
       if (missing.length)
         throw new AppError(ErrorCode.VALIDATION_ERROR, `Unknown offers: ${missing.length}`);

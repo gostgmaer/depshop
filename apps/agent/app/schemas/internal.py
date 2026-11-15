@@ -134,16 +134,51 @@ class DedupResult(CamelModel):
     groups: list[ProductGroup]
 
 
-class Pricing(CamelModel):
-    selling_price_paise: int
-    effective_price_paise: int
+class DirectDiscount(CamelModel):
+    status: Literal["OK", "NO_MRP", "INVALID_MRP", "ABOVE_MRP", "ABOVE_MRP_EXCEPTION"]
     mrp_paise: int | None
-    claimed_discount_bp: int
-    claimed_savings_paise: int
-    genuine_discount_bp: int
+    selling_price_paise: int
+    amount_paise: int | None
+    percent_bp: int | None
+    percent_text: str | None
+
+
+class PriceLadder(CamelModel):
+    base_paise: int
+    shipping_paise: int
+    shipping_known: bool
+    mandatory_fees_paise: int
+    delivered_paise: int
+    coupon_price_paise: int | None
+    bank_offer_price_paise: int | None
+    membership_price_paise: int | None
+    best_verified_payable_paise: int
+    best_verified_payable_basis: str
+    cashback_paise: int | None
+    cashback_adjusted_reference_paise: int | None
+    exchange_max_benefit_paise: int | None
+
+
+class Assessment(CamelModel):
+    """Genuine discount vs the offer's own price history (TypeScript pricing engine)."""
+
     verdict: Literal["GENUINE", "NOT_GENUINE", "INSUFFICIENT_HISTORY"]
-    history: dict[str, Any]
-    reasons: list[str]
+    genuine_discount_bp: int
+    claimed_discount_bp: int
+
+
+class Pricing(CamelModel):
+    """Authoritative pricing of one offer, computed by the TypeScript engine from the database."""
+
+    offer_id: str
+    observed_at: str
+    direct_discount: DirectDiscount
+    prices: PriceLadder
+    benefits: list[dict[str, Any]] = Field(default_factory=list)
+    emi: list[dict[str, Any]] = Field(default_factory=list)
+    history: dict[str, Any] = Field(default_factory=dict)
+    assessment: Assessment
+    flags: list[str] = Field(default_factory=list)
 
 
 class OfferFacts(CamelModel):
@@ -169,11 +204,33 @@ class OfferFacts(CamelModel):
     pricing: Pricing
 
 
+class Explanation(CamelModel):
+    summary: str
+    factors: list[str]
+    versus_next: str | None
+
+
 class RankedOffer(CamelModel):
+    """One ranked deal; rank, score and explanation come from the TypeScript ranking engine."""
+
     rank: int
+    offer_id: str
     score: int
-    breakdown: dict[str, int]
+    delivered_price_paise: int
+    ranking_price_paise: int
+    components: dict[str, int | None]
+    explanation: Explanation
     offer: OfferFacts
+
+
+class RankingResult(CamelModel):
+    requested_mode: str
+    applied_mode: str
+    ranked: list[RankedOffer]
+    excluded: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    # Signed by Fastify; persistence only accepts rankings that match it.
+    ranking_token: str
 
 
 class SearchRecord(CamelModel):

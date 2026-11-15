@@ -13,16 +13,10 @@ from app.state.state import ShoppingSearchState
 
 
 def explain(deal: dict[str, Any]) -> str:
-    b, p = deal["breakdown"], deal["offer"]["pricing"]
-    verdict = {
-        "GENUINE": "genuine discount vs typical price",
-        "NOT_GENUINE": "no real discount vs typical price",
-        "INSUFFICIENT_HISTORY": "discount not yet verifiable",
-    }[p["verdict"]]
-    return (
-        f"Score {deal['score']}: relevance {b['relevance'] // 100}%, price position {b['price'] // 100}%, "
-        f"{verdict}, availability {b['availability'] // 100}%."
-    )
+    """The ranking engine's own explanation (data-derived), trimmed to the stored length."""
+    e = deal["explanation"]
+    text = str(e["summary"]) + (f". {e['versusNext']}." if e.get("versusNext") else ".")
+    return text[:1000]
 
 
 def aggregate_source_runs(state: ShoppingSearchState) -> list[dict[str, Any]]:
@@ -80,14 +74,16 @@ def build_payload(state: ShoppingSearchState, status: str) -> dict[str, Any]:
         "clarificationQuestion": state.get("clarification_question"),
         "response": state.get("response"),
         "warnings": list(dict.fromkeys(state.get("warnings", [])))[:50],
+        # Exactly the engine's ranks and scores (Fastify verifies them against the ranking token).
+        "rankingToken": state.get("ranking_token") if deals else None,
         "rankedDeals": [
             {
-                "offerId": d["offer"]["offerId"],
-                "rank": i + 1,
-                "score": max(0, min(10_000, int(d["score"]))),
+                "offerId": d["offerId"],
+                "rank": int(d["rank"]),
+                "score": int(d["score"]),
                 "explanation": explain(d),
             }
-            for i, d in enumerate(deals)
+            for d in deals
         ],
         "sourceRuns": aggregate_source_runs(state),
         "agentRun": {

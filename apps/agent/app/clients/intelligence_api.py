@@ -16,7 +16,7 @@ from app.schemas.internal import (
     MatchResult,
     NormalizedItem,
     OfferFacts,
-    RankedOffer,
+    RankingResult,
     SearchRecord,
 )
 
@@ -66,26 +66,71 @@ class IntelligenceApiClient:
         )
         return DedupResult.model_validate(data)
 
-    async def pricing(self, offer_ids: list[str], *, correlation_id: str) -> list[OfferFacts]:
-        if not offer_ids:
-            return []
+    async def pricing(
+        self,
+        offer_ids: list[str],
+        *,
+        eligibility: dict[str, list[str]] | None = None,
+        correlation_id: str,
+    ) -> list[OfferFacts]:
+        """Authoritative pricing (TypeScript engine, database prices); chunked at 400."""
+        out: list[OfferFacts] = []
+        for start in range(0, len(offer_ids), 400):
+            body: dict[str, Any] = {"offerIds": offer_ids[start : start + 400]}
+            if eligibility:
+                body["eligibility"] = eligibility
+            data = await self._api.request(
+                "POST", "/intelligence/pricing/batch", json=body, correlation_id=correlation_id
+            )
+            out.extend(OfferFacts.model_validate(o) for o in data["offers"])
+        return out
+
+    async def price_history(self, offer_id: str, *, days: int = 180, correlation_id: str) -> dict[str, Any]:
         data = await self._api.request(
-            "POST", "/intelligence/pricing", json={"offerIds": offer_ids}, correlation_id=correlation_id
+            "GET", f"/intelligence/pricing/history/{offer_id}?days={days}", correlation_id=correlation_id
         )
-        return [OfferFacts.model_validate(o) for o in data["offers"]]
+        return dict(data)
+
+    async def compare(
+        self,
+        offer_ids: list[str],
+        *,
+        eligibility: dict[str, list[str]] | None = None,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"offerIds": offer_ids}
+        if eligibility:
+            body["eligibility"] = eligibility
+        data = await self._api.request(
+            "POST", "/intelligence/ranking/compare", json=body, correlation_id=correlation_id
+        )
+        return dict(data)
 
     async def rank(
-        self, query: str, mode: SortMode, offer_ids: list[str], *, correlation_id: str
-    ) -> list[RankedOffer]:
+        self,
+        query: str,
+        mode: SortMode,
+        offer_ids: list[str],
+        *,
+        filters: dict[str, Any] | None = None,
+        eligibility: dict[str, list[str]] | None = None,
+        price_basis: str | None = None,
+        correlation_id: str,
+    ) -> RankingResult | None:
+        """Deterministic ranking (TypeScript). Ids, filters and user-stated eligibility only."""
         if not offer_ids:
-            return []
+            return None
+        body: dict[str, Any] = {"query": query, "mode": mode, "offerIds": offer_ids[:400]}
+        if filters:
+            body["filters"] = filters
+        if eligibility:
+            body["eligibility"] = eligibility
+        if price_basis:
+            body["priceBasis"] = price_basis
         data = await self._api.request(
-            "POST",
-            "/intelligence/rank",
-            json={"query": query, "mode": mode, "offerIds": offer_ids},
-            correlation_id=correlation_id,
+            "POST", "/intelligence/ranking/rank", json=body, correlation_id=correlation_id
         )
-        return [RankedOffer.model_validate(r) for r in data["ranked"]]
+        return RankingResult.model_validate(data)
 
     # ── product matching (dry run; review decisions are for human admins only) ──
     # There is deliberately no review method: resolving a MANUAL_REVIEW needs a

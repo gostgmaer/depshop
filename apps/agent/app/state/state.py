@@ -68,6 +68,7 @@ class ShoppingSearchState(TypedDict):
     filter_report: NotRequired[dict[str, Any]]
     priced_offers: NotRequired[list[dict[str, Any]]]
     ranked_deals: NotRequired[list[dict[str, Any]]]
+    ranking_token: NotRequired[str | None]
 
     # Control.
     iteration: NotRequired[int]

@@ -124,9 +124,12 @@ export const adminCatalogRoutes: FastifyPluginAsyncZod<{
       }
       let outcome;
       try {
-        outcome = await importer.resolveReview(review.id, req.body, { userId: getAuth(req).userId });
+        outcome = await importer.resolveReview(review.id, req.body, {
+          userId: getAuth(req).userId,
+        });
       } catch (err) {
-        if (err instanceof ReviewInputError) throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
+        if (err instanceof ReviewInputError)
+          throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
         if (err instanceof SourceNotActiveError) {
           throw new AppError(ErrorCode.VALIDATION_ERROR, err.message);
         }

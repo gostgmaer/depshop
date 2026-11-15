@@ -171,3 +171,26 @@ pnpm --filter @dealmind/worker dev     # mocks are on outside production (CONNEC
 2. Register it in `createDefaultRegistry`, reading credentials from env.
 3. Add or seed its `ShoppingSource` row with a pending status and a reason.
 4. Write tests from the documented response shape, then verify against the live API with real credentials before setting the source `ACTIVE`.
+
+## Promotions, fees and EMI (Phase 3.3)
+
+`promotionSchema` carries the eligibility terms exactly as a source states them:
+
+- `minTransactionPaise`;
+- `eligibleBanks`, `paymentMethods`, `cardTypes`, `membership`;
+- `validFrom`, `expiresAt`;
+- `conditions`;
+- `verified`.
+
+`verified` **defaults to false**. A connector may set it only when the source
+itself confirms the benefit is live for the listing, e.g. from a checkout/cart
+quote API. Listing-page promotions stay unverified.
+
+Normalized products also carry:
+
+- `fees`: type, amount, and whether it is mandatory;
+- `emiOptions`: tenure, rate, installment, interest, processing fee, no-cost claim.
+
+All of it is stored in `ProductOffer.offerConditions` and evaluated by the
+pricing engine. Nothing is ever subtracted from `sellingPricePaise` here. See
+[PRICING.md](PRICING.md).

@@ -125,6 +125,9 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
         source_slugs=source_slugs,
         excluded_source_slugs=excluded_sources,
         compare_same_product=intent.compare_same_product,
+        user_banks=intent.payment_banks or None,
+        user_card_types=intent.card_types or None,
+        user_memberships=intent.memberships or None,
         keywords=intent.search_keywords,
     )
 

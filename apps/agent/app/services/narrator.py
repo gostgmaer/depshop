@@ -55,18 +55,21 @@ def facts_for(deals: list[dict[str, Any]], status: str, source_runs: list[dict[s
     top = []
     for d in deals[:5]:
         o, p = d["offer"], d["offer"]["pricing"]
+        dd, a = p["directDiscount"], p["assessment"]
+        discounted = dd["status"] == "OK" and (dd.get("percentBp") or 0) > 0
         top.append(
             {
                 "rank": d["rank"],
                 "product": o["productName"],
                 "marketplace": o["sourceName"],
-                "price": format_rupees(p["effectivePricePaise"]),
-                "mrp": format_rupees(p["mrpPaise"]) if p.get("mrpPaise") else None,
-                "discount_vs_mrp": format_bp(p["claimedDiscountBp"]) if p["claimedDiscountBp"] else None,
-                "discount_verdict": p["verdict"],
-                "genuine_discount_vs_typical_price": format_bp(p["genuineDiscountBp"])
-                if p["genuineDiscountBp"]
+                "price": format_rupees(p["prices"]["deliveredPaise"]),
+                "mrp": format_rupees(dd["mrpPaise"]) if discounted else None,
+                "discount_vs_mrp": format_bp(dd["percentBp"]) if discounted else None,
+                "discount_verdict": a["verdict"],
+                "genuine_discount_vs_typical_price": format_bp(a["genuineDiscountBp"])
+                if a["genuineDiscountBp"]
                 else None,
+                "price_history": (p.get("history") or {}).get("lowestClaim", {}).get("text"),
                 "stock": o["stockStatus"],
                 "sample_data": o["isSample"],
             }

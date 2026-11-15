@@ -274,11 +274,10 @@ def test_narration_with_invented_figures_or_urls_is_rejected() -> None:
                 "stockStatus": "IN_STOCK",
                 "isSample": True,
                 "pricing": {
-                    "effectivePricePaise": 2_949_900,
-                    "mrpPaise": 3_834_870,
-                    "claimedDiscountBp": 2307,
-                    "verdict": "INSUFFICIENT_HISTORY",
-                    "genuineDiscountBp": 0,
+                    "prices": {"deliveredPaise": 2_949_900},
+                    "directDiscount": {"status": "OK", "mrpPaise": 3_834_870, "percentBp": 2307},
+                    "assessment": {"verdict": "INSUFFICIENT_HISTORY", "genuineDiscountBp": 0},
+                    "history": {"lowestClaim": {"kind": "NONE", "text": None}},
                 },
             },
         }

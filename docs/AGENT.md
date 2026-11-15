@@ -19,7 +19,7 @@ browser ─POST /api/v1/search─▶ Fastify ──creates Search(PENDING)──
                     marks FAILED only on its final retry          Fastify /internal/v1 (service token)
                                                                     ├─ /sources/eligible, /marketplace/search  → @dealmind/connectors
                                                                     ├─ /intelligence/normalize|deduplicate     → @dealmind/catalog
-                                                                    ├─ /intelligence/pricing|rank              → @dealmind/intelligence
+                                                                    ├─ /intelligence/pricing/*, ranking/*      → pricing & ranking engines (PRICING.md)
                                                                     ├─ /intelligence/match[/batch], matches/:id → matching engine (dry run)
                                                                     └─ /searches/:id/(events|agent-result)     → DB (ownership re-checked)
 browser ◀─GET /api/v1/search/:id/events (SSE)── Redis pub/sub ◀── progress events

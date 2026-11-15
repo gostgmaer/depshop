@@ -43,9 +43,15 @@ import {
   createDefaultRegistry,
 } from "@dealmind/connectors";
 import { invalidateProductCaches } from "@dealmind/catalog";
-import { CatalogImporter, MatchReviewService, MatchService, MatchingEngine } from "@dealmind/intelligence";
+import {
+  CatalogImporter,
+  MatchReviewService,
+  MatchService,
+  MatchingEngine,
+} from "@dealmind/intelligence";
 import { InternalIntelligence } from "./modules/internal/internal-intelligence.js";
 import { internalRoutes } from "./modules/internal/internal-routes.js";
+import { rankingKey } from "./modules/internal/ranking-token.js";
 import { agentCanceller } from "./modules/internal/agent-client.js";
 import { notificationRoutes } from "./modules/notifications/notification-routes.js";
 import { SearchService } from "./modules/search/search-service.js";
@@ -357,7 +363,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       allowMocks: env.CONNECTORS_ALLOW_MOCKS,
       logger: app.log,
     });
-    const onProductsChanged = (ids: string[]) => invalidateProductCaches(redis, env.REDIS_KEY_PREFIX, ids);
+    const onProductsChanged = (ids: string[]) =>
+      invalidateProductCaches(redis, env.REDIS_KEY_PREFIX, ids);
     const engine = new MatchingEngine();
     const importer = new CatalogImporter(prisma, { engine, onProductsChanged });
     await app.register(internalRoutes, {
@@ -374,6 +381,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       matches: new MatchService(prisma, engine),
       reviews: new MatchReviewService(prisma, importer, onProductsChanged),
       reviewContextSecret: env.REVIEW_CONTEXT_SECRET ?? null,
+      rankingKey: rankingKey(env.SESSION_SECRET),
       catalog,
       allowMocks: env.CONNECTORS_ALLOW_MOCKS,
     });

@@ -71,7 +71,7 @@ export type BasisPoints = number;
  */
 export function discountBasisPoints(price: Paise, mrp: Paise | null | undefined): BasisPoints {
   if (mrp == null || mrp <= 0 || mrp <= price) return 0;
-  return Math.floor(((mrp - price) * 10_000) / mrp);
+  return ratioBp(BigInt(mrp - price), BigInt(mrp));
 }
 
 export function savingsPaise(price: Paise, mrp: Paise | null | undefined): Paise {
@@ -100,3 +100,40 @@ export function paiseFromDb(value: bigint | number): Paise {
 export function paiseFromDbOrNull(value: bigint | number | null | undefined): Paise | null {
   return value == null ? null : paiseFromDb(value);
 }
+
+// ── BigInt arithmetic (exact; no floating point anywhere) ─────────────────
+
+/** Paise as BigInt for calculations. Accepts safe-integer numbers or BigInt. */
+export function bigPaise(value: bigint | number): bigint {
+  if (typeof value === "bigint") {
+    if (value < 0n) throw new MoneyError(`Paise must be non-negative, received ${value}`);
+    return value;
+  }
+  return BigInt(paise(value));
+}
+
+/** BigInt paise → JSON-safe Paise number (throws instead of losing precision). */
+export function paiseFromBig(value: bigint): Paise {
+  return paiseFromDb(value);
+}
+
+/** floor(part × 10000 / whole) in basis points; 0 when whole ≤ 0. Never overstates. */
+export function ratioBp(part: bigint, whole: bigint): BasisPoints {
+  if (whole <= 0n || part <= 0n) return 0;
+  return Number((part * 10_000n) / whole);
+}
+
+/** Signed ratio in bp, truncated toward zero (e.g. price change vs a reference). */
+export function signedRatioBp(part: bigint, whole: bigint): BasisPoints {
+  if (whole <= 0n) return 0;
+  return Number((part * 10_000n) / whole);
+}
+
+/** floor(amount × bp / 10000): a percentage benefit, rounded down (never overstated). */
+export function applyBp(amount: bigint, bp: number): bigint {
+  if (!Number.isInteger(bp) || bp < 0) throw new MoneyError(`Invalid basis points: ${bp}`);
+  return (amount * BigInt(bp)) / 10_000n;
+}
+
+export const minBig = (a: bigint, b: bigint): bigint => (a < b ? a : b);
+export const maxBig = (a: bigint, b: bigint): bigint => (a > b ? a : b);

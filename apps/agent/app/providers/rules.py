@@ -103,6 +103,15 @@ def _find_specs(t: str) -> list[SpecRequirement]:
     return specs
 
 
+# Eligibility words (only what the user states about themselves).
+BANKS = ["HDFC", "ICICI", "SBI", "Axis", "Kotak", "IDFC", "Yes Bank", "AU", "RBL", "OneCard"]
+MEMBERSHIPS = {
+    "flipkart plus": "Flipkart Plus",
+    "amazon prime": "Amazon Prime",
+    "prime member": "Amazon Prime",
+}
+
+
 def extract_intent_by_rules(query: str) -> ExtractedIntent:
     t = f" {' '.join(query.lower().split())} "
     category = next((slug for slug, words in CATEGORY_WORDS.items() if any(w in t for w in words)), None)
@@ -113,11 +122,13 @@ def extract_intent_by_rules(query: str) -> ExtractedIntent:
     min_rupees, max_rupees = parse_budget(query)
     sort = "best_value"
     if re.search(r"cheapest|lowest price|least expensive", t):
-        sort = "cheapest"
+        sort = "lowest_price"
     elif re.search(r"(highest|biggest|best|maximum|significant)\s+(genuine\s+)?discount", t):
         sort = "highest_discount"
     elif re.search(r"newest|latest launch", t):
-        sort = "newest"
+        sort = "recently_launched"
+    elif re.search(r"price drops?|dropped in price", t):
+        sort = "price_drop"
     marketplaces = [slug for name, slug in MARKETPLACES.items() if name in t]
     keywords = re.sub(
         r"\b(find|show|me|a|an|the|for|with|under|below|above|best|value|cheapest|newly|recently|launched|"
@@ -143,6 +154,9 @@ def extract_intent_by_rules(query: str) -> ExtractedIntent:
         else None,
         sort_mode=sort,
         marketplaces=marketplaces,
+        payment_banks=[b for b in BANKS if re.search(rf"\b{b.lower()}\b", t)],
+        card_types=[c for c, w in (("CREDIT", "credit card"), ("DEBIT", "debit card")) if w in t],
+        memberships=[m for k, m in MEMBERSHIPS.items() if k in t],
         compare_same_product=bool(re.search(r"\bcompare\b.*\b(across|between|on)\b", t)),
         search_keywords=keywords[:200] if len(keywords) >= 2 else query[:200],
     )

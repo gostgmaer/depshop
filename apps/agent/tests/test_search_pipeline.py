@@ -211,10 +211,18 @@ async def test_ranking_order_comes_from_the_ranking_engine(
         make_service(ScriptedLlm(intent_dict(sort_mode="cheapest"), {"summary": "fine cheap results"})),
         ids.request("acme nova"),
     )
-    rank_call = backend.calls_to("/intelligence/rank")[-1]
-    assert rank_call["mode"] == "cheapest"
-    assert set(rank_call) == {"query", "mode", "offerIds"}  # ids only, no prices
+    rank_call = backend.calls_to("/intelligence/ranking/rank")[-1]
+    assert rank_call["mode"] == "cheapest"  # legacy alias, mapped by the engine
+    # Ids and the user's hard filters only: never a price or a score.
+    assert set(rank_call) <= {"query", "mode", "offerIds", "filters", "eligibility", "priceBasis"}
+    assert (
+        "eligibility" not in rank_call and "priceBasis" not in rank_call
+    )  # nothing stated → nothing assumed
     saved = backend.saved[ids.search][-1]
     prices = [backend.offers[d["offerId"]]["sellingPricePaise"] for d in saved["rankedDeals"]]
     assert prices == sorted(prices)
     assert [d["rank"] for d in saved["rankedDeals"]] == [1, 2, 3]
+    # Exactly the engine's ranks/scores, with its signed token, so Fastify can verify them.
+    assert saved["rankingToken"] == backend.ranking_tokens[-1]
+    assert [d["score"] for d in saved["rankedDeals"]] == [9000, 8900, 8800]
+    assert saved["rankedDeals"][0]["explanation"].startswith("Rank 1 on ")

@@ -195,9 +195,12 @@ describe("3. login", () => {
     const { userId } = await signUp(ctx, "crypto@example.com");
     const session = await ctx.prisma.userSession.findFirstOrThrow({ where: { userId } });
     expect(session.iamAccessTokenEnc).toMatch(/^v1\./);
-    expect(session.iamAccessTokenEnc).not.toContain("eyJ"); // no raw JWT
     const cipher = new TokenCipher(TOKEN_KEY);
-    expect(cipher.decrypt(session.iamAccessTokenEnc).split(".")).toHaveLength(3);
+    const jwt = cipher.decrypt(session.iamAccessTokenEnc);
+    expect(jwt.split(".")).toHaveLength(3);
+    // No part of the raw JWT is stored in the clear. (Checking for "eyJ" was flaky:
+    // random ciphertext can contain that substring.)
+    for (const part of jwt.split(".")) expect(session.iamAccessTokenEnc).not.toContain(part);
     expect(session.iamSessionId).not.toBeNull();
   });
 

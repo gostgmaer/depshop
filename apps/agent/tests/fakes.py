@@ -82,6 +82,7 @@ class FakeBackend:
     peak_in_flight: int = 0
     offers: dict[str, dict[str, Any]] = field(default_factory=dict)
     matches: dict[str, dict[str, Any]] = field(default_factory=dict)
+    ranking_tokens: list[str] = field(default_factory=list)
     catalog_gtins: dict[str, dict[str, Any]] = field(default_factory=dict)  # gtin → product ref
 
     def transport(self) -> httpx.MockTransport:
@@ -385,40 +386,96 @@ class FakeBackend:
             "offerConditions": {},
             "observedAt": o["observedAt"],
             "pricing": {
-                "sellingPricePaise": price,
-                "effectivePricePaise": price,
-                "mrpPaise": o["mrpPaise"],
-                "claimedDiscountBp": 2307,
-                "claimedSavingsPaise": o["mrpPaise"] - price,
-                "genuineDiscountBp": 900 if verdict == "GENUINE" else 0,
-                "verdict": verdict,
-                "history": {"points": 0},
-                "reasons": [],
+                "offerId": offer_id,
+                "currency": "INR",
+                "observedAt": o["observedAt"],
+                "priceType": "LISTED",
+                "stockStatus": o["stockStatus"],
+                "directDiscount": {
+                    "status": "OK" if o.get("mrpPaise") else "NO_MRP",
+                    "mrpPaise": o.get("mrpPaise"),
+                    "sellingPricePaise": price,
+                    "amountPaise": (o["mrpPaise"] - price) if o.get("mrpPaise") else None,
+                    "percentBp": 2307 if o.get("mrpPaise") else None,
+                    "percentText": "23.07%" if o.get("mrpPaise") else None,
+                },
+                "pricingException": None,
+                "prices": {
+                    "basePaise": price,
+                    "shippingPaise": 0,
+                    "shippingKnown": True,
+                    "mandatoryFeesPaise": 0,
+                    "deliveredPaise": price,
+                    "couponPricePaise": None,
+                    "bankOfferPricePaise": None,
+                    "membershipPricePaise": None,
+                    "bestVerifiedPayablePaise": price,
+                    "bestVerifiedPayableBasis": "DELIVERED",
+                    "cashbackPaise": None,
+                    "cashbackAdjustedReferencePaise": None,
+                    "exchangeMaxBenefitPaise": None,
+                },
+                "benefits": [],
+                "fees": [],
+                "emi": [],
+                "flags": [],
+                "history": {
+                    "lowestClaim": {"kind": "NONE", "days": None, "text": None},
+                    "trend": "INSUFFICIENT_DATA",
+                },
+                "assessment": {
+                    "verdict": verdict,
+                    "genuineDiscountBp": 900 if verdict == "GENUINE" else 0,
+                    "claimedDiscountBp": 2307,
+                },
             },
         }
 
-    def _intelligence_pricing(self, body: Any) -> dict[str, Any]:
-        return {"offers": [self._facts(i) for i in body["offerIds"] if i in self.offers]}
+    def _intelligence_pricing_batch(self, body: Any) -> dict[str, Any]:
+        offers = [self._facts(i) for i in body["offerIds"] if i in self.offers]
+        return {"offers": offers, "unknownOfferIds": [i for i in body["offerIds"] if i not in self.offers]}
 
-    def _intelligence_rank(self, body: Any) -> dict[str, Any]:
-        facts = sorted(
-            (self._facts(i) for i in body["offerIds"]), key=lambda f: f["pricing"]["effectivePricePaise"]
-        )
+    def _intelligence_ranking_rank(self, body: Any) -> dict[str, Any]:
+        """Mirrors the engine's contract: DB prices, hard filters re-applied, signed token."""
+        f = body.get("filters") or {}
+        facts = [self._facts(i) for i in body["offerIds"] if i in self.offers]
+        kept, excluded = [], []
+        for x in facts:
+            price = x["pricing"]["prices"]["deliveredPaise"]
+            if x["stockStatus"] == "OUT_OF_STOCK":
+                excluded.append({"offerId": x["offerId"], "reason": "UNAVAILABLE"})
+            elif "maxPricePaise" in f and price > f["maxPricePaise"]:
+                excluded.append({"offerId": x["offerId"], "reason": "ABOVE_MAX_PRICE"})
+            else:
+                kept.append(x)
+        kept.sort(key=lambda x: (x["pricing"]["prices"]["deliveredPaise"], x["offerId"]))
+        ranked = [
+            {
+                "rank": n + 1,
+                "offerId": x["offerId"],
+                "score": 9000 - n * 100,
+                "deliveredPricePaise": x["pricing"]["prices"]["deliveredPaise"],
+                "rankingPricePaise": x["pricing"]["prices"]["deliveredPaise"],
+                "components": {"price": 10000 - n * 100, "discount": None},
+                "explanation": {
+                    "summary": f"Rank {n + 1} on {x['sourceName']}",
+                    "factors": [],
+                    "versusNext": None,
+                },
+                "offer": x,
+            }
+            for n, x in enumerate(kept)
+        ]
+        self.ranking_tokens.append(f"token-{len(self.ranking_tokens)}")
         return {
-            "ranked": [
-                {
-                    "rank": n + 1,
-                    "score": 9000 - n * 100,
-                    "breakdown": {
-                        "relevance": 10000,
-                        "price": 8000,
-                        "genuineDiscount": 0,
-                        "availability": 10000,
-                    },
-                    "offer": f,
-                }
-                for n, f in enumerate(facts)
-            ]
+            "requestedMode": body["mode"],
+            "appliedMode": "best_value" if body["mode"] == "trending_deals" else body["mode"],
+            "ranked": ranked,
+            "excluded": excluded,
+            "warnings": ["TRENDING_DATA_UNAVAILABLE: ranked as best_value instead"]
+            if body["mode"] == "trending_deals"
+            else [],
+            "rankingToken": self.ranking_tokens[-1],
         }
 
 

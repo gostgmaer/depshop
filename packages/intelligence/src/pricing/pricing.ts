@@ -8,7 +8,7 @@
  *  - Conditional benefits (bank offers, coupons…) are never part of these
  *    numbers; they live in offerConditions.
  */
-import { type Paise, discountBasisPoints, paise, savingsPaise } from "@dealmind/shared";
+import { type Paise, discountBasisPoints, paise, ratioBp, savingsPaise } from "@dealmind/shared";
 
 export interface PricePoint {
   sellingPricePaise: number;
@@ -104,7 +104,7 @@ export function assessPrice(
     verdict = "INSUFFICIENT_HISTORY";
     reasons.push("NOT_ENOUGH_PRICE_HISTORY");
   } else {
-    genuineDiscountBp = selling < med ? Math.floor(((med - selling) * 10_000) / med) : 0;
+    genuineDiscountBp = selling < med ? ratioBp(BigInt(med - selling), BigInt(med)) : 0;
     if (selling <= min) reasons.push("LOWEST_IN_WINDOW");
     if (genuineDiscountBp >= rules.genuineBelowMedianBp || selling < min) {
       verdict = "GENUINE";

@@ -1,5 +1,5 @@
-export * from "./pricing/pricing.js";
-export * from "./ranking/ranking.js";
+export * from "./pricing/index.js";
+export * from "./ranking/index.js";
 export * from "./matching/index.js";
 export * from "./sample-data/sample-data.js";
 export {

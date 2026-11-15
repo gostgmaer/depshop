@@ -7,14 +7,15 @@ import { normalizeListing, sourceListingSchema } from "@dealmind/catalog";
 import { type NormalizedProduct, toSourceListing } from "@dealmind/connectors";
 import type { PrismaClient } from "@dealmind/db";
 import {
-  type DealCandidate,
-  type PriceAssessment,
-  type SortMode,
-  assessPrice,
-  rankDeals,
   type CatalogImporter,
+  type EligibilityContext,
+  PricingService,
+  type PricingResult,
+  type RankCandidate,
+  type RankingOptions,
+  type StockStatus,
+  rankOffers,
 } from "@dealmind/intelligence";
-import { paiseFromDb, paiseFromDbOrNull } from "@dealmind/shared";
 
 export interface OfferFacts {
   offerId: string;
@@ -28,21 +29,26 @@ export interface OfferFacts {
   brand: string;
   productUrl: string;
   sellerName: string | null;
-  stockStatus: DealCandidate["stockStatus"];
+  stockStatus: StockStatus;
   launchDate: string | null;
   variantAttributes: Record<string, unknown>;
   specifications: Record<string, unknown>;
   offerConditions: Record<string, unknown>;
   observedAt: string;
-  pricing: PriceAssessment;
+  /** Computed by the pricing engine from the database (never from the caller). */
+  pricing: PricingResult;
 }
 
 export class InternalIntelligence {
+  readonly pricing: PricingService;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly importer: CatalogImporter,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+  ) {
+    this.pricing = new PricingService(prisma, now);
+  }
 
   /** Normalization only (no persistence): what the catalog would derive. */
   normalize(items: NormalizedProduct[], categorySlug?: string) {
@@ -158,77 +164,71 @@ export class InternalIntelligence {
   }
 
   /** Facts + deterministic pricing for offers (from the database, never from the caller). */
-  async offerFacts(offerIds: string[]): Promise<OfferFacts[]> {
-    const now = this.now();
-    const since = new Date(now.getTime() - 90 * 86_400_000);
-    const offers = await this.prisma.productOffer.findMany({
-      where: { id: { in: [...new Set(offerIds)] } },
-      include: {
-        source: { select: { slug: true, name: true, isSample: true } },
-        product: { select: { name: true, brand: true, launchDate: true, specifications: true } },
-        variant: { select: { attributes: true } },
-        snapshots: {
-          where: { observedAt: { gte: since } },
-          orderBy: { observedAt: "asc" },
-          take: 2_000,
-        },
-      },
-    });
-    return offers.map((o) => ({
-      offerId: o.id,
-      productId: o.productId,
-      variantId: o.variantId,
-      sourceSlug: o.source.slug,
-      sourceName: o.source.name,
-      isSample: o.source.isSample,
-      title: o.title,
-      productName: o.product.name,
-      brand: o.product.brand,
-      productUrl: o.productUrl,
-      sellerName: o.sellerName,
-      stockStatus: o.stockStatus,
-      launchDate: o.product.launchDate?.toISOString() ?? null,
-      variantAttributes: (o.variant.attributes ?? {}) as Record<string, unknown>,
-      specifications: (o.product.specifications ?? {}) as Record<string, unknown>,
-      offerConditions: (o.offerConditions ?? {}) as Record<string, unknown>,
-      observedAt: o.observedAt.toISOString(),
-      pricing: assessPrice(
-        {
-          sellingPricePaise: paiseFromDb(o.sellingPricePaise),
-          mrpPaise: paiseFromDbOrNull(o.mrpPaise),
-          shippingPaise: paiseFromDbOrNull(o.shippingPaise),
-        },
-        o.snapshots.map((s) => ({
-          sellingPricePaise: paiseFromDb(s.sellingPricePaise),
-          observedAt: s.observedAt,
-        })),
-        now,
-      ),
-    }));
+  async offerFacts(
+    offerIds: string[],
+    eligibility: EligibilityContext = {},
+  ): Promise<OfferFacts[]> {
+    return this.toFacts(await this.pricing.candidates(offerIds, eligibility));
   }
 
-  async rank(query: string, mode: SortMode, offerIds: string[]) {
-    const facts = await this.offerFacts(offerIds);
-    const ranked = rankDeals(
-      query,
-      facts.map((f) => ({
-        id: f.offerId,
-        title: f.title,
-        productId: f.productId,
-        variantId: f.variantId,
-        sourceId: f.sourceSlug,
-        stockStatus: f.stockStatus,
-        launchDate: f.launchDate ? new Date(f.launchDate) : null,
-        pricing: f.pricing,
-        facts: f,
-      })),
-      mode,
+  private async toFacts(candidates: RankCandidate[]): Promise<OfferFacts[]> {
+    if (!candidates.length) return [];
+    const meta = await this.prisma.productOffer.findMany({
+      where: { id: { in: candidates.map((c) => c.offerId) } },
+      select: {
+        id: true,
+        productUrl: true,
+        sellerName: true,
+        offerConditions: true,
+        source: { select: { isSample: true } },
+      },
+    });
+    const byId = new Map(meta.map((m) => [m.id, m]));
+    return candidates.map((c) => {
+      const m = byId.get(c.offerId)!;
+      return {
+        offerId: c.offerId,
+        productId: c.productId,
+        variantId: c.variantId,
+        sourceSlug: c.sourceSlug,
+        sourceName: c.sourceName,
+        isSample: m.source.isSample,
+        title: c.title,
+        productName: c.productName,
+        brand: c.brand,
+        productUrl: m.productUrl,
+        sellerName: m.sellerName,
+        stockStatus: c.stockStatus,
+        launchDate: c.launchDate?.toISOString() ?? null,
+        variantAttributes: c.variantAttributes,
+        specifications: c.specifications,
+        offerConditions: (m.offerConditions ?? {}) as Record<string, unknown>,
+        observedAt: c.pricing.observedAt,
+        pricing: c.pricing,
+      };
+    });
+  }
+
+  /** Deterministic ranking; each ranked deal also carries its offer facts. */
+  async rank(
+    offerIds: string[],
+    options: Omit<RankingOptions, "now"> & { eligibility?: EligibilityContext },
+  ) {
+    const { eligibility, ...rest } = options;
+    const candidates = await this.pricing.candidates(offerIds, eligibility ?? {});
+    const result = rankOffers(candidates, { ...rest, now: this.now() });
+    const ranked = new Set(result.ranked.map((d) => d.offerId));
+    const facts = new Map(
+      (await this.toFacts(candidates.filter((c) => ranked.has(c.offerId)))).map((f) => [
+        f.offerId,
+        f,
+      ]),
     );
-    return ranked.map((r) => ({
-      rank: r.rank,
-      score: r.score,
-      breakdown: r.breakdown,
-      offer: r.deal.facts,
-    }));
+    const known = new Set(candidates.map((c) => c.offerId));
+    return {
+      ...result,
+      ranked: result.ranked.map((d) => ({ ...d, offer: facts.get(d.offerId)! })),
+      unknownOfferIds: [...new Set(offerIds)].filter((id) => !known.has(id)),
+    };
   }
 }

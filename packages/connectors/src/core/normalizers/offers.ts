@@ -12,7 +12,7 @@
 import type { SourceListing } from "@dealmind/catalog";
 import { MoneyError, parseRupeesToPaise } from "@dealmind/shared";
 import { ConnectorError } from "../types/errors.js";
-import type { NormalizedProduct, Promotion } from "../types/schemas.js";
+import type { EmiOption, Fee, NormalizedProduct, Promotion } from "../types/schemas.js";
 
 /** Rupees (number or string like "₹1,24,999.00") → paise; throws INVALID_RESPONSE when unparseable. */
 export function rupeesToPaise(value: number | string): number {
@@ -39,6 +39,8 @@ export interface OfferConditions {
   exchange: Promotion[];
   membership: Promotion[];
   other: Promotion[];
+  fees: Fee[];
+  emi: EmiOption[];
   provenance: { method: string; provider: string; operation?: string };
 }
 
@@ -52,6 +54,8 @@ export function toOfferConditions(p: NormalizedProduct): OfferConditions {
     exchange: by("EXCHANGE"),
     membership: by("MEMBERSHIP"),
     other: by("OTHER"),
+    fees: p.fees,
+    emi: p.emiOptions,
     provenance: {
       method: p.provenance.method,
       provider: p.provenance.provider,

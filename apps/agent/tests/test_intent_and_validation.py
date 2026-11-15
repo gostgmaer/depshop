@@ -74,7 +74,10 @@ async def test_langchain_provider_returns_validated_structured_output_with_token
             "Compare the same laptop across Amazon and Flipkart",
             {"category": "laptops", "marketplaces": ["amazon_in", "flipkart"], "compare_same_product": True},
         ),
-        ("Find the cheapest 1.5-ton inverter AC.", {"category": "air-conditioners", "sort_mode": "cheapest"}),
+        (
+            "Find the cheapest 1.5-ton inverter AC.",
+            {"category": "air-conditioners", "sort_mode": "lowest_price"},
+        ),
         (
             "Find the best-value washing machine under ₹25,000.",
             {"category": "washing-machines", "max_price_rupees": 25_000},

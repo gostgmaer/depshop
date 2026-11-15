@@ -166,29 +166,42 @@ describe("marketplace + intelligence (deterministic services reused)", () => {
     expect(dedup.groups[0]?.variants.every((v) => v.offerIds.length === 2)).toBe(true); // both stores
 
     const offerIds = dedup.outcomes.map((o) => o.offerId!);
-    const priced = (await call("POST", "/intelligence/pricing", { offerIds })).json<{
-      offers: { pricing: { verdict: string; sellingPricePaise: number }; isSample: boolean }[];
+    const priced = (await call("POST", "/intelligence/pricing/batch", { offerIds })).json<{
+      offers: {
+        isSample: boolean;
+        pricing: { assessment: { verdict: string }; prices: { deliveredPaise: number } };
+      }[];
+      unknownOfferIds: string[];
     }>();
     expect(priced.offers).toHaveLength(4);
+    expect(priced.unknownOfferIds).toEqual([]);
     expect(
-      priced.offers.every((o) => o.isSample && o.pricing.verdict === "INSUFFICIENT_HISTORY"),
+      priced.offers.every(
+        (o) => o.isSample && o.pricing.assessment.verdict === "INSUFFICIENT_HISTORY",
+      ),
     ).toBe(true);
 
     const ranked = (
-      await call("POST", "/intelligence/rank", { query: "acme nova", mode: "cheapest", offerIds })
+      await call("POST", "/intelligence/ranking/rank", {
+        query: "acme nova",
+        mode: "lowest_price",
+        offerIds,
+      })
     ).json<{
-      ranked: { rank: number; offer: { pricing: { effectivePricePaise: number } } }[];
+      ranked: { rank: number; deliveredPricePaise: number; explanation: { summary: string } }[];
+      rankingToken: string;
     }>();
-    const prices = ranked.ranked.map((r) => r.offer.pricing.effectivePricePaise);
+    const prices = ranked.ranked.map((r) => r.deliveredPricePaise);
     expect(prices).toEqual([...prices].sort((a, b) => a - b));
-    // Callers cannot smuggle prices into ranking.
-    const smuggled = await call("POST", "/intelligence/rank", {
-      query: "x",
-      mode: "cheapest",
-      offerIds,
-      prices: [1],
-    });
-    expect(smuggled.statusCode).toBe(422);
+    expect(ranked.ranked[0]?.explanation.summary).toMatch(/delivered on /);
+    expect(ranked.rankingToken).toEqual(expect.any(String));
+    // Callers cannot smuggle prices into ranking or pricing.
+    for (const [path, body] of [
+      ["/intelligence/ranking/rank", { mode: "lowest_price", offerIds, prices: [1] }],
+      ["/intelligence/pricing/batch", { offerIds, sellingPricePaise: 1 }],
+    ] as const) {
+      expect((await call("POST", path, body)).statusCode).toBe(422);
+    }
   });
 
   it("rejects connector items that don't match the strict schema", async () => {
@@ -265,15 +278,20 @@ describe("private records: signed user context + ownership", () => {
         r.json<{ outcomes: { offerId: string }[] }>(),
       )
     ).outcomes.map((o) => o.offerId);
+    const ranking = (
+      await call("POST", "/intelligence/ranking/rank", { mode: "best_value", offerIds })
+    ).json<{ ranked: { offerId: string; rank: number; score: number }[]; rankingToken: string }>();
+    expect(ranking.ranked.length).toBeGreaterThanOrEqual(2);
     const payload = {
       status: "PARTIAL",
       interpretation: { intent: { category: "smartphones" } },
       clarificationQuestion: null,
       response: "Found 2 matching offers.",
       warnings: ["One source failed."],
-      rankedDeals: offerIds
+      rankingToken: ranking.rankingToken,
+      rankedDeals: ranking.ranked
         .slice(0, 2)
-        .map((offerId, i) => ({ offerId, rank: i + 1, score: 9000 - i, explanation: "x" })),
+        .map((d) => ({ offerId: d.offerId, rank: d.rank, score: d.score, explanation: "x" })),
       sourceRuns: [
         {
           sourceId: "mock_alpha",
@@ -303,6 +321,26 @@ describe("private records: signed user context + ownership", () => {
       },
     };
     const headers = { "x-dealmind-user-context": a.context };
+    // Rank and score must be the engine's: forged, reordered or unsigned rankings are refused.
+    const [first, second] = payload.rankedDeals as [
+      (typeof payload.rankedDeals)[number],
+      (typeof payload.rankedDeals)[number],
+    ];
+    for (const bad of [
+      { ...payload, rankingToken: null },
+      { ...payload, rankingToken: `${payload.rankingToken}x` },
+      { ...payload, rankedDeals: [{ ...first, score: 10_000 }, second] },
+      {
+        ...payload,
+        rankedDeals: [
+          { ...second, rank: 1 },
+          { ...first, rank: 2 },
+        ],
+      },
+    ]) {
+      const res = await call("PUT", `/searches/${a.search.id}/agent-result`, bad, headers);
+      expect(res.statusCode, res.body).toBe(422);
+    }
     for (let i = 0; i < 2; i += 1) {
       const res = await call("PUT", `/searches/${a.search.id}/agent-result`, payload, headers);
       expect(res.statusCode, res.body).toBe(200);
@@ -312,7 +350,9 @@ describe("private records: signed user context + ownership", () => {
       orderBy: { rank: "asc" },
     });
     expect(results).toHaveLength(2); // replaced, not duplicated
-    const offer = await ctx.prisma.productOffer.findUniqueOrThrow({ where: { id: offerIds[0]! } });
+    const offer = await ctx.prisma.productOffer.findUniqueOrThrow({
+      where: { id: ranking.ranked[0]!.offerId },
+    });
     expect(results[0]?.pricePaiseAtSearch).toBe(offer.sellingPricePaise);
     const search = await ctx.prisma.search.findUniqueOrThrow({ where: { id: a.search.id } });
     expect(search.status).toBe("PARTIAL");

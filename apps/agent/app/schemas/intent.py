@@ -12,7 +12,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SortMode = Literal["best_value", "cheapest", "highest_discount", "newest", "relevance"]
+SortMode = Literal[
+    "best_value",
+    "lowest_price",
+    "highest_discount",
+    "recently_launched",
+    "price_drop",
+    "trending_deals",
+    "relevance",
+    # Earlier names, still accepted (the ranking engine maps them).
+    "cheapest",
+    "newest",
+]
+CardType = Literal["CREDIT", "DEBIT"]
 LaunchPreference = Literal["any", "recently_launched"]
 
 
@@ -58,6 +70,15 @@ class ExtractedIntent(BaseModel):
     )
     excluded_marketplaces: list[str] = Field(default_factory=list, max_length=10)
     compare_same_product: bool = False
+    payment_banks: list[str] = Field(
+        default_factory=list, max_length=10, description="Banks the user said they hold cards/accounts with"
+    )
+    card_types: list[CardType] = Field(
+        default_factory=list, max_length=2, description="Card types the user said they have"
+    )
+    memberships: list[str] = Field(
+        default_factory=list, max_length=10, description="Shopping memberships the user said they have"
+    )
     search_keywords: str = Field(
         min_length=2, max_length=200, description="Concise marketplace search keywords"
     )
@@ -66,7 +87,13 @@ class ExtractedIntent(BaseModel):
     )
 
     @field_validator(
-        "brands", "excluded_brands", "marketplaces", "excluded_marketplaces", "preferred_features"
+        "brands",
+        "excluded_brands",
+        "marketplaces",
+        "excluded_marketplaces",
+        "preferred_features",
+        "payment_banks",
+        "memberships",
     )
     @classmethod
     def _clean_list(cls, v: list[str]) -> list[str]:
@@ -101,6 +128,10 @@ class ShoppingFilters(BaseModel):
     source_slugs: list[str] | None = None
     excluded_source_slugs: list[str] = Field(default_factory=list)
     compare_same_product: bool = False
+    # User-stated eligibility for conditional offers. None = not stated (never assumed).
+    user_banks: list[str] | None = None
+    user_card_types: list[CardType] | None = None
+    user_memberships: list[str] | None = None
     keywords: str = Field(min_length=2)
 
 

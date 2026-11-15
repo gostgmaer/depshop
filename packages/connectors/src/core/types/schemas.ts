@@ -66,9 +66,58 @@ export const promotionSchema = z
     maxAmountPaise: paise.optional(),
     code: z.string().trim().max(50).optional(),
     terms: z.string().trim().max(1000).optional(),
+    // Eligibility, exactly as the source states it (never inferred).
+    minTransactionPaise: paise.optional(),
+    /** Issuing banks, e.g. ["HDFC Bank"]. */
+    eligibleBanks: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
+    paymentMethods: z
+      .array(z.enum(["CREDIT_CARD", "DEBIT_CARD", "UPI", "NET_BANKING", "WALLET", "EMI", "COD"]))
+      .max(10)
+      .optional(),
+    cardTypes: z.array(z.enum(["CREDIT", "DEBIT"])).max(2).optional(),
+    /** Membership programme required, e.g. "Flipkart Plus". */
+    membership: z.string().trim().min(1).max(100).optional(),
+    validFrom: z.coerce.date().optional(),
+    expiresAt: z.coerce.date().optional(),
+    /** Further conditions the engine cannot evaluate (keeps the benefit unverified). */
+    conditions: z.array(z.string().trim().min(1).max(300)).max(20).optional(),
+    /**
+     * True only when the source itself confirms the benefit is live for this
+     * listing (e.g. a checkout/cart quote API). Listing-page promotions are false.
+     */
+    verified: z.boolean().default(false),
   })
   .strict();
 export type Promotion = z.infer<typeof promotionSchema>;
+
+/** A charge on top of the selling price (platform/handling/COD fee…). */
+export const feeSchema = z
+  .object({
+    type: z.enum(["PLATFORM", "HANDLING", "COD", "PACKAGING", "INSTALLATION", "OTHER"]),
+    description: z.string().trim().min(1).max(300),
+    amountPaise: paise,
+    /** Mandatory fees are part of the delivered price; optional ones are listed only. */
+    mandatory: z.boolean(),
+  })
+  .strict();
+export type Fee = z.infer<typeof feeSchema>;
+
+/** An EMI plan as the source states it. Costs are never inferred from a rate alone. */
+export const emiOptionSchema = z
+  .object({
+    tenureMonths: z.number().int().min(1).max(60),
+    /** Annual interest rate (bp), when stated. */
+    interestRateBp: z.number().int().min(0).max(10_000).optional(),
+    monthlyInstallmentPaise: paise.optional(),
+    /** Total interest the source states (paise). */
+    interestPaise: paise.optional(),
+    processingFeePaise: paise.optional(),
+    noCostClaimed: z.boolean().default(false),
+    bank: z.string().trim().max(100).optional(),
+    description: z.string().trim().max(300).optional(),
+  })
+  .strict();
+export type EmiOption = z.infer<typeof emiOptionSchema>;
 
 /**
  * How trustworthy the price is:
@@ -123,6 +172,8 @@ export const normalizedProductSchema = z
       .strict()
       .default({}),
     promotions: z.array(promotionSchema).max(50).default([]),
+    fees: z.array(feeSchema).max(20).default([]),
+    emiOptions: z.array(emiOptionSchema).max(30).default([]),
     sourceUpdatedAt: z.coerce.date().optional(),
     observedAt: z.coerce.date(),
     provenance: provenanceSchema,
