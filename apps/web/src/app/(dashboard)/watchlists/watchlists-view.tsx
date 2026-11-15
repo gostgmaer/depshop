@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState, PageHeader } from "@/components/ui/misc";
+import { ConfirmDialog } from "@/components/ui/primitives";
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useUsage, useWatchlistMutations, useWatchlists } from "@/hooks/queries";
 import { errorMessage } from "@/lib/auth-hooks";
@@ -18,6 +19,7 @@ export function WatchlistsView() {
   const m = useWatchlistMutations();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -83,9 +85,7 @@ export function WatchlistsView() {
                 variant="ghost"
                 size="icon"
                 aria-label={`Delete ${w.name}`}
-                onClick={() => {
-                  if (window.confirm(`Delete “${w.name}”?`)) m.remove.mutate(w.id);
-                }}
+                onClick={() => setToDelete({ id: w.id, name: w.name })}
               >
                 <Trash2 aria-hidden className="size-4" />
               </Button>
@@ -99,6 +99,26 @@ export function WatchlistsView() {
           description="Create one, or use “Watch” on any product."
         />
       )}
+      <ConfirmDialog
+        open={toDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setToDelete(null);
+        }}
+        title={`Delete “${toDelete?.name ?? ""}”?`}
+        description="The watchlist and its items are removed. Price alerts you created stay in Alerts."
+        confirmLabel="Delete watchlist"
+        pending={m.remove.isPending}
+        onConfirm={() => {
+          if (!toDelete) return;
+          m.remove.mutate(toDelete.id, {
+            onSuccess: () => setToDelete(null),
+            onError: (err) => {
+              setToDelete(null);
+              setError(errorMessage(err));
+            },
+          });
+        }}
+      />
     </>
   );
 }

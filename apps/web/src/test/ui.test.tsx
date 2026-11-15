@@ -16,6 +16,7 @@ import { ResultCard } from "@/components/search/result-card";
 import { SearchProgressPanel } from "@/components/search/search-progress";
 import { toSearchInput, EMPTY_SEARCH } from "@/components/search/search-input";
 import { ErrorState } from "@/components/ui/misc";
+import { WatchlistsView } from "@/app/(dashboard)/watchlists/watchlists-view";
 import { initialProgress, progressReducer } from "@/hooks/use-search-events";
 import { ApiError } from "@/lib/api";
 import { shouldRetry } from "@/app/providers";
@@ -81,6 +82,7 @@ vi.mock("@/services", () => ({
     })),
     create: vi.fn(),
     addItem: vi.fn(async () => ({})),
+    remove: vi.fn(async () => undefined),
   },
   alerts: { create: vi.fn(async () => ({})) },
   notifications: { unreadCount: vi.fn(async () => ({ unread: 0 })) },
@@ -88,7 +90,7 @@ vi.mock("@/services", () => ({
 }));
 const svc = services as unknown as {
   searches: { create: ReturnType<typeof vi.fn> };
-  watchlists: { addItem: ReturnType<typeof vi.fn> };
+  watchlists: { addItem: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
   alerts: { create: ReturnType<typeof vi.fn> };
 };
 
@@ -302,6 +304,27 @@ describe("9. watchlist actions", () => {
       ),
     );
     expect(await screen.findByText("Added to watchlist")).toBeInTheDocument();
+  });
+});
+
+describe("9b. watchlist deletion", () => {
+  it("asks for confirmation in a dialog and only deletes on confirm", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<WatchlistsView />);
+    await user.click(await screen.findByRole("button", { name: "Delete Diwali phones" }));
+    const dialog = await screen.findByRole("alertdialog", { name: /Delete “Diwali phones”/ });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(svc.watchlists.remove).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Delete Diwali phones" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete watchlist" }),
+    );
+    await waitFor(() =>
+      expect(svc.watchlists.remove).toHaveBeenCalledWith("50000000-0000-7000-8000-000000000001"),
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
   });
 });
 

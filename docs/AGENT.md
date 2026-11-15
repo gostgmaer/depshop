@@ -155,3 +155,13 @@ Docker: `docker compose --profile app up` builds `apps/agent/Dockerfile` (non-ro
 - **Cancellation takes effect at node boundaries**, so an in-flight internal API call finishes first.
 - **The worker Docker image was not built in this phase.** The agent image was built and smoke-tested.
 - **The local dev database still needs the pending reset** (consent outstanding). All verification used disposable `*_test` databases.
+
+## Progress events and explicit UI filters (Phase 4.1)
+
+- **Progress events.** Besides `node_started`/`node_finished`/`status`, the agent emits:
+  - `sources_planned` (`sources`, `skipped`) after source discovery;
+  - one `source_finished` (`source`, `status`, `resultCount`) per marketplace after each search round.
+
+  Fastify validates them, and the web app shows per-marketplace progress from them.
+
+- **Explicit UI filters.** `explicit_filters.sortMode` and `explicit_filters.specs` (name/value) from the search form override the AI's interpretation. Specs are canonicalized like stated requirements.

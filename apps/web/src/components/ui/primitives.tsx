@@ -14,6 +14,7 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Check, X } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "./button";
 
 export function Separator({
   className,
@@ -159,6 +160,40 @@ export function DialogContent({
         {children}
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
+  );
+}
+
+/** Controlled confirmation for destructive actions (replaces window.confirm). */
+export function ConfirmDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  confirmLabel,
+  onConfirm,
+  pending = false,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description?: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  pending?: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title={title} description={description} role="alertdialog">
+        <div className="flex justify-end gap-2">
+          <DialogPrimitive.Close asChild>
+            <Button variant="outline">Cancel</Button>
+          </DialogPrimitive.Close>
+          <Button variant="danger" disabled={pending} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
