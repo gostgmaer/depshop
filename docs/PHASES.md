@@ -20,6 +20,7 @@ those pass.
 | 4.1 | Frontend dashboard: app shell (sidebar + mobile sheet), dashboard, AI search with filters and live SSE progress, results, products/categories, product intelligence page with comparison and history chart, compare, watchlists, alerts, history, notifications, settings, billing; Vitest/RTL + Playwright (axe)                                                                                                                        | **Done** (see gaps below) |
 | 4.2 | AI shopping search and real-time results: autocomplete (debounced catalog + history), optional voice input, category-driven dynamic filters, availability/launch/discount filters, ranking explanations, step timeline from real agent events, per-marketplace status with skip reasons, list/grid/sort/pagination, partial/expired/failed states, multi-product comparison with variant guards, edit/re-run, duplicate-submission guard | **Done** (see gaps below) |
 | 4.3 | Product comparison and price intelligence: product page (variants, full marketplace comparison with stale handling, deterministic recommendations, tracking history), Recharts history (7D–1Y–All, per marketplace, MRP, no interpolation across >48 h gaps) with period statistics, multi-product compare with category-aware specs and add-product picker, `GET /compare`, history `all`/newest-kept fix                               | **Done** (see gaps below) |
+| 5.1 | Global price tracking engine: per-offer (not per-user) scheduling with demand tiers and source intervals, lookup executor with shared rate limits, change detection and append-only history, individual alert evaluation (6 types, cooldown, preferences, idempotent), email via the shared notification service, retries with jitter, dead letters, stalled recovery, backpressure, metrics and admin overview                          | **Done** (see gaps below) |
 | 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                                                                                                                                                                                                                                                                              | Partially done (1.4)      |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                                                                                                                                                                                                                                                                                         | Not started               |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches                                                                                                                                                                                                                                                               | Not started               |
@@ -458,3 +459,46 @@ See [FRONTEND.md](FRONTEND.md#product-comparison-and-price-intelligence-phase-43
 2. **Tracking history is current state only** (watchlists and alerts), not a change log.
 3. **Spec comparison isn't unit-aware** across differently stated units.
 4. **Alerts are still not evaluated** (Phase 7); there are still no payments; **the local dev DB still needs the pending reset.**
+
+## Phase 5.1 — Global price tracking engine (delivered)
+
+See [TRACKING.md](TRACKING.md), including the performance and cost analysis.
+
+- **Connectors:** `ProductLookupExecutor` for single-listing refreshes, with the same safeguards as search and a tracking sub-budget of the shared per-source rate limit.
+- **Database:** migration `20261119100000_price_tracking`. Drift check: the migrations replay to exactly the schema.
+- **Queue:**
+  - alert evaluation is keyed by the global check;
+  - new control and dead-letter queues;
+  - jitter backoff;
+  - shared tracking-metrics keys and reader;
+  - enqueue options.
+- **Worker:**
+  - scheduler: atomic claim with lease, Redis NX guard, demand tiers, backpressure;
+  - refresh, alert-evaluation and notification processors;
+  - shared worker setup: retry/delay actions, dead letters, stalled recovery, queue-delay metrics;
+  - cleanup; graceful shutdown.
+- **API:**
+  - alert types with per-type validation, and a baseline from current fresh offers;
+  - `GET /alerts/:id/evaluations` (owner);
+  - `GET /admin/tracking` (admin).
+- **Web:** typed alert form, alert descriptions, evaluation history, accurate tracking copy.
+- **Compose and env:** worker tracking settings; the worker joins `core-network` to reach the shared notification service.
+- **Verification:**
+  - `pnpm check --force` 40/40.
+  - Worker: 11 unit + 23 DB (+6 search) tests, all 18 spec categories, including **multiple users tracking one offer → one marketplace request**.
+  - API DB 111 (3 new); db 63; connectors 6 DB + 6 new lookup unit tests; intelligence 26; queue 5; web Vitest 82, Playwright 18; pytest 61.
+  - Real-process run with the built worker (see TRACKING.md).
+- **Found and fixed:**
+  - Exhausted retryable failures completed instead of being dead-lettered.
+  - Evaluation history would have been cascade-deleted with the 30-day checks (FK changed to SET NULL).
+  - A recently observed offer skipped its fetch even when a brand-new alert was waiting for its first answer (found in the real-process run).
+  - The stall interval wasn't configurable.
+
+### Phase 5.1 — known gaps
+
+1. **No real marketplace is tracked yet:** that needs an authorized connector with single-listing lookup. Mock store prices are static, so price changes are exercised in tests, not in development data.
+2. **Throughput isn't benchmarked:** capacity figures are calculated from configuration.
+3. **No push channel; email depends on the shared notification service** (it was failing to deliver locally when last checked).
+4. **Admin tracking metrics have no web UI** (API only).
+5. **The circuit breaker is per worker process** (rate limits are shared).
+6. **The local dev database still needs the pending reset;** this migration hasn't been applied to it.

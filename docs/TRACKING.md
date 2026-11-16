@@ -60,7 +60,7 @@ The demand tier comes from shared interest, not one user: **active alerts + watc
 ## One refresh
 
 1. **Load the offer.** If it's no longer trackable (source inactive, tracking off, expired, past `trackedUntil`), record `SKIPPED` and push it back.
-2. **Skip the fetch if a search just observed it** (within the source's `cacheTtlSeconds`). That observation is current, so no request is spent.
+2. **Skip the fetch if a search just observed it** (within the source's `cacheTtlSeconds`). That observation is current, so no request is spent. The exception: an active alert on the variant that has never been evaluated still gets a fetch, so a new alert gets a prompt first answer.
 3. **Look up the listing** through `ProductLookupExecutor` (`@dealmind/connectors`), which applies:
    - the per-source Redis rate limit, shared with interactive searches; tracking may use at most `TRACKING_SOURCE_SHARE` (50%) of it, so searches are never starved;
    - the circuit breaker, a per-attempt timeout with `AbortSignal`, and retries with full jitter;
@@ -209,7 +209,16 @@ Alert types (`PriceAlert.type`), each with only its own parameters (CHECK constr
 - **`PriceSnapshot`:** about 200k heartbeat rows/day plus one per change, kept permanently. Partition by month before it gets large.
 - **`AlertEvaluation`:** grows only with changes × affected alerts; 90-day retention.
 
-**Not measured:** throughput benchmarks of the worker against real PostgreSQL and Redis haven't been run for this phase. The figures above are calculated from the configuration, not measured.
+**Not measured:** sustained throughput of the worker against real PostgreSQL and Redis hasn't been benchmarked. The figures above are calculated from the configuration.
+
+**Real-process run (2026-11-16):** the built worker, real BullMQ job schedulers (10 s tick), a disposable database seeded with the mock catalog through the importer, and three users' alerts.
+
+- All 11 offers were scheduled exactly once (max one check per offer).
+- 8 real lookups found prices unchanged (the mock stores' prices are static). 3 were skipped as recently observed, with no request spent.
+- The alerts' variant was fetched for its first answer. Of its 3 alerts, 2 triggered and 1 was not met.
+- 2 notifications were created: in-app SENT, email SKIPPED (no notification service configured in the run).
+- Average queue delay was about 20 ms; mock lookups took 2–4 ms.
+- The disposable database and Redis keys were removed afterwards.
 
 ## Limitations
 

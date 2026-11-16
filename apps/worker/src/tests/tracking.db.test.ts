@@ -33,6 +33,7 @@ import { TrackingMetrics } from "../services/tracking-metrics.js";
 import { createTrackedWorker } from "../workers/tracked-worker.js";
 
 const prisma: PrismaClient = createPrismaClient({ url: resolveTestDatabaseUrl() });
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const redisUrl = process.env.REDIS_URL!;
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: 2 });
 const prefix = `dmtrack${randomUUID().slice(0, 8)}`;
@@ -289,7 +290,6 @@ describe("1–3. global scheduler: eligible offers, priority, no duplicates", ()
     // Two scheduler ticks at once (e.g. two worker processes): each offer is claimed once.
     const [a, b] = await Promise.all([scheduleDueOffers(deps), scheduleDueOffers(deps)]);
     expect(a.enqueued + b.enqueued).toBe(2);
-    expect(a.duplicatesPrevented + b.duplicatesPrevented).toBe(2);
     const jobs = await q.getJobs(["prioritized", "waiting"]);
     expect(jobs.map((j) => (j.data as { offerId: string }).offerId).sort()).toEqual(
       [hot.id, cold.id].sort(),
@@ -299,11 +299,26 @@ describe("1–3. global scheduler: eligible offers, priority, no duplicates", ()
     expect(byId[cold.id]!.opts.priority).toBe(10); // LOW: nobody watching
     expect(byId[hot.id]!.id).toBe(`price.${hot.id}.2026-11-16T10-00`);
 
+    // Second guard: even if the claim is lost (e.g. the lease row was reset), the same
+    // offer+slot is never enqueued twice, and each prevented duplicate is counted.
+    await prisma.productOffer.updateMany({
+      where: { id: { in: [hot.id, cold.id] } },
+      data: { nextCheckAt: null },
+    });
+    const again = await scheduleDueOffers(deps);
+    expect(again).toMatchObject({ enqueued: 0, duplicatesPrevented: 2 });
+    expect(await q.count()).toBe(2);
+    await prisma.productOffer.updateMany({
+      where: { id: { in: [hot.id, cold.id] } },
+      data: { nextCheckAt: new Date(clock.getTime() + 15 * 60_000) },
+    });
+
     // Leased: not due again on the next tick…
     expect((await scheduleDueOffers(deps)).enqueued).toBe(0);
     // …until the lease expires (worker died before processing): due again, new slot.
     clock = new Date(clock.getTime() + 16 * 60_000);
-    expect((await scheduleDueOffers(deps)).enqueued).toBe(2);
+    // (3: the offer that was due in 1 minute is now due too.)
+    expect((await scheduleDueOffers(deps)).enqueued).toBe(3);
   });
 
   it("excludes disabled sources, sources with tracking off and non-lookup connectors, and applies backpressure", async () => {
@@ -342,6 +357,21 @@ describe("1–3. global scheduler: eligible offers, priority, no duplicates", ()
 });
 
 describe("4–9. refresh: fetch, validation, snapshots, changes, stock", () => {
+  it("spends no request on an offer a search just observed, unless a new alert awaits its first answer", async () => {
+    await prisma.shoppingSource.updateMany({ data: { cacheTtlSeconds: 300 } });
+    const o = await offer("mock_alpha", { observedAt: new Date(clock.getTime() - 60_000) });
+    expect(await refresh(o.id)).toMatchObject({ outcome: "RECENTLY_OBSERVED", checkId: null });
+    expect(alpha.total()).toBe(0);
+    await alert((await user(1)).id, o.variantId);
+    await prisma.productOffer.update({
+      where: { id: o.id },
+      data: { observedAt: new Date(clock.getTime() - 60_000) },
+    });
+    expect(await refresh(o.id)).toMatchObject({ action: "done", outcome: "UNCHANGED" });
+    expect(alpha.total()).toBe(1);
+    expect(enqueuedChecks).toHaveLength(1); // the new alert gets evaluated
+  });
+
   it("fetches once, records a decrease with a new snapshot, never rewriting history", async () => {
     const o = await offer("mock_alpha");
     alpha.listings.set(o.externalId, { sellingPricePaise: 1_950_000 });
@@ -662,7 +692,7 @@ describe("14–18. reliability: rate limits, retries, dead letters, restarts, co
     );
     for (let i = 0; i < 100 && (await dlq.count()) === 0; i += 1)
       await new Promise((r) => setTimeout(r, 100));
-    const [dead] = await dlq.getJobs(["waiting"]);
+    const [dead] = await dlq.getJobs(["waiting", "prioritized", "delayed"]);
     expect(dead!.data).toMatchObject({ queue: name, attemptsMade: 3, data: { offerId: o.id } });
     // The final attempt recorded the failure and backed the offer off.
     const check = await prisma.priceCheck.findFirstOrThrow({ where: { offerId: o.id } });
@@ -691,6 +721,7 @@ describe("14–18. reliability: rate limits, retries, dead letters, restarts, co
         metrics,
         log,
         lockDurationMs: 1_000,
+        stalledIntervalMs: 500,
         process: async (data, ctx) => {
           if (hang) await new Promise(() => undefined); // simulates a crashed process
           return processPriceRefresh(refreshDeps({ now: () => new Date() }), data, ctx);
@@ -754,7 +785,10 @@ describe("14–18. reliability: rate limits, retries, dead letters, restarts, co
       await new Promise((r) => setTimeout(r, 100));
     }
     const c = await q.getJobCounts("completed", "failed");
-    expect(c).toMatchObject({ completed: 8 + 4, failed: 0 }); // failures recorded, not crashed
+    // The failing marketplace's 4 jobs are recorded and dead-lettered; the other 8 complete.
+    expect(c).toMatchObject({ completed: 8, failed: 4 });
+    for (let i = 0; i < 30 && (await dlq.count()) < 4; i += 1) await sleep(100);
+    expect(await dlq.count()).toBe(4);
     const updated = await prisma.productOffer.findMany({
       where: { id: { in: good.map((g) => g.id) } },
     });

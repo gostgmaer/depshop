@@ -38,6 +38,8 @@ export interface TrackedWorkerOptions<T> {
   log: Logger;
   /** Upper bound of one job's run time; the lock is renewed while it runs. */
   lockDurationMs?: number;
+  /** How often to look for jobs whose worker died (default 30 s). */
+  stalledIntervalMs?: number;
   process: (
     data: T,
     ctx: { attempt: number; maxAttempts: number; job: Job },
@@ -76,7 +78,7 @@ export function createTrackedWorker<T>(o: TrackedWorkerOptions<T>): Worker {
       concurrency: o.concurrency,
       lockDuration: o.lockDurationMs ?? 120_000,
       // A job whose worker died is re-queued once its lock expires, at most twice.
-      stalledInterval: 30_000,
+      stalledInterval: o.stalledIntervalMs ?? 30_000,
       maxStalledCount: 2,
       settings: {
         backoffStrategy: (attemptsMade: number, type?: string) =>

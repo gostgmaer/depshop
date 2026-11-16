@@ -115,12 +115,14 @@ async function refresh(
     return { action: "done", outcome: "SKIPPED", checkId: c.id, changed: false };
   }
 
-  // A search observed this listing moments ago: that observation is current.
+  // A search observed this listing moments ago: that observation is current, so no
+  // request is spent — unless a new alert is waiting for its first answer.
   const ttlMs = offer.source.cacheTtlSeconds * 1000;
   if (
     ttlMs > 0 &&
     offer.trackingState === "ACTIVE" &&
-    now.getTime() - offer.observedAt.getTime() < ttlMs
+    now.getTime() - offer.observedAt.getTime() < ttlMs &&
+    !(await hasUnevaluatedAlerts(prisma, offer.variantId, offer.sourceId))
   ) {
     await prisma.productOffer.update({
       where: { id: offer.id },
@@ -192,6 +194,13 @@ async function refresh(
         return { action: "retry", reason: `${r.errorCode ?? "FAILED"}: ${r.errorMessage ?? ""}` };
       const c = await failure("FAILED", r.errorCode, r.errorMessage);
       await metrics.inc({ jobs_failed: 1 });
+      // Recorded and backed off. A retryable failure that exhausted its attempts also
+      // fails the job, so it reaches the dead-letter queue.
+      if (r.retryable)
+        return {
+          action: "retry",
+          reason: `${r.errorCode ?? "FAILED"} after ${ctx.attempt} attempts`,
+        };
       return { action: "done", outcome: "FAILED", checkId: c.id, changed: false };
     }
     case "INVALID": {

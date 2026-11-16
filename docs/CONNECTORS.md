@@ -118,6 +118,21 @@ the executor never rejects because of one source. The overall status is:
 - `FAILED`: all failed;
 - `NO_SOURCES`: nothing was eligible. The worker stores this as a `COMPLETED` search with zero results.
 
+## Single-listing lookups (ProductLookupExecutor, Phase 5.1)
+
+Background price tracking ([TRACKING.md](TRACKING.md)) refreshes one listing at a time through `ProductLookupExecutor` (`core/executor/lookup.ts`).
+
+- **Same safeguards as search:**
+  - the source must be ACTIVE, and its connector registered, enabled, READY, not a disallowed mock, and declare `productLookup` with `getProduct`;
+  - the circuit breaker, a per-attempt timeout with `AbortSignal`, retries with full jitter, strict Zod validation, and metrics.
+- **Shared rate limit:** tracking uses the same per-source Redis limiter as searches, plus a sub-budget (`track:<slug>`, `TRACKING_SOURCE_SHARE`, default 50%), so tracking can never starve interactive searches or exceed the source's limit.
+- **Single-flight:** identical concurrent lookups in one process share one call.
+- **Outcomes:** `FOUND`, `NOT_FOUND`, `INVALID`, `SKIPPED` (with reason), `RATE_LIMITED` (with `retryAfterMs`) and `FAILED` (`retryable` or not). Nothing is cached, and nothing is invented.
+- **Lookup support today:**
+  - the mock stores (development only);
+  - Flipkart (connector supports it; no credentials yet);
+  - Amazon's Creators API connector declares `productLookup: false`.
+
 ## Normalization
 
 The connector boundary schema is `normalizedProductSchema`. It holds:

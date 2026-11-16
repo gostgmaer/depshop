@@ -1,4 +1,4 @@
-# Web app (Phases 4.1–4.3)
+# Web app (Phases 4.1–4.3, 5.1)
 
 `apps/web` is a Next.js 15 App Router app (React 19, TypeScript strict).
 It is styled with Tailwind CSS 4 and uses shadcn/ui-style components built on
@@ -376,3 +376,17 @@ The 14 Vitest categories:
 - **Spec grouping** uses key names (e.g. "Processor", `ram_gb`). Values aren't converted across units, so "6.6 inch" vs "16.8 cm" would show as different.
 - **The average is the mean of observations,** not time-weighted, as labelled.
 - **The E2E mock prices every variant the same.** Per-variant pricing is covered by the API tests.
+
+## Alerts with global price tracking (Phase 5.1)
+
+- **Alert form.** Choose the condition, and only that condition's fields appear:
+  - at or below a target, or below a target (rupee text → paise);
+  - drop by a percentage (1–90; measured from today's lowest delivered price, or from the next check);
+  - lowest observed in 30/90/180/365 days;
+  - any price change;
+  - back in stock.
+- **Form options:** a cooldown (1 h / 6 h / 24 h / 3 days) and an optional marketplace.
+- **One plain-language description** (`lib/alerts.ts describeAlert`) is used everywhere: the alerts page, the product page's tracking panel and the dashboard.
+- **Alerts page:** each alert shows when it was last checked and a **History** of its evaluations (`GET /alerts/:id/evaluations`): notified, not met, within cooldown, notifications off, or not enough data, each with the reason, price and marketplace.
+- **Honest copy.** The 4.1–4.3 messages saying "price checks aren't running yet" are replaced with an accurate description: prices are re-checked in the background on connected marketplaces, every 30 minutes to 12 hours depending on demand; notifications go in-app and by email per the user's preferences; marketplaces without an authorized connection aren't checked.
+- **Tests:** Vitest 82 (2 new: per-type alert creation with validation, and the alert descriptions); Playwright 18 still passing, including axe on the alerts page.
