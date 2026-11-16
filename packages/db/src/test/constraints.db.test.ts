@@ -11,6 +11,15 @@ import {
   truncateAll,
 } from "./helpers.js";
 
+/** Required notification fields (category + verified source + dedupe key). */
+const SOURCE = (key: string) =>
+  ({
+    category: "ACCOUNT",
+    sourceType: "ACCOUNT",
+    sourceId: key,
+    dedupeKey: `test:${key}`,
+  }) as const;
+
 const prisma: PrismaClient = testPrisma();
 afterAll(() => prisma.$disconnect());
 
@@ -323,7 +332,7 @@ describe("user features", () => {
 
   it("requires sentAt for SENT deliveries and one delivery per channel", async () => {
     const n = await prisma.notification.create({
-      data: { userId: user.id, type: "SYSTEM", title: "t", body: "b" },
+      data: { userId: user.id, type: "SYSTEM", title: "t", body: "b", ...SOURCE("c1") },
     });
     await expectCheckViolation(
       prisma.notificationDelivery.create({
@@ -388,5 +397,52 @@ describe("AI & monetization", () => {
       },
     });
     expect(conv.orderAmountPaise).toBe(9_000_000_000_00n);
+  });
+});
+
+describe("notifications (Phase 5.3)", () => {
+  it("allows only relative in-app links and one notification per user per event", async () => {
+    await expectCheckViolation(
+      prisma.notification.create({
+        data: {
+          userId: user.id,
+          type: "SYSTEM",
+          title: "t",
+          body: "b",
+          link: "//evil.example/x",
+          ...SOURCE("l1"),
+        },
+      }),
+      "Notification_link_relative",
+    );
+    await prisma.notification.create({
+      data: { userId: user.id, type: "SYSTEM", title: "t", body: "b", ...SOURCE("d1") },
+    });
+    await expect(
+      prisma.notification.create({
+        data: { userId: user.id, type: "SYSTEM", title: "t", body: "b", ...SOURCE("d1") },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("requires HTTPS push endpoints and well-formed quiet hours", async () => {
+    await expectCheckViolation(
+      prisma.pushSubscription.create({
+        data: { userId: user.id, endpoint: "http://push.example/x", p256dh: "p", auth: "a" },
+      }),
+      "PushSubscription_https",
+    );
+    await expectCheckViolation(
+      prisma.userPreference.create({
+        data: { userId: user.id, quietHoursStart: "22:00", quietHoursEnd: null },
+      }),
+      "UserPreference_quiet_hours",
+    );
+    await expectCheckViolation(
+      prisma.userPreference.create({
+        data: { userId: user.id, quietHoursStart: "24:00", quietHoursEnd: "07:00" },
+      }),
+      "UserPreference_quiet_hours",
+    );
   });
 });

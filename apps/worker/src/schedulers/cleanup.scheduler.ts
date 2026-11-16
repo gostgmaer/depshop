@@ -4,17 +4,25 @@
  *    scheduled; history is kept);
  *  - PriceCheck and AlertEvaluation rows past retention are deleted in
  *    batches. PriceSnapshot history is never deleted or rewritten;
- *  - email deliveries left PENDING (e.g. the enqueue was lost in a crash)
- *    are re-enqueued; their job id is the delivery id, so this is idempotent;
- *  - alerts past their end date become EXPIRED (one conditional UPDATE …
- *    RETURNING, so each is expired and announced once) with an in-app
- *    "alert ended" notification when the alert and the user allow in-app.
+ *  - email/push deliveries still PENDING 10 minutes after they were due
+ *    (e.g. the enqueue was lost in a crash) are re-enqueued; their job id is
+ *    the delivery id, so this is idempotent (outbox recovery);
+ *  - alerts past their end date become EXPIRED (a conditional update per
+ *    alert, so each is expired and announced once) with an "alert ended"
+ *    notification on the alert's channels that the user's preferences allow.
  */
 import type { PrismaClient } from "@dealmind/db";
+import {
+  type PendingDelivery,
+  buildNotification,
+  publishSignal,
+  recordNotification,
+} from "@dealmind/notifications";
 
 export interface CleanupDeps {
   prisma: PrismaClient;
-  enqueueDelivery: (deliveryId: string) => Promise<void>;
+  enqueueDelivery: (deliveryId: string, notBefore?: Date) => Promise<void>;
+  realtime?: { redis: { publish(c: string, m: string): Promise<unknown> }; prefix: string };
   /** Days an offer may stay MISSING before it expires. */
   expireMissingAfterDays?: number;
   checkRetentionDays?: number;
@@ -78,14 +86,15 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
     new Date(now.getTime() - (deps.checkRetentionDays ?? 30) * DAY),
     batch,
   );
-  const expiredAlerts = await expireAlerts(deps.prisma, now);
+  const expiredAlerts = await expireAlerts(deps, now);
   const stuck = await deps.prisma.notificationDelivery.findMany({
     where: {
-      channel: "EMAIL",
+      channel: { in: ["EMAIL", "PUSH"] },
       status: "PENDING",
-      createdAt: { lt: new Date(now.getTime() - 10 * 60_000) },
+      scheduledAt: { lt: new Date(now.getTime() - 10 * 60_000) },
     },
     select: { id: true },
+    orderBy: { scheduledAt: "asc" },
     take: 1_000,
   });
   for (const d of stuck) await deps.enqueueDelivery(d.id);
@@ -98,20 +107,13 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
   };
 }
 
-const dateText = new Intl.DateTimeFormat("en-IN", {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-  timeZone: "Asia/Kolkata",
-});
-
 /**
- * Ends alerts whose end date passed and tells their owners (in-app). One
- * transaction per alert: the conditional status change and its notice commit
- * together, so a crash can neither lose the notice nor send it twice.
+ * Ends alerts whose end date passed and tells their owners. One transaction
+ * per alert: the conditional status change and its notification (outbox)
+ * commit together, so a crash can neither lose the notice nor send it twice.
  */
-async function expireAlerts(prisma: PrismaClient, now: Date): Promise<number> {
-  const due = await prisma.priceAlert.findMany({
+async function expireAlerts(deps: CleanupDeps, now: Date): Promise<number> {
+  const due = await deps.prisma.priceAlert.findMany({
     where: { status: { in: ["ACTIVE", "PAUSED", "TRIGGERED"] }, expiresAt: { lte: now } },
     select: {
       id: true,
@@ -119,14 +121,13 @@ async function expireAlerts(prisma: PrismaClient, now: Date): Promise<number> {
       variantId: true,
       channels: true,
       expiresAt: true,
-      user: { select: { preference: { select: { notifyInApp: true } } } },
       variant: { select: { product: { select: { id: true, name: true } } } },
     },
     take: 1_000,
   });
   let expired = 0;
   for (const a of due) {
-    await prisma.$transaction(async (tx) => {
+    const r = await deps.prisma.$transaction(async (tx) => {
       const res = await tx.priceAlert.updateMany({
         where: {
           id: a.id,
@@ -135,39 +136,27 @@ async function expireAlerts(prisma: PrismaClient, now: Date): Promise<number> {
         },
         data: { status: "EXPIRED" },
       });
-      if (res.count === 0) return; // changed meanwhile (e.g. cancelled by the user)
-      expired += 1;
-      if (!a.channels.includes("IN_APP") || a.user.preference?.notifyInApp === false) return;
+      if (res.count === 0) return null; // changed meanwhile (e.g. cancelled by the user)
       const p = a.variant.product;
-      const n = await tx.notification.create({
-        data: {
-          userId: a.userId,
-          type: "ALERT_EXPIRED",
-          title: `Your price alert for ${p.name} has ended`,
-          body: `It reached the end date you set (${dateText.format(a.expiresAt!)}) and is no longer checked. Create a new alert to keep watching.`,
-          data: { alertId: a.id, productId: p.id, variantId: a.variantId },
-        },
+      const draft = buildNotification({
+        kind: "alert.expired",
+        userId: a.userId,
+        alertId: a.id,
+        product: { id: p.id, name: p.name, variantId: a.variantId },
+        expiresAt: a.expiresAt!.toISOString(),
       });
-      await tx.notificationDelivery.createMany({
-        data: [
-          {
-            userId: a.userId,
-            notificationId: n.id,
-            channel: "IN_APP",
-            status: "SENT",
-            sentAt: now,
-          },
-          // The shared notification service has no template for this notice.
-          {
-            userId: a.userId,
-            notificationId: n.id,
-            channel: "EMAIL",
-            status: "SKIPPED",
-            lastError: "Expiry notices are in-app only",
-          },
-        ],
-      });
+      return recordNotification(tx, draft, { alertChannels: a.channels, now });
     });
+    if (!r) continue;
+    expired += 1;
+    if (r.status !== "created") continue;
+    const pending: PendingDelivery[] = r.pending;
+    for (const d of pending) await deps.enqueueDelivery(d.id, d.notBefore);
+    if (deps.realtime)
+      await publishSignal(deps.realtime.redis, deps.realtime.prefix, a.userId, {
+        type: "created",
+        id: r.notificationId,
+      });
   }
   return expired;
 }

@@ -1,39 +1,39 @@
 /**
- * The caller's in-app notifications. Every query is scoped by the
- * authenticated userId; another user's notification is "not found".
+ * The caller's notifications (in-app), notification preferences, browser push
+ * subscriptions and one-click email unsubscribe. Every query is scoped by the
+ * authenticated userId; another user's records are "not found".
  */
-import type { PrismaClient } from "@dealmind/db";
-import { AppError, notificationListQuery, notificationView, paginationOf } from "@dealmind/shared";
+import {
+  AppError,
+  ErrorCode,
+  NOTIFICATION_CATEGORIES,
+  notificationListQuery,
+  notificationPreferences,
+  notificationView,
+  pushConfigView,
+  pushSubscribeInput,
+  pushUnsubscribeInput,
+  unsubscribeInput,
+  unsubscribeView,
+  updateNotificationPreferencesInput,
+} from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { getAuth } from "../../plugins/auth.js";
-import { iso, ok, page, paginated } from "../../utils/http.js";
+import { ok, page, paginated } from "../../utils/http.js";
+import type { NotificationService } from "./notification-service.js";
+import type { RealtimeHub } from "./realtime-hub.js";
 
 const security = [{ sessionCookie: [] }];
+const idParam = z.object({ id: z.string().uuid() });
+const HEARTBEAT_MS = 25_000;
+const STREAM_MAX_MS = 30 * 60_000;
+const MAX_STREAMS_PER_USER = 5;
 
-type Row = {
-  id: string;
-  type: string;
-  title: string;
-  body: string;
-  data: unknown;
-  readAt: Date | null;
-  createdAt: Date;
-};
-const view = (n: Row) => ({
-  id: n.id,
-  type: n.type,
-  title: n.title,
-  body: n.body,
-  data: (n.data ?? {}) as Record<string, unknown>,
-  readAt: iso(n.readAt),
-  createdAt: n.createdAt.toISOString(),
-});
-
-export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }> = async (
-  app,
-  { prisma },
-) => {
+export const notificationRoutes: FastifyPluginAsyncZod<{
+  notifications: NotificationService;
+  hub: RealtimeHub | null;
+}> = async (app, { notifications, hub }) => {
   app.addHook("preHandler", app.requireAuth);
 
   app.get(
@@ -41,26 +41,15 @@ export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }>
     {
       schema: {
         tags: ["notifications"],
-        summary: "Your notifications, newest first",
+        summary: "Your in-app notifications, newest first",
         security,
         querystring: notificationListQuery,
         response: { 200: page(notificationView) },
       },
     },
     async (req) => {
-      const userId = getAuth(req).userId;
-      const q = req.query;
-      const where = { userId, ...(q.unread === true ? { readAt: null } : {}) };
-      const [rows, total] = await Promise.all([
-        prisma.notification.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          skip: (q.page - 1) * q.pageSize,
-          take: q.pageSize,
-        }),
-        prisma.notification.count({ where }),
-      ]);
-      return paginated(rows.map(view), paginationOf(q, total));
+      const r = await notifications.list(getAuth(req).userId, req.query);
+      return paginated(r.items, r.pagination);
     },
   );
 
@@ -74,38 +63,24 @@ export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }>
         response: { 200: ok(z.object({ unread: z.number().int() })) },
       },
     },
-    async (req) => ({
-      unread: await prisma.notification.count({
-        where: { userId: getAuth(req).userId, readAt: null },
-      }),
-    }),
+    async (req) => ({ unread: await notifications.unreadCount(getAuth(req).userId) }),
   );
 
-  app.post(
-    "/:id/read",
-    {
-      schema: {
-        tags: ["notifications"],
-        summary: "Mark one notification as read",
-        security,
-        params: z.object({ id: z.string().uuid() }),
-        response: { 200: ok(notificationView) },
-      },
+  const readOpts = {
+    schema: {
+      tags: ["notifications"],
+      summary: "Mark one notification as read",
+      security,
+      params: idParam,
+      response: { 200: ok(notificationView) },
     },
-    async (req) => {
-      const userId = getAuth(req).userId;
-      const existing = await prisma.notification.findFirst({
-        where: { id: req.params.id, userId },
-      });
-      if (!existing) throw AppError.notFound("Notification");
-      if (existing.readAt) return view(existing);
-      return view(
-        await prisma.notification.update({
-          where: { id: existing.id },
-          data: { readAt: new Date() },
-        }),
-      );
-    },
+  };
+  app.patch("/:id/read", readOpts, async (req) =>
+    notifications.markRead(getAuth(req).userId, req.params.id),
+  );
+  /** Kept for clients built before Phase 5.3. */
+  app.post("/:id/read", readOpts, async (req) =>
+    notifications.markRead(getAuth(req).userId, req.params.id),
   );
 
   app.post(
@@ -113,17 +88,203 @@ export const notificationRoutes: FastifyPluginAsyncZod<{ prisma: PrismaClient }>
     {
       schema: {
         tags: ["notifications"],
-        summary: "Mark all notifications as read",
+        summary: "Mark all (or one category's) notifications as read",
         security,
+        querystring: z.object({ category: z.enum(NOTIFICATION_CATEGORIES).optional() }).strict(),
         response: { 200: ok(z.object({ updated: z.number().int() })) },
       },
     },
-    async (req) => {
-      const res = await prisma.notification.updateMany({
-        where: { userId: getAuth(req).userId, readAt: null },
-        data: { readAt: new Date() },
-      });
-      return { updated: res.count };
+    async (req) => notifications.readAll(getAuth(req).userId, req.query.category),
+  );
+
+  app.delete(
+    "/:id",
+    {
+      schema: {
+        tags: ["notifications"],
+        summary: "Delete one notification",
+        security,
+        params: idParam,
+        response: { 204: z.null() },
+      },
     },
+    async (req, reply) => {
+      await notifications.remove(getAuth(req).userId, req.params.id);
+      return reply.status(204).send(null);
+    },
+  );
+
+  /**
+   * Server-Sent Events: `ready` with the unread count, then one `change`
+   * event per new/read/deleted notification of the caller (ids only, plus the
+   * fresh unread count). Closes after 30 minutes; EventSource reconnects.
+   */
+  app.get(
+    "/stream",
+    {
+      schema: {
+        tags: ["notifications"],
+        summary: "Live notification updates (text/event-stream)",
+        security,
+      },
+    },
+    async (req, reply) => {
+      const userId = getAuth(req).userId;
+      if (!hub) throw new AppError(ErrorCode.DEPENDENCY_UNAVAILABLE, "Live updates unavailable");
+      if (hub.count(userId) >= MAX_STREAMS_PER_USER)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many open notification streams");
+      const unread = await notifications.unreadCount(userId);
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      const send = (event: string, data: unknown) =>
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      send("ready", { unread });
+      let closed = false;
+      let remove: (() => Promise<void>) | null = null;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(heartbeat);
+        clearTimeout(maxTimer);
+        void remove?.();
+        res.end();
+      };
+      const heartbeat = setInterval(() => res.write(": keep-alive\n\n"), HEARTBEAT_MS);
+      const maxTimer = setTimeout(close, STREAM_MAX_MS);
+      req.raw.on("close", close);
+      try {
+        remove = await hub.add(userId, (message) => {
+          let signal: unknown;
+          try {
+            signal = JSON.parse(message);
+          } catch {
+            return;
+          }
+          void notifications
+            .unreadCount(userId)
+            .then((count) => {
+              if (!closed) send("change", { signal, unread: count });
+            })
+            .catch(() => undefined);
+        });
+      } catch {
+        return close();
+      }
+      if (closed) await remove();
+    },
+  );
+};
+
+/** GET/PATCH /users/me/notification-preferences */
+export const notificationPreferenceRoutes: FastifyPluginAsyncZod<{
+  notifications: NotificationService;
+}> = async (app, { notifications }) => {
+  app.addHook("preHandler", app.requireAuth);
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["notifications"],
+        summary: "Your notification preferences",
+        security,
+        response: { 200: ok(notificationPreferences) },
+      },
+    },
+    async (req) => notifications.preferences(getAuth(req).userId),
+  );
+  app.patch(
+    "/",
+    {
+      schema: {
+        tags: ["notifications"],
+        summary: "Update your notification preferences",
+        security,
+        body: updateNotificationPreferencesInput,
+        response: { 200: ok(notificationPreferences) },
+      },
+    },
+    async (req) => notifications.updatePreferences(getAuth(req).userId, req.body),
+  );
+};
+
+/** /push: VAPID public key, subscribe and unsubscribe this browser. */
+export const pushRoutes: FastifyPluginAsyncZod<{
+  notifications: NotificationService;
+  vapidPublicKey: string | null;
+}> = async (app, { notifications, vapidPublicKey }) => {
+  app.get(
+    "/config",
+    {
+      schema: {
+        tags: ["notifications"],
+        summary: "Web push configuration (VAPID public key, or null when unavailable)",
+        response: { 200: ok(pushConfigView) },
+      },
+    },
+    async () => ({ publicKey: vapidPublicKey }),
+  );
+  app.post(
+    "/subscribe",
+    {
+      preHandler: app.requireAuth,
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+      schema: {
+        tags: ["notifications"],
+        summary: "Store this browser's push subscription for you",
+        security,
+        body: pushSubscribeInput,
+        response: { 201: ok(z.object({ id: z.string().uuid(), createdAt: z.string() })) },
+      },
+    },
+    async (req, reply) => {
+      if (!vapidPublicKey)
+        throw new AppError(ErrorCode.DEPENDENCY_UNAVAILABLE, "Browser notifications unavailable");
+      const ua = req.headers["user-agent"];
+      return reply
+        .status(201)
+        .send(await notifications.subscribePush(getAuth(req).userId, req.body, ua));
+    },
+  );
+  app.delete(
+    "/subscribe",
+    {
+      preHandler: app.requireAuth,
+      schema: {
+        tags: ["notifications"],
+        summary: "Stop push notifications on this browser",
+        security,
+        body: pushUnsubscribeInput,
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      await notifications.unsubscribePush(getAuth(req).userId, req.body.endpoint);
+      return reply.status(204).send(null);
+    },
+  );
+};
+
+/** POST /notifications/unsubscribe: one-click email unsubscribe (signed token, no session). */
+export const unsubscribeRoutes: FastifyPluginAsyncZod<{
+  notifications: NotificationService;
+}> = async (app, { notifications }) => {
+  app.post(
+    "/",
+    {
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+      schema: {
+        tags: ["notifications"],
+        summary: "Turn off one category's emails from an unsubscribe link",
+        body: unsubscribeInput,
+        response: { 200: ok(unsubscribeView) },
+      },
+    },
+    async (req) => notifications.unsubscribe(req.body.token),
   );
 };

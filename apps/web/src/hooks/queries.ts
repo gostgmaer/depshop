@@ -4,9 +4,14 @@
  * TanStack Query hooks over the typed services. Query keys are hierarchical
  * so mutations invalidate exactly what they change.
  */
-import { type CreateSearchInput, TERMINAL_SEARCH_STATUSES } from "@dealmind/shared";
+import {
+  type AlertStatusValue,
+  type NotificationCategoryValue,
+  type CreateSearchInput,
+  TERMINAL_SEARCH_STATUSES,
+} from "@dealmind/shared";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { SearchResultSort } from "@/types/api";
+import type { SearchResultSort, UpdateNotificationPreferences } from "@/types/api";
 import {
   type HistoryDays,
   type ProductQuery,
@@ -40,7 +45,9 @@ export const keys = {
   alerts: (status?: string) => ["alerts", status ?? "all"] as const,
   variantAlerts: (variantId: string) => ["alerts", "variant", variantId] as const,
   variantWatchlists: (variantId: string) => ["watchlists", "variant", variantId] as const,
-  notifications: (unread?: boolean, page = 1) => ["notifications", unread ?? "all", page] as const,
+  notifications: (unread?: boolean, page = 1, category?: string) =>
+    ["notifications", "list", unread ?? "all", category ?? "any", page] as const,
+  notificationPreferences: ["notification-preferences"] as const,
   unread: ["notifications", "unread"] as const,
   plans: ["billing", "plans"] as const,
   subscription: ["billing", "subscription"] as const,
@@ -196,7 +203,7 @@ export function useWatchlistMutations() {
 }
 
 // ── Alerts ──
-export const useAlerts = (status?: "ACTIVE" | "TRIGGERED" | "PAUSED") =>
+export const useAlerts = (status?: AlertStatusValue) =>
   useQuery({ queryKey: keys.alerts(status), queryFn: () => alerts.list(status) });
 
 export function useAlertMutations() {
@@ -211,30 +218,49 @@ export function useAlertMutations() {
       onSuccess: done,
     }),
     update: useMutation({
-      mutationFn: (v: { id: string; targetPricePaise: number }) =>
-        alerts.update(v.id, { targetPricePaise: v.targetPricePaise }),
+      mutationFn: (v: { id: string; body: Parameters<typeof alerts.update>[1] }) =>
+        alerts.update(v.id, v.body),
       onSuccess: done,
     }),
+    cancel: useMutation({ mutationFn: (id: string) => alerts.cancel(id), onSuccess: done }),
     pause: useMutation({ mutationFn: (id: string) => alerts.pause(id), onSuccess: done }),
     resume: useMutation({ mutationFn: (id: string) => alerts.resume(id), onSuccess: done }),
     remove: useMutation({ mutationFn: (id: string) => alerts.remove(id), onSuccess: done }),
   };
 }
 
-/** One alert's evaluation history (loaded when opened). */
-export const useAlertEvaluations = (id: string, enabled: boolean) =>
+/** One alert's evaluation history (loaded when opened); triggersOnly = previous triggers. */
+export const useAlertEvaluations = (id: string, enabled: boolean, triggersOnly = false) =>
   useQuery({
-    queryKey: ["alerts", id, "evaluations"] as const,
-    queryFn: () => alerts.evaluations(id),
+    queryKey: ["alerts", id, "history", triggersOnly] as const,
+    queryFn: () => alerts.history(id, { triggersOnly }),
     enabled,
   });
 
 // ── Notifications ──
-export const useNotifications = (unread?: boolean, page = 1) =>
+export const useNotifications = (
+  unread?: boolean,
+  page = 1,
+  category?: NotificationCategoryValue,
+) =>
   useQuery({
-    queryKey: keys.notifications(unread, page),
-    queryFn: () => notifications.list({ ...(unread === undefined ? {} : { unread }), page }),
+    queryKey: keys.notifications(unread, page, category),
+    queryFn: () =>
+      notifications.list({
+        ...(unread === undefined ? {} : { unread }),
+        ...(category ? { category } : {}),
+        page,
+      }),
   });
+export const useNotificationPreferences = () =>
+  useQuery({ queryKey: keys.notificationPreferences, queryFn: notifications.preferences });
+export function useUpdateNotificationPreferences() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UpdateNotificationPreferences) => notifications.updatePreferences(body),
+    onSuccess: (data) => qc.setQueryData(keys.notificationPreferences, data),
+  });
+}
 export const useUnreadCount = () =>
   useQuery({ queryKey: keys.unread, queryFn: notifications.unreadCount, refetchInterval: 60_000 });
 export function useNotificationMutations() {
@@ -246,6 +272,7 @@ export function useNotificationMutations() {
       onSuccess: done,
     }),
     markAllRead: useMutation({ mutationFn: () => notifications.markAllRead(), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => notifications.remove(id), onSuccess: done }),
   };
 }
 

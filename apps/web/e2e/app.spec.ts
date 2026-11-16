@@ -182,6 +182,8 @@ for (const scheme of ["light", "dark"] as const) {
       "/watchlists",
       "/history",
       "/notifications",
+      "/settings/notifications",
+      "/unsubscribe?token=sample",
       "/categories",
       "/compare",
       "/search/40000000-0000-7000-8000-000000000001",

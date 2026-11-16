@@ -14,6 +14,15 @@ import {
   truncateAll,
 } from "./helpers.js";
 
+/** Required notification fields (category + verified source + dedupe key). */
+const SOURCE = (key: string) =>
+  ({
+    category: "ACCOUNT",
+    sourceType: "ACCOUNT",
+    sourceId: key,
+    dedupeKey: `test:${key}`,
+  }) as const;
+
 const prisma: PrismaClient = testPrisma();
 afterAll(() => prisma.$disconnect());
 
@@ -78,7 +87,13 @@ describe("composite ownership foreign keys", () => {
 
   it("rejects deliveries for another user's notification", async () => {
     const n = await prisma.notification.create({
-      data: { userId: alice.id, type: "PRICE_DROP", title: "Price drop", body: "₹19,999" },
+      data: {
+        userId: alice.id,
+        type: "PRICE_DROP",
+        title: "Price drop",
+        body: "₹19,999",
+        ...SOURCE("o1"),
+      },
     });
     const op = prisma.notificationDelivery.create({
       data: { userId: bob.id, notificationId: n.id, channel: "EMAIL" },
@@ -140,7 +155,7 @@ describe("deletion semantics", () => {
       },
     });
     const n = await prisma.notification.create({
-      data: { userId, type: "SYSTEM", title: "t", body: "b" },
+      data: { userId, type: "SYSTEM", title: "t", body: "b", ...SOURCE("o2") },
     });
     await prisma.notificationDelivery.create({
       data: { userId, notificationId: n.id, channel: "IN_APP" },

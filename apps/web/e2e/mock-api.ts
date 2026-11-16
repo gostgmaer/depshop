@@ -251,7 +251,59 @@ const server = createServer((req, res) => {
   if (path === "/watchlists" && method === "GET") return send(res, 200, page([]));
   if (path === "/alerts") return send(res, 200, page([]));
   if (path === "/notifications/unread-count") return send(res, 200, ok({ unread: 2 }));
-  if (path === "/notifications") return send(res, 200, page([]));
+  // Live stream: 204 tells EventSource not to reconnect (keeps "networkidle" reachable).
+  if (path === "/notifications/stream") return void res.writeHead(204).end();
+  if (path === "/notifications")
+    return send(
+      res,
+      200,
+      page([
+        {
+          id: "60000000-0000-7000-8000-000000000001",
+          type: "TARGET_PRICE_REACHED",
+          category: "PRICE_ALERTS",
+          critical: false,
+          title: "Mock product reached your target on Mock Store 1",
+          body: "Sample notification from the E2E mock API.",
+          link: "/products/10000000-0000-7000-8000-000000000001",
+          data: {},
+          readAt: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: "60000000-0000-7000-8000-000000000002",
+          type: "NEW_SIGN_IN",
+          category: "ACCOUNT",
+          critical: true,
+          title: "New sign-in to your account",
+          body: "Sample security notice from the E2E mock API.",
+          link: "/settings/security",
+          data: {},
+          readAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  if (path === "/users/me/notification-preferences")
+    return send(
+      res,
+      200,
+      ok({
+        inAppEnabled: true,
+        emailEnabled: true,
+        pushEnabled: false,
+        categories: {
+          PRICE_ALERTS: { inApp: true, email: true, push: true },
+          SEARCH: { inApp: true, email: false, push: false },
+          ACCOUNT: { inApp: true, email: false, push: true },
+        },
+        quietHours: { start: "22:00", end: "07:00" },
+        timezone: "Asia/Kolkata",
+        language: "en-IN",
+        pushSubscriptions: 0,
+      }),
+    );
+  if (path === "/push/config") return send(res, 200, ok({ publicKey: null }));
   if (path === "/subscriptions/me/usage")
     return send(
       res,

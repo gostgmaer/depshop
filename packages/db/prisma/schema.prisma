@@ -74,6 +74,7 @@ model User {
   priceAlerts            PriceAlert[]
   alertEvaluations       AlertEvaluation[]
   notifications          Notification[]
+  pushSubscriptions      PushSubscription[]
   notificationDeliveries NotificationDelivery[]
   agentRuns              AgentRun[]
   subscription           Subscription?
@@ -122,15 +123,24 @@ model UserSession {
 }
 
 model UserPreference {
-  id                 String   @id @default(uuid(7)) @db.Uuid
-  userId             String   @unique @db.Uuid
-  preferredSourceIds String[] @db.Uuid
-  preferredBrands    String[]
-  notifyEmail        Boolean  @default(true)
-  notifyInApp        Boolean  @default(true)
-  locale             String   @default("en-IN")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                     String   @id @default(uuid(7)) @db.Uuid
+  userId                 String   @unique @db.Uuid
+  preferredSourceIds     String[] @db.Uuid
+  preferredBrands        String[]
+  notifyEmail            Boolean  @default(true)
+  notifyInApp            Boolean  @default(true)
+  /// Global browser-push switch; off until the user enables it (needs a subscription too).
+  notifyPush             Boolean  @default(false)
+  /// Per-category channel switches {PRICE_ALERTS|SEARCH|ACCOUNT: {inApp,email,push}}; validated by
+  /// `categoryChannelsOf` in @dealmind/shared (missing keys fall back to defaults).
+  notificationCategories Json     @default("{}")
+  /// Quiet hours ("HH:MM", local to `timezone`): email and push of non-critical notifications wait until they end.
+  quietHoursStart        String?
+  quietHoursEnd          String?
+  timezone               String   @default("Asia/Kolkata")
+  locale                 String   @default("en-IN")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -823,24 +833,54 @@ enum NotificationType {
   BACK_IN_STOCK
   PRICE_CHANGED
   ALERT_EXPIRED
+  SEARCH_COMPLETED
+  SEARCH_FAILED
+  PASSWORD_CHANGED
+  NEW_SIGN_IN
   SYSTEM
 }
 
+enum NotificationCategory {
+  PRICE_ALERTS
+  SEARCH
+  ACCOUNT
+}
+
+/// The verified event a notification came from.
+enum NotificationSource {
+  ALERT_EVALUATION
+  ALERT_EXPIRY
+  SEARCH
+  ACCOUNT
+}
+
 model Notification {
-  id        String           @id @default(uuid(7)) @db.Uuid
-  userId    String           @db.Uuid
-  type      NotificationType
-  title     String
-  body      String
-  data      Json             @default("{}")
-  readAt    DateTime?
-  createdAt DateTime         @default(now())
+  id         String               @id @default(uuid(7)) @db.Uuid
+  userId     String               @db.Uuid
+  type       NotificationType
+  category   NotificationCategory
+  /// Security notices: always in-app, never delayed by quiet hours.
+  critical   Boolean              @default(false)
+  sourceType NotificationSource
+  /// Id of the source record (alert evaluation, alert, search, audit entry).
+  sourceId   String
+  /// One notification per user per event: a retried producer can't create a duplicate.
+  dedupeKey  String
+  title      String
+  body       String
+  /// Relative in-app link.
+  link       String?
+  data       Json                 @default("{}")
+  readAt     DateTime?
+  createdAt  DateTime             @default(now())
 
   user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries NotificationDelivery[]
 
   @@unique([id, userId])
+  @@unique([userId, dedupeKey])
   @@index([userId, readAt, createdAt(sort: Desc)])
+  @@index([userId, category, createdAt(sort: Desc)])
 }
 
 enum DeliveryChannel {
@@ -866,6 +906,9 @@ model NotificationDelivery {
   attempts          Int             @default(0)
   lastError         String?
   providerMessageId String?
+  /// Push: subscriptions already delivered to (a retry sends only to the rest).
+  sentTo            String[]        @default([]) @db.Uuid
+  /// Not sent before this time (quiet hours).
   scheduledAt       DateTime        @default(now())
   sentAt            DateTime?
   createdAt         DateTime        @default(now())
@@ -1120,4 +1163,26 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([actorId])
   @@index([createdAt])
+}
+
+/// A browser's Web Push subscription (user-owned). Expired when the push
+/// service answers 404/410; revoked when the user unsubscribes.
+model PushSubscription {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  userId         String    @db.Uuid
+  endpoint       String    @unique
+  p256dh         String
+  auth           String
+  expirationTime DateTime?
+  userAgent      String?
+  failureCount   Int       @default(0)
+  lastSuccessAt  DateTime?
+  revokedAt      DateTime?
+  expiredAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

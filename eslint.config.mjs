@@ -11,6 +11,8 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/coverage/**",
       "**/next-env.d.ts",
+      // Static browser files served as-is (e.g. the web-push service worker).
+      "apps/web/public/**",
       "**/*.config.{js,mjs,cjs,ts}",
     ],
   },

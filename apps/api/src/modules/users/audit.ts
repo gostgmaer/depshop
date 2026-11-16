@@ -9,8 +9,8 @@ export interface AuditEntry {
 }
 
 /** Appends to the audit log. Never include secrets (passwords, tokens) in metadata. */
-export async function recordAudit(prisma: PrismaClient, entry: AuditEntry): Promise<void> {
-  await prisma.auditLog.create({
+export async function recordAudit(prisma: PrismaClient, entry: AuditEntry): Promise<string> {
+  const row = await prisma.auditLog.create({
     data: {
       actorId: entry.actorId,
       action: entry.action,
@@ -18,5 +18,7 @@ export async function recordAudit(prisma: PrismaClient, entry: AuditEntry): Prom
       entityId: entry.entityId ?? null,
       metadata: entry.metadata ?? {},
     },
+    select: { id: true },
   });
+  return row.id;
 }

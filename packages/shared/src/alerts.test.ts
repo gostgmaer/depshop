@@ -28,7 +28,9 @@ describe("alert inputs", () => {
     expect(ok({ type: "TARGET_PRICE", targetPricePaise: 1, minChangePaise: 5 })).toBe(false);
     expect(ok({ type: "PRICE_DROP", targetPricePaise: 1 })).toBe(false);
     expect(ok({ type: "BACK_IN_STOCK", channels: [] })).toBe(false);
-    expect(ok({ type: "BACK_IN_STOCK", channels: ["PUSH"] })).toBe(false);
+    expect(ok({ type: "BACK_IN_STOCK", channels: ["PUSH"] })).toBe(true);
+    expect(ok({ type: "BACK_IN_STOCK", channels: ["EMAIL", "EMAIL"] })).toBe(false);
+    expect(ok({ type: "BACK_IN_STOCK", channels: ["SMS"] })).toBe(false);
     expect(ok({ type: "BACK_IN_STOCK", expiresAt: "2020-01-01T00:00:00Z" })).toBe(false);
     expect(
       ok({ type: "BACK_IN_STOCK", expiresAt: new Date(Date.now() + 86_400_000).toISOString() }),

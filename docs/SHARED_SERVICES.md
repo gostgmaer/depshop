@@ -40,7 +40,12 @@ Browser ──cookie──► DealMind API ──► IAM  (/auth/login, /auth/re
   signed-in users keep working until their cached IAM token needs refreshing,
   and are **not** logged out because of an outage.
 - Identity emails (verification, reset, security notices) are sent **by the
-  IAM** through the notification service. DealMind sends no email itself.
+  IAM** through the notification service.
+- DealMind's own notification emails (price alerts, searches) are rendered by
+  DealMind and sent through the same service in its **pre-rendered mode**
+  (`subject` + `html` + `text`), added for DealMind on the service's
+  `feat/prerendered-email` branch (uncommitted, not yet deployed). See
+  [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## IAM contract (observed on the running service, 2026-11-14)
 

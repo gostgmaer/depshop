@@ -28,6 +28,13 @@ import {
 } from "../iam/iam-client.js";
 import type { IamTokenVerifier } from "../iam/iam-token-verifier.js";
 import { recordAudit } from "../users/audit.js";
+
+/** Account events the API reports to the notification system (after IAM-confirmed success). */
+export interface AccountEvents {
+  signedIn(userId: string, sessionId: string, userAgent: string | undefined): Promise<void>;
+  passwordChanged(userId: string, auditId: string): Promise<void>;
+  log?: { warn(o: object, m: string): void };
+}
 import { toPublicUser, userSelect } from "../users/user-view.js";
 import type { AuthContext, ClientInfo, IssuedSession, SessionService } from "./session-service.js";
 
@@ -66,7 +73,21 @@ export class AuthService {
     private readonly iam: IamClient,
     private readonly verifier: IamTokenVerifier,
     private readonly throttle: LoginThrottle,
+    /** Account notifications; failures are logged, never fail the auth action. */
+    private readonly events: AccountEvents | null = null,
   ) {}
+
+  private async emit(what: string, fn: (e: AccountEvents) => Promise<void>) {
+    if (!this.events) return;
+    try {
+      await fn(this.events);
+    } catch (err) {
+      this.events.log?.warn(
+        { err: (err as Error).message },
+        `account notification failed: ${what}`,
+      );
+    }
+  }
 
   // ── Registration & login ────────────────────────────────────────────────
 
@@ -134,6 +155,7 @@ export class AuthService {
     if (presentedSession) await this.sessions.revoke(presentedSession.sessionId);
     const session = await this.sessions.create(user.id, client, { tokens: result, claims });
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await this.emit("sign-in", (e) => e.signedIn(user.id, session.sessionId, client.userAgent));
     return { user: toPublicUser(user), session };
   }
 
@@ -276,12 +298,13 @@ export class AuthService {
       otherIamSessions.map((id) => this.iam.revokeSession(accessToken, id).catch(() => undefined)),
     );
     const rotated = await this.sessions.rotate(auth.sessionId, auth.userId, client);
-    await recordAudit(this.prisma, {
+    const auditId = await recordAudit(this.prisma, {
       actorId: auth.userId,
       action: "auth.password_changed",
       entity: "User",
       entityId: auth.userId,
     });
+    await this.emit("password changed", (e) => e.passwordChanged(auth.userId, auditId));
     return rotated;
   }
 

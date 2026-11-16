@@ -11,7 +11,7 @@
  *  - Every query is scoped by the authenticated userId; another user's alert
  *    is "not found" (no IDOR, no existence leak).
  */
-import type { Prisma} from "@dealmind/db";
+import type { Prisma } from "@dealmind/db";
 import { type PrismaClient, isUniqueViolation } from "@dealmind/db";
 import {
   ALERT_TYPE_PARAM,

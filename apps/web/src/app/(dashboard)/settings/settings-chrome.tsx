@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/settings/profile", label: "Profile" },
   { href: "/settings/security", label: "Security" },
+  { href: "/settings/notifications", label: "Notifications" },
 ];
 
 export function SettingsNav() {

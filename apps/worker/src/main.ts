@@ -17,9 +17,10 @@ import {
   RedisRateLimiter,
   createDefaultRegistry,
 } from "@dealmind/connectors";
+import { SharedServiceEmailProvider, WebPushProvider } from "@dealmind/notifications";
 import { NotificationClient } from "@easydev_org/notification-sdk";
 import { createPrismaClient } from "@dealmind/db";
-import { QueueName, redisConnectionFromUrl } from "@dealmind/queue";
+import { QueueName, redisConnectionFromUrl, shoppingSearchJob } from "@dealmind/queue";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { pino } from "pino";
@@ -27,7 +28,12 @@ import { z } from "zod";
 import { AgentClient } from "./agent-client.js";
 import { processShoppingSearch } from "./search-processor.js";
 import { TrackingMetrics } from "./services/tracking-metrics.js";
-import { startTrackingWorkers } from "./workers/tracking-workers.js";
+import { notifySearchFinished } from "./services/search-notifications.js";
+import {
+  enqueueDelivery,
+  startNotificationWorker,
+  startTrackingWorkers,
+} from "./workers/tracking-workers.js";
 
 const env = z
   .object({
@@ -69,6 +75,14 @@ const env = z
     NOTIFICATION_API_KEY: z.string().optional(),
     NOTIFICATION_TENANT_ID: z.string().default("dealmind"),
     APP_URL: z.string().url().default("http://localhost:3100"),
+    /** Searches running at least this long notify their owner when they finish. */
+    SEARCH_NOTIFY_MIN_SECONDS: z.coerce.number().int().min(0).max(3_600).default(20),
+    /** Signs email unsubscribe links (≥ 32 chars; same value in the API). */
+    NOTIFICATION_TOKEN_SECRET: z.string().min(32).optional(),
+    /** Web push (VAPID). All three or none; unset: push deliveries are SKIPPED. */
+    VAPID_PUBLIC_KEY: z.string().optional(),
+    VAPID_PRIVATE_KEY: z.string().optional(),
+    VAPID_SUBJECT: z.string().optional(),
   })
   .parse(process.env);
 
@@ -89,6 +103,9 @@ const log = pino({
     "*.AGENT_SERVICE_TOKEN",
     "*.AGENT_USER_CONTEXT_SECRET",
     "*.NOTIFICATION_API_KEY",
+    "*.NOTIFICATION_TOKEN_SECRET",
+    "*.VAPID_PRIVATE_KEY",
+    "*.privateKey",
     "*.apiKey",
     "*.userContext",
     "headers",
@@ -107,6 +124,12 @@ const agent = new AgentClient(env.AGENT_SERVICE_URL, env.AGENT_SERVICE_TOKEN);
 const connection = redisConnectionFromUrl(env.REDIS_URL);
 const bullPrefix = `${prefix}:bull`;
 
+const notificationQueue = new Queue(QueueName.notificationDelivery, {
+  connection,
+  prefix: bullPrefix,
+});
+const deadLetterQueue = new Queue(QueueName.deadLetter, { connection, prefix: bullPrefix });
+
 const searchWorker = new Worker(
   QueueName.shoppingSearch,
   async (job) => {
@@ -123,6 +146,18 @@ const searchWorker = new Worker(
       { attempt: job.attemptsMade + 1, maxAttempts: job.opts.attempts ?? 1 },
     );
     log.info({ jobId: job.id, outcome }, "shopping search processed");
+    // A notification failure must not fail (and retry) the finished search.
+    await notifySearchFinished(
+      {
+        prisma,
+        enqueueDelivery: enqueueDelivery({ queues: { notification: notificationQueue } }),
+        realtime: { redis, prefix },
+        minSeconds: env.SEARCH_NOTIFY_MIN_SECONDS,
+      },
+      shoppingSearchJob.parse(job.data).searchId,
+    ).catch((err: unknown) =>
+      log.warn({ jobId: job.id, err: (err as Error).message }, "search notification failed"),
+    );
     return outcome;
   },
   {
@@ -153,12 +188,59 @@ const healthWorker = new Worker(
   { connection, prefix: bullPrefix, concurrency: 1 },
 );
 
+// ── Notifications (independent of tracking) ──
+const notificationClient = env.NOTIFICATION_SERVICE_URL
+  ? new NotificationClient({
+      baseUrl: env.NOTIFICATION_SERVICE_URL,
+      tenantId: env.NOTIFICATION_TENANT_ID,
+      timeout: 10_000,
+      ...(env.NOTIFICATION_API_KEY ? { apiKey: env.NOTIFICATION_API_KEY } : {}),
+    })
+  : null;
+const vapid = [env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY, env.VAPID_SUBJECT];
+if (vapid.some(Boolean) && !vapid.every(Boolean))
+  throw new Error("Set all of VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT, or none");
+const pushProvider = env.VAPID_PUBLIC_KEY
+  ? new WebPushProvider(
+      {
+        publicKey: env.VAPID_PUBLIC_KEY,
+        privateKey: env.VAPID_PRIVATE_KEY!,
+        subject: env.VAPID_SUBJECT!,
+      },
+      { timeoutMs: 10_000 },
+    )
+  : null;
+const emailProvider = notificationClient
+  ? new SharedServiceEmailProvider(notificationClient)
+  : null;
+if (!emailProvider)
+  log.warn("NOTIFICATION_SERVICE_URL is not set: email deliveries will be recorded as SKIPPED");
+if (!pushProvider)
+  log.warn("VAPID keys are not set: browser push deliveries will be recorded as SKIPPED");
+if (!env.NOTIFICATION_TOKEN_SECRET)
+  log.warn(
+    "NOTIFICATION_TOKEN_SECRET is not set: emails link to settings instead of one-click unsubscribe",
+  );
+const notificationWorker = startNotificationWorker({
+  prisma,
+  metrics: new TrackingMetrics(redis, prefix),
+  email: emailProvider,
+  push: pushProvider,
+  tokenSecret: env.NOTIFICATION_TOKEN_SECRET ?? null,
+  appUrl: env.APP_URL,
+  connection,
+  bullPrefix,
+  log,
+  queues: { deadLetter: deadLetterQueue },
+  concurrency: env.NOTIFICATION_CONCURRENCY,
+});
+
 // ── Global price tracking ──
 const trackingQueues = {
   priceRefresh: new Queue(QueueName.priceRefresh, { connection, prefix: bullPrefix }),
   alertEvaluation: new Queue(QueueName.alertEvaluation, { connection, prefix: bullPrefix }),
-  notification: new Queue(QueueName.notificationDelivery, { connection, prefix: bullPrefix }),
-  deadLetter: new Queue(QueueName.deadLetter, { connection, prefix: bullPrefix }),
+  notification: notificationQueue,
+  deadLetter: deadLetterQueue,
 };
 const controlQueue = new Queue(QueueName.trackingControl, { connection, prefix: bullPrefix });
 const trackingWorkers: Worker[] = [];
@@ -173,14 +255,6 @@ if (env.TRACKING_ENABLED === "true") {
     allowMocks,
     trackingShare: env.TRACKING_SOURCE_SHARE,
   });
-  const notificationClient = env.NOTIFICATION_SERVICE_URL
-    ? new NotificationClient({
-        baseUrl: env.NOTIFICATION_SERVICE_URL,
-        tenantId: env.NOTIFICATION_TENANT_ID,
-        timeout: 10_000,
-        ...(env.NOTIFICATION_API_KEY ? { apiKey: env.NOTIFICATION_API_KEY } : {}),
-      })
-    : null;
   trackingWorkers.push(
     ...startTrackingWorkers({
       prisma,
@@ -192,7 +266,9 @@ if (env.TRACKING_ENABLED === "true") {
       metrics: new TrackingMetrics(redis, prefix),
       log,
       queues: trackingQueues,
-      email: notificationClient,
+      email: emailProvider,
+      push: pushProvider,
+      tokenSecret: env.NOTIFICATION_TOKEN_SECRET ?? null,
       appUrl: env.APP_URL,
       policy: {
         highDemandMin: env.TRACKING_HIGH_DEMAND_MIN,
@@ -218,8 +294,6 @@ if (env.TRACKING_ENABLED === "true") {
     { every: 3_600_000 },
     { name: "cleanup", data: { task: "cleanup" } },
   );
-  if (!notificationClient)
-    log.warn("NOTIFICATION_SERVICE_URL is not set: alert emails will be recorded as SKIPPED");
 } else {
   await controlQueue.removeJobScheduler("tracking-schedule");
   await controlQueue.removeJobScheduler("tracking-cleanup");
@@ -251,6 +325,7 @@ async function shutdown(signal: string): Promise<void> {
   await Promise.all([
     searchWorker.close(),
     healthWorker.close(),
+    notificationWorker.close(),
     ...trackingWorkers.map((w) => w.close()),
   ]);
   await Promise.all([

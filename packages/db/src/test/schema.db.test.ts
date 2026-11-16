@@ -24,6 +24,7 @@ const USER_OWNED_TABLES = [
   "Subscription",
   "UsageRecord",
   "BillingEvent",
+  "PushSubscription",
 ];
 
 /** Child → parent pairs protected by composite (parentId, userId) foreign keys. */
@@ -70,6 +71,7 @@ describe("schema: no multi-tenancy", () => {
         "PriceCheck",
         "PriceAlert",
         "PriceSnapshot",
+        "PushSubscription",
         "Product",
         "ProductMatchAudit",
         "ProductMatchReview",

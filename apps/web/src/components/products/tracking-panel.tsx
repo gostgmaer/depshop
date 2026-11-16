@@ -7,17 +7,15 @@
  */
 import { Bell, Star } from "lucide-react";
 import Link from "next/link";
-import { PriceAlertDialog } from "@/components/alerts/price-alert-form";
+import { AlertEditDialog, PriceAlertDialog } from "@/components/alerts/price-alert-form";
 import { WatchlistButton } from "@/components/products/watchlist-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/misc";
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useVariantTracking } from "@/hooks/queries";
-import { TRACKING_EXPLAINER, describeAlert } from "@/lib/alerts";
+import { ALERT_STATUS_LABEL, TRACKING_EXPLAINER, describeAlert } from "@/lib/alerts";
 import { formatDate } from "@/lib/format";
-
-const STATUS_TONE = { ACTIVE: "success", PAUSED: "neutral", TRIGGERED: "warning" } as const;
 
 export function TrackingPanel({
   variantId,
@@ -83,7 +81,12 @@ export function TrackingPanel({
                 <Bell aria-hidden className="size-4 text-accent" />
                 <span className="font-medium">{describeAlert(a)}</span>
                 {a.source ? `on ${a.source.name}` : "on any marketplace"}
-                <Badge tone={STATUS_TONE[a.status]}>{a.status.toLowerCase()}</Badge>
+                <Badge tone={ALERT_STATUS_LABEL[a.status].tone}>
+                  {ALERT_STATUS_LABEL[a.status].label}
+                </Badge>
+                {a.status === "ACTIVE" || a.status === "PAUSED" || a.status === "TRIGGERED" ? (
+                  <AlertEditDialog alert={a} sources={sources} />
+                ) : null}
                 <span className="text-xs text-muted-foreground">
                   created {formatDate(a.createdAt)}
                   {a.lastTriggeredAt ? ` · last triggered ${formatDate(a.lastTriggeredAt)}` : ""}

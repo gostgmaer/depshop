@@ -92,6 +92,13 @@ const envSchema = z
     NOTIFICATION_SERVICE_URL: z.string().url().optional(),
     NOTIFICATION_API_KEY: z.string().optional(),
     NOTIFICATION_TENANT_ID: z.string().min(1).default("dealmind"),
+    /** Verifies email unsubscribe links (≥ 32 chars; same value in the worker). */
+    NOTIFICATION_TOKEN_SECRET: z.string().min(32).optional(),
+    /** Web push: the VAPID public key handed to browsers (the private key lives only in the worker). */
+    VAPID_PUBLIC_KEY: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{80,100}$/, "VAPID_PUBLIC_KEY must be a base64url P-256 key")
+      .optional(),
 
     // ── Shared EasyDev file-upload service (optional until used) ───────
     FILE_SERVICE_URL: z.string().url().optional(),

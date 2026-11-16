@@ -151,3 +151,11 @@ export const DEFAULT_JOB_OPTIONS = {
 /** Redis flag set by the API when a user cancels a search (checked by the worker). */
 export const searchCancelKey = (prefix: string, searchId: string) =>
   `${prefix}:search-cancel:${searchId}`;
+
+/** Options for every notification delivery job (API and worker enqueue the same way). */
+export const NOTIFICATION_DELIVERY_JOB_OPTIONS = {
+  attempts: 5,
+  backoff: { type: JITTER_BACKOFF, delay: 15_000 },
+  removeOnComplete: { age: 24 * 3600, count: 20_000 },
+  removeOnFail: { age: 14 * 24 * 3600 },
+} as const;

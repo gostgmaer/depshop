@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/primitives";
 import { useUnreadCount } from "@/hooks/queries";
+import { useNotificationStream } from "@/hooks/use-notification-stream";
 import { ME_KEY, subscribeAuthChanges, useLogout, useMe } from "@/lib/auth-hooks";
 
 /**
@@ -36,6 +37,7 @@ export function AppShell({ user, children }: { user: PublicUser; children: React
   const me = useMe(user);
   const logout = useLogout();
   const unread = useUnreadCount().data?.unread ?? 0;
+  useNotificationStream();
 
   useEffect(
     () => subscribeAuthChanges(() => void qc.invalidateQueries({ queryKey: ME_KEY })),

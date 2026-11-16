@@ -2,7 +2,11 @@
  * Typed clients for the Fastify API (/api/v1, via the same-origin proxy).
  * Every function maps 1:1 to an endpoint; no response is ever fabricated.
  */
-import type { CreateSearchInput } from "@dealmind/shared";
+import type {
+  AlertStatusValue,
+  CreateSearchInput,
+  NotificationCategoryValue,
+} from "@dealmind/shared";
 import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
 /** History period: days, or every stored observation. */
 export type HistoryDays = number | "all";
@@ -10,11 +14,15 @@ export type HistoryDays = number | "all";
 import type {
   AlertEvaluation,
   CreateAlertRequest,
+  UpdateAlertRequest,
   CategoryDetail,
   CompareView,
   CategoryFiltersView,
   CategoryNode,
   Notification,
+  NotificationPreferences,
+  PushSubscribeRequest,
+  UpdateNotificationPreferences,
   Plan,
   PriceAlert,
   PriceHistory,
@@ -126,13 +134,16 @@ export const watchlists = {
 // ── Price alerts (user-owned) ─────────────────────────────────────────────
 
 export const alerts = {
-  list: (status?: "ACTIVE" | "TRIGGERED" | "PAUSED", page = 1, variantId?: string) =>
+  list: (status?: AlertStatusValue, page = 1, variantId?: string) =>
     apiPage<PriceAlert>(`/alerts${queryString({ status, page, pageSize: 50, variantId })}`),
   create: (input: CreateAlertRequest) => api<PriceAlert>("POST", "/alerts", input),
-  evaluations: (id: string, page = 1) =>
-    apiPage<AlertEvaluation>(`/alerts/${id}/evaluations${queryString({ page, pageSize: 20 })}`),
-  update: (id: string, input: { targetPricePaise?: number; sourceId?: string | null }) =>
+  history: (id: string, opts: { page?: number; triggersOnly?: boolean } = {}) =>
+    apiPage<AlertEvaluation>(
+      `/alerts/${id}/history${queryString({ page: opts.page ?? 1, pageSize: 20, outcome: opts.triggersOnly ? "TRIGGERED" : undefined })}`,
+    ),
+  update: (id: string, input: UpdateAlertRequest) =>
     api<PriceAlert>("PATCH", `/alerts/${id}`, input),
+  cancel: (id: string) => api<PriceAlert>("POST", `/alerts/${id}/cancel`),
   pause: (id: string) => api<PriceAlert>("POST", `/alerts/${id}/pause`),
   resume: (id: string) => api<PriceAlert>("POST", `/alerts/${id}/resume`),
   remove: (id: string) => api<void>("DELETE", `/alerts/${id}`),
@@ -141,13 +152,33 @@ export const alerts = {
 // ── Notifications (user-owned) ────────────────────────────────────────────
 
 export const notifications = {
-  list: (opts: { unread?: boolean; page?: number } = {}) =>
+  list: (opts: { unread?: boolean; page?: number; category?: NotificationCategoryValue } = {}) =>
     apiPage<Notification>(
-      `/notifications${queryString({ page: opts.page ?? 1, pageSize: 20, unread: opts.unread === undefined ? undefined : String(opts.unread) })}`,
+      `/notifications${queryString({ page: opts.page ?? 1, pageSize: 20, unread: opts.unread === undefined ? undefined : String(opts.unread), category: opts.category })}`,
     ),
   unreadCount: () => api<{ unread: number }>("GET", "/notifications/unread-count"),
-  markRead: (id: string) => api<Notification>("POST", `/notifications/${id}/read`),
+  markRead: (id: string) => api<Notification>("PATCH", `/notifications/${id}/read`, {}),
   markAllRead: () => api<{ updated: number }>("POST", "/notifications/read-all"),
+  remove: (id: string) => api<void>("DELETE", `/notifications/${id}`),
+  /** Same-origin SSE stream of the caller's notification changes. */
+  streamUrl: "/api/v1/notifications/stream",
+  preferences: () => api<NotificationPreferences>("GET", "/users/me/notification-preferences"),
+  updatePreferences: (body: UpdateNotificationPreferences) =>
+    api<NotificationPreferences>("PATCH", "/users/me/notification-preferences", body),
+  /** One-click email unsubscribe (signed token from the email). */
+  unsubscribe: (token: string) =>
+    api<{ category: NotificationCategoryValue; channel: "email" }>(
+      "POST",
+      "/notifications/unsubscribe",
+      { token },
+    ),
+};
+
+export const push = {
+  config: () => api<{ publicKey: string | null }>("GET", "/push/config"),
+  subscribe: (body: PushSubscribeRequest) =>
+    api<{ id: string; createdAt: string }>("POST", "/push/subscribe", body),
+  unsubscribe: (endpoint: string) => api<void>("DELETE", "/push/subscribe", { endpoint }),
 };
 
 // ── Subscription (user-owned) ─────────────────────────────────────────────

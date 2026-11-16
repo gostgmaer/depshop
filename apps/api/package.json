@@ -18,6 +18,7 @@
     "@dealmind/connectors": "workspace:*",
     "@dealmind/db": "workspace:*",
     "@dealmind/intelligence": "workspace:*",
+    "@dealmind/notifications": "workspace:*",
     "@dealmind/queue": "workspace:*",
     "@dealmind/shared": "workspace:*",
     "@easydev_org/file-upload-sdk": "1.0.4",

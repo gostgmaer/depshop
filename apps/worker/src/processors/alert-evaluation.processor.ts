@@ -8,17 +8,27 @@
  *  - a trigger atomically claims the alert's cooldown window with a
  *    conditional UPDATE, so two checks of different marketplaces can't both
  *    notify inside the cooldown;
- *  - the notification and its per-channel deliveries are created with it,
- *    following the user's own preferences (owner = the alert's user).
- * Email deliveries are enqueued after commit (idempotent job per delivery).
+ *  - the notification and its per-channel deliveries are recorded with it
+ *    (transactional outbox, @dealmind/notifications), following the alert's
+ *    channels and the user's own preferences (owner = the alert's user).
+ * Email/push deliveries are enqueued after commit (idempotent job per delivery,
+ * delayed until quiet hours end); the in-app signal is published after commit.
  */
 import { Prisma, type PrismaClient } from "@dealmind/db";
+import {
+  type PendingDelivery,
+  buildNotification,
+  noChannel,
+  planChannels,
+  publishSignal,
+  recordNotification,
+  suppressionReason,
+} from "@dealmind/notifications";
 import { trace } from "@opentelemetry/api";
 import {
   type AlertState,
   type CheckContext,
   type CheckOutcome,
-  type Decision,
   evaluateAlert,
   priorLow,
 } from "../services/alert-rules.js";
@@ -27,7 +37,9 @@ import type { TrackingMetrics } from "../services/tracking-metrics.js";
 export interface AlertEvaluationDeps {
   prisma: PrismaClient;
   metrics: TrackingMetrics;
-  enqueueDelivery: (deliveryId: string) => Promise<void>;
+  enqueueDelivery: (deliveryId: string, notBefore?: Date) => Promise<void>;
+  /** Real-time in-app signal (Redis publish); optional. */
+  realtime?: { redis: { publish(c: string, m: string): Promise<unknown> }; prefix: string };
   now?: () => Date;
 }
 
@@ -81,6 +93,7 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
         include: {
           source: { select: { name: true } },
           product: { select: { id: true, name: true } },
+          variant: { select: { attributes: true } },
         },
       },
     },
@@ -99,7 +112,18 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
       // An unchanged price only matters to alerts never evaluated yet.
       ...(changed ? {} : { lastEvaluatedAt: null }),
     },
-    include: { user: { select: { id: true, email: true, preference: true } } },
+    select: {
+      id: true,
+      userId: true,
+      type: true,
+      channels: true,
+      targetPricePaise: true,
+      dropPercentBp: true,
+      baselinePricePaise: true,
+      historicalWindowDays: true,
+      lastTriggeredPricePaise: true,
+      minChangePaise: true,
+    },
     orderBy: { createdAt: "asc" },
   });
   if (!alerts.length) return summary;
@@ -159,11 +183,6 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
           : null,
     };
     const decision = evaluateAlert(state, ctx);
-    const prefs = alert.user.preference;
-    // A channel is used only if both the alert and the user's preferences allow it.
-    const inApp = alert.channels.includes("IN_APP") && (prefs?.notifyInApp ?? true);
-    const email =
-      alert.channels.includes("EMAIL") && (prefs?.notifyEmail ?? true) && Boolean(alert.user.email);
 
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -171,12 +190,37 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
           decision.outcome;
         let reason = decision.reason;
         let notificationId: string | null = null;
-        let emailDelivery: string | null = null;
+        let pending: PendingDelivery[] = [];
 
         if (decision.outcome === "TRIGGERED") {
-          if (!inApp && !email) {
+          const n = decision.notification!;
+          const draft = buildNotification({
+            kind: "alert.triggered",
+            userId: alert.userId,
+            alertId: alert.id,
+            checkId,
+            type: n.kind,
+            title: n.title,
+            body: n.body,
+            product: {
+              id: offer.product.id,
+              name: offer.product.name,
+              variantId: offer.variantId,
+              variantLabel: variantLabel(offer.variant.attributes),
+            },
+            marketplace: offer.source.name,
+            pricePaise: decision.deliveredPaise,
+            previousPricePaise: ctx.previousPricePaise,
+            targetPricePaise: state.targetPricePaise,
+            observedAt: check.checkedAt.toISOString(),
+            offerId: offer.id,
+            alertType: alert.type,
+          });
+          // Channels: the alert's own, intersected with the user's preferences.
+          const plan = await planChannels(tx, draft, { alertChannels: alert.channels, now });
+          if (noChannel(plan)) {
             outcome = "SUPPRESSED";
-            reason = `${reason} Not notified: none of this alert's channels is enabled in your settings.`;
+            reason = `${reason} Not notified: ${suppressionReason(plan)}.`;
           } else {
             // Atomic cooldown claim: only one trigger per window, across all checks.
             const claimed = await tx.$executeRaw`
@@ -193,25 +237,15 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
               outcome = "COOLDOWN";
               reason = `${reason} Not notified again within the alert's cooldown (or the alert was paused or triggered meanwhile).`;
             } else {
-              const n = await notify(
-                tx,
-                alert.userId,
-                decision,
-                {
-                  alertId: alert.id,
-                  alertType: alert.type,
-                  checkId,
-                  offerId: offer.id,
-                  productId: offer.product.id,
-                  variantId: offer.variantId,
-                  pricePaise: decision.deliveredPaise,
-                  previousPricePaise: ctx.previousPricePaise,
-                  marketplace: offer.source.name,
-                },
-                { inApp, email, now },
-              );
-              notificationId = n.notificationId;
-              emailDelivery = n.emailDeliveryId;
+              const r = await recordNotification(tx, draft, {
+                alertChannels: alert.channels,
+                now,
+                plan,
+              });
+              if (r.status === "created") {
+                notificationId = r.notificationId;
+                pending = r.pending;
+              }
             }
           }
         }
@@ -248,12 +282,19 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
             },
           });
         }
-        return { outcome, notificationId, emailDelivery };
+        return { outcome, notificationId, pending };
       });
       summary.evaluated += 1;
       if (result.outcome === "TRIGGERED") summary.triggered += 1;
-      if (result.notificationId) summary.notifications += 1;
-      if (result.emailDelivery) await deps.enqueueDelivery(result.emailDelivery);
+      if (result.notificationId) {
+        summary.notifications += 1;
+        for (const d of result.pending) await deps.enqueueDelivery(d.id, d.notBefore);
+        if (deps.realtime)
+          await publishSignal(deps.realtime.redis, deps.realtime.prefix, alert.userId, {
+            type: "created",
+            id: result.notificationId,
+          });
+      }
     } catch (err) {
       if (err instanceof AlreadyEvaluated) {
         summary.duplicates += 1;
@@ -270,46 +311,13 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
   return summary;
 }
 
-async function notify(
-  tx: Prisma.TransactionClient,
-  userId: string,
-  decision: Decision,
-  data: Record<string, unknown>,
-  channels: { inApp: boolean; email: boolean; now: Date },
-): Promise<{ notificationId: string; emailDeliveryId: string | null }> {
-  const n = decision.notification!;
-  const notification = await tx.notification.create({
-    data: {
-      userId,
-      type: n.kind,
-      title: n.title.slice(0, 200),
-      body: n.body.slice(0, 2000),
-      data: data as Prisma.InputJsonValue,
-    },
-  });
-  await tx.notificationDelivery.create({
-    data: {
-      userId,
-      notificationId: notification.id,
-      channel: "IN_APP",
-      // The in-app record is the notification itself.
-      status: channels.inApp ? "SENT" : "SKIPPED",
-      ...(channels.inApp
-        ? { sentAt: channels.now }
-        : { lastError: "In-app notifications are off" }),
-    },
-  });
-  const emailDelivery = await tx.notificationDelivery.create({
-    data: {
-      userId,
-      notificationId: notification.id,
-      channel: "EMAIL",
-      status: channels.email ? "PENDING" : "SKIPPED",
-      ...(channels.email ? {} : { lastError: "Email notifications are off" }),
-    },
-  });
-  return {
-    notificationId: notification.id,
-    emailDeliveryId: channels.email ? emailDelivery.id : null,
-  };
+/** "8 GB · 128 GB · Blue" from variant attributes (values only, stable order). */
+function variantLabel(attributes: unknown): string | null {
+  if (!attributes || typeof attributes !== "object") return null;
+  const values = Object.keys(attributes as Record<string, unknown>)
+    .sort()
+    .map((k) => (attributes as Record<string, unknown>)[k])
+    .filter((v): v is string | number => typeof v === "string" || typeof v === "number")
+    .map(String);
+  return values.length ? values.join(" · ").slice(0, 200) : null;
 }

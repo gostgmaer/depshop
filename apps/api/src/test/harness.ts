@@ -126,6 +126,8 @@ export class Agent {
   constructor(
     private readonly app: FastifyInstance,
     private readonly origin = APP_ORIGIN,
+    /** Browser user agent (inject's default when omitted). */
+    private readonly userAgent?: string,
   ) {}
 
   cookie(name: string): string | undefined {
@@ -138,6 +140,7 @@ export class Agent {
       await this.request("GET", "/api/v1/auth/csrf");
     }
     const headers: Record<string, string> = { origin: this.origin };
+    if (this.userAgent) headers["user-agent"] = this.userAgent;
     const cookieHeader = [...this.jar].map(([k, v]) => `${k}=${v}`).join("; ");
     if (cookieHeader) headers.cookie = cookieHeader;
     const token = this.csrfToken();

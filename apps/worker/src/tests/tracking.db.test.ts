@@ -22,6 +22,7 @@ import { Queue, QueueEvents, type Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { processAlertEvaluation } from "../processors/alert-evaluation.processor.js";
+import type { EmailMessage } from "@dealmind/notifications";
 import { processNotificationDelivery } from "../processors/notification.processor.js";
 import {
   processPriceRefresh,
@@ -557,6 +558,7 @@ describe("10–13. alert evaluation: many users, no duplicates, cooldown, prefer
     expect(Object.fromEntries(n.deliveries.map((d) => [d.channel, d.status]))).toEqual({
       IN_APP: "SENT",
       EMAIL: "SKIPPED",
+      PUSH: "SKIPPED",
     });
     expect(enqueuedDeliveries).toEqual([]);
   });
@@ -570,14 +572,19 @@ describe("notification delivery through the shared service", () => {
     alpha.listings.set(o.externalId, { sellingPricePaise: 1_990_000 });
     await evaluate(((await refresh(o.id)) as { checkId: string }).checkId);
     expect(enqueuedDeliveries).toHaveLength(1);
-    const sent: { to: string; idempotencyKey?: string; template?: string }[] = [];
+    const sent: EmailMessage[] = [];
     const email = {
-      sendEmail: async (p: { to: string; idempotencyKey?: string; template?: string }) => (
-        sent.push(p),
-        { success: true }
-      ),
+      name: "test",
+      send: async (m: EmailMessage) => (sent.push(m), { messageId: "m-1" }),
     };
-    const deps = { prisma, metrics, email, appUrl: "http://localhost:3100" };
+    const deps = {
+      prisma,
+      metrics,
+      email,
+      push: null,
+      tokenSecret: "t".repeat(40),
+      appUrl: "http://localhost:3100",
+    };
     const id = enqueuedDeliveries[0]!;
     expect(
       await processNotificationDelivery(deps, { deliveryId: id }, { attempt: 1, maxAttempts: 3 }),
@@ -586,18 +593,22 @@ describe("notification delivery through the shared service", () => {
       await processNotificationDelivery(deps, { deliveryId: id }, { attempt: 1, maxAttempts: 3 }),
     ).toEqual({ action: "done", status: "NOT_PENDING" });
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      to: u.email,
-      idempotencyKey: id,
-      template: "wishlistPriceDropAlertTemplate",
-    });
+    expect(sent[0]).toMatchObject({ to: u.email, idempotencyKey: id });
+    expect(sent[0]!.html).toContain("₹19,900");
+    expect(sent[0]!.text).toContain("http://localhost:3100/unsubscribe?token=");
+    expect(
+      (await prisma.notificationDelivery.findUniqueOrThrow({ where: { id } })).providerMessageId,
+    ).toBe("m-1");
 
-    const d2 = await prisma.notificationDelivery.create({
-      data: {
-        userId: u.id,
-        notificationId: (await prisma.notification.findFirstOrThrow()).id,
-        channel: "PUSH",
+    // Push was skipped (off by default); forced back to PENDING it is still skipped at send time.
+    const d2 = await prisma.notificationDelivery.update({
+      where: {
+        notificationId_channel: {
+          notificationId: (await prisma.notification.findFirstOrThrow()).id,
+          channel: "PUSH",
+        },
       },
+      data: { status: "PENDING" },
     });
     expect(
       await processNotificationDelivery(
@@ -931,6 +942,7 @@ describe("Phase 5.2: independent alerts, conditions, lifecycle and channels", ()
     expect(Object.fromEntries(n.deliveries.map((d) => [d.channel, d.status]))).toEqual({
       IN_APP: "SKIPPED",
       EMAIL: "PENDING",
+      PUSH: "SKIPPED",
     });
     expect(enqueuedDeliveries).toHaveLength(1);
   });
@@ -963,7 +975,8 @@ describe("Phase 5.2: independent alerts, conditions, lifecycle and channels", ()
   it("expires alerts past their end date once, with an in-app notice", async () => {
     const o = await offer("mock_alpha");
     const u = await user(1);
-    const quiet = await user(2, { notifyInApp: false });
+    // Every channel off: nothing to tell this user.
+    const quiet = await user(2, { notifyInApp: false, notifyEmail: false });
     const a = await alert(u.id, o.variantId, { expiresAt: new Date(clock.getTime() + 3_600_000) });
     await alert(quiet.id, o.variantId, {
       status: "PAUSED",
@@ -985,8 +998,13 @@ describe("Phase 5.2: independent alerts, conditions, lifecycle and channels", ()
       "EXPIRED",
     );
     const notes = await prisma.notification.findMany();
-    expect(notes).toHaveLength(1); // the quiet user turned in-app off
-    expect(notes[0]).toMatchObject({ userId: u.id, type: "ALERT_EXPIRED" });
+    expect(notes).toHaveLength(1); // the quiet user turned every channel off
+    expect(notes[0]).toMatchObject({
+      userId: u.id,
+      type: "ALERT_EXPIRED",
+      sourceType: "ALERT_EXPIRY",
+      dedupeKey: `alert:${a.id}:expired`,
+    });
     // An expired alert is never evaluated again.
     alpha.listings.set(o.externalId, { sellingPricePaise: 1_000_000 });
     clock = later;

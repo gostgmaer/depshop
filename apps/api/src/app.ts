@@ -59,7 +59,14 @@ import { InternalIntelligence } from "./modules/internal/internal-intelligence.j
 import { internalRoutes } from "./modules/internal/internal-routes.js";
 import { rankingKey } from "./modules/internal/ranking-token.js";
 import { agentCanceller } from "./modules/internal/agent-client.js";
-import { notificationRoutes } from "./modules/notifications/notification-routes.js";
+import {
+  notificationPreferenceRoutes,
+  notificationRoutes,
+  pushRoutes,
+  unsubscribeRoutes,
+} from "./modules/notifications/notification-routes.js";
+import { NotificationService } from "./modules/notifications/notification-service.js";
+import { RealtimeHub } from "./modules/notifications/realtime-hub.js";
 import { SearchService } from "./modules/search/search-service.js";
 import { searchRoutes } from "./modules/search/search-routes.js";
 import { PlanService } from "./modules/subscriptions/plan-service.js";
@@ -71,6 +78,7 @@ import { createRedis, redisPlugin } from "./plugins/redis.js";
 import { TokenCipher } from "./lib/token-cipher.js";
 import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
 import { adminPlatformRoutes } from "./modules/admin/admin-platform-routes.js";
+import { adminNotificationRoutes } from "./modules/admin/admin-notification-routes.js";
 import { adminTrackingRoutes } from "./modules/admin/admin-tracking-routes.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
 import {
@@ -264,7 +272,21 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     (err) =>
       app.log.error({ err: (err as Error).message }, "login throttle unavailable (failing open)"),
   );
-  const auth = new AuthService(prisma, sessions, iam, verifier, throttle);
+  const notificationService = new NotificationService({
+    prisma,
+    redis,
+    redisPrefix: env.REDIS_KEY_PREFIX,
+    jobs,
+    tokenSecret: env.NOTIFICATION_TOKEN_SECRET ?? null,
+    log: app.log,
+  });
+  const hub = new RealtimeHub(redis, env.REDIS_KEY_PREFIX);
+  app.addHook("onClose", async () => hub.close());
+  const auth = new AuthService(prisma, sessions, iam, verifier, throttle, {
+    signedIn: (u, s, ua) => notificationService.signedIn(u, s, ua),
+    passwordChanged: (u, a) => notificationService.passwordChanged(u, a),
+    log: app.log,
+  });
   const users = new UserService(prisma, sessions, iam);
   const cache = new CacheService(redis, env.REDIS_KEY_PREFIX, app.log);
   const catalog = new CatalogService(prisma, cache, {
@@ -342,6 +364,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         redisPrefix: env.REDIS_KEY_PREFIX,
         jobs,
       });
+      await v1.register(adminNotificationRoutes, {
+        prefix: "/admin/notifications",
+        prisma,
+        redis,
+        redisPrefix: env.REDIS_KEY_PREFIX,
+      });
       await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
       await v1.register(productRoutes, { prefix: "/products", catalog, pricing });
@@ -355,7 +383,24 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       });
       await v1.register(watchlistRoutes, { prefix: "/watchlists", watchlists });
       await v1.register(alertRoutes, { prefix: "/alerts", alerts });
-      await v1.register(notificationRoutes, { prefix: "/notifications", prisma });
+      await v1.register(unsubscribeRoutes, {
+        prefix: "/notifications/unsubscribe",
+        notifications: notificationService,
+      });
+      await v1.register(notificationRoutes, {
+        prefix: "/notifications",
+        notifications: notificationService,
+        hub,
+      });
+      await v1.register(notificationPreferenceRoutes, {
+        prefix: "/users/me/notification-preferences",
+        notifications: notificationService,
+      });
+      await v1.register(pushRoutes, {
+        prefix: "/push",
+        notifications: notificationService,
+        vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
+      });
       await v1.register(subscriptionRoutes, { prefix: "/subscriptions", plans });
     },
     { prefix: "/api/v1" },

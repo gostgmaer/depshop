@@ -721,7 +721,7 @@ export function canTransition(action: AlertAction, from: AlertStatusValue): bool
   return (ALERT_ACTIONS[action] as readonly string[]).includes(from);
 }
 
-export const DELIVERY_CHANNELS = ["IN_APP", "EMAIL"] as const;
+export const DELIVERY_CHANNELS = ["IN_APP", "EMAIL", "PUSH"] as const;
 export const deliveryChannel = z.enum(DELIVERY_CHANNELS);
 
 export const ALERT_TYPES = [
@@ -767,7 +767,11 @@ const alertParams = {
   /** PRICE_CHANGE / PRICE_DROP: minimum absolute change in paise (optional). */
   minChangePaise: z.number().int().positive(),
   /** Channels this alert may use (the user's preferences still apply). */
-  channels: z.array(deliveryChannel).min(1).max(2),
+  channels: z
+    .array(deliveryChannel)
+    .min(1)
+    .max(3)
+    .refine((c) => new Set(c).size === c.length, "Each channel at most once"),
   /** Keep watching after the condition is met (default: stop and mark TRIGGERED). */
   repeat: z.boolean(),
   expiresAt: futureIso,
@@ -910,24 +914,7 @@ export const alertView = z.object({
 
 // ── Notifications (user-owned) ────────────────────────────────────────────
 
-export const notificationListQuery = pageQuery
-  .extend({
-    unread: z
-      .enum(["true", "false"])
-      .transform((v) => v === "true")
-      .optional(),
-  })
-  .strict();
-
-export const notificationView = z.object({
-  id: uuid,
-  type: z.string(),
-  title: z.string(),
-  body: z.string(),
-  data: z.record(z.unknown()),
-  readAt: iso.nullable(),
-  createdAt: iso,
-});
+// Moved to notification-contracts.ts (Phase 5.3).
 
 // ── Subscriptions & usage (user-owned) ────────────────────────────────────
 

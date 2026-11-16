@@ -1,10 +1,12 @@
 /**
- * The three tracking workers (price refresh → alert evaluation → notification
- * delivery) and the control worker that runs the scheduler and cleanup.
+ * The tracking workers (price refresh → alert evaluation) and the control
+ * worker that runs the scheduler and cleanup, plus the notification delivery
+ * worker (started separately: it doesn't depend on tracking).
  * Each worker is independent: a failing marketplace only fails its own
  * refresh jobs, never other sources or other queues.
  */
 import type { ProductLookupExecutor } from "@dealmind/connectors";
+import type { EmailProvider, PushProvider } from "@dealmind/notifications";
 import type { PrismaClient } from "@dealmind/db";
 import {
   QueueName,
@@ -18,10 +20,7 @@ import type { Redis } from "ioredis";
 import type { Logger } from "pino";
 import type { TrackingPolicyConfig } from "../policies/tracking-policy.js";
 import { processAlertEvaluation } from "../processors/alert-evaluation.processor.js";
-import {
-  type EmailSender,
-  processNotificationDelivery,
-} from "../processors/notification.processor.js";
+import { processNotificationDelivery } from "../processors/notification.processor.js";
 import { processPriceRefresh } from "../processors/price-refresh.processor.js";
 import {
   ALERT_EVALUATION_BACKOFF,
@@ -49,7 +48,12 @@ export interface TrackingRuntime {
     notification: Queue;
     deadLetter: Queue;
   };
-  email: EmailSender | null;
+  /** Email provider (shared notification service), or null: email deliveries are SKIPPED. */
+  email: EmailProvider | null;
+  /** Web push (VAPID), or null: push deliveries are SKIPPED. */
+  push: PushProvider | null;
+  /** Signs unsubscribe links in emails. */
+  tokenSecret: string | null;
   appUrl: string;
   policy: TrackingPolicyConfig;
   concurrency: { refresh: number; alerts: number; notifications: number };
@@ -66,15 +70,22 @@ export function enqueueAlertEvaluation(rt: Pick<TrackingRuntime, "queues">) {
   };
 }
 
-export function enqueueDelivery(rt: Pick<TrackingRuntime, "queues">) {
-  return async (deliveryId: string) => {
+export function enqueueDelivery(rt: { queues: Pick<TrackingRuntime["queues"], "notification"> }) {
+  return async (deliveryId: string, notBefore?: Date) => {
+    // Quiet hours: the job waits until the delivery is due.
+    const delay = notBefore ? Math.max(0, notBefore.getTime() - Date.now()) : 0;
     await rt.queues.notification.add(
       QueueName.notificationDelivery,
       { deliveryId },
-      { ...NOTIFICATION_JOB_OPTIONS, jobId: `delivery.${deliveryId}` },
+      { ...NOTIFICATION_JOB_OPTIONS, jobId: `delivery.${deliveryId}`, ...(delay ? { delay } : {}) },
     );
   };
 }
+
+const realtimeOf = (rt: Pick<TrackingRuntime, "redis" | "redisPrefix">) => ({
+  redis: rt.redis,
+  prefix: rt.redisPrefix,
+});
 
 export function startTrackingWorkers(rt: TrackingRuntime): Worker[] {
   const common = {
@@ -120,31 +131,17 @@ export function startTrackingWorkers(rt: TrackingRuntime): Worker[] {
     backoff: ALERT_EVALUATION_BACKOFF,
     process: async (data) => {
       const s = await processAlertEvaluation(
-        { prisma: rt.prisma, metrics: rt.metrics, enqueueDelivery: enqueueDelivery(rt) },
+        {
+          prisma: rt.prisma,
+          metrics: rt.metrics,
+          enqueueDelivery: enqueueDelivery(rt),
+          realtime: realtimeOf(rt),
+        },
         data,
       );
       if (s.evaluated || s.duplicates)
         rt.log.info({ checkId: data.checkId, ...s }, "alerts evaluated");
       return { action: "done" };
-    },
-  });
-  const notifications = createTrackedWorker({
-    ...common,
-    queue: QueueName.notificationDelivery,
-    schema: notificationDeliveryJob,
-    concurrency: rt.concurrency.notifications,
-    backoff: NOTIFICATION_BACKOFF,
-    process: (data, ctx) =>
-      processNotificationDelivery(
-        { prisma: rt.prisma, metrics: rt.metrics, email: rt.email, appUrl: rt.appUrl },
-        data,
-        ctx,
-      ),
-    onDeadLetter: async (data, reason) => {
-      await rt.prisma.notificationDelivery.updateMany({
-        where: { id: data.deliveryId, status: "PENDING" },
-        data: { status: "FAILED", lastError: reason.slice(0, 500) },
-      });
     },
   });
   // Scheduler and cleanup: one at a time, cluster-wide (single control queue).
@@ -167,7 +164,11 @@ export function startTrackingWorkers(rt: TrackingRuntime): Worker[] {
           rt.log.info(r, "tracking scheduled");
         return r;
       }
-      const r = await runCleanup({ prisma: rt.prisma, enqueueDelivery: enqueueDelivery(rt) });
+      const r = await runCleanup({
+        prisma: rt.prisma,
+        enqueueDelivery: enqueueDelivery(rt),
+        realtime: realtimeOf(rt),
+      });
       rt.log.info(r, "tracking cleanup");
       return r;
     },
@@ -176,5 +177,55 @@ export function startTrackingWorkers(rt: TrackingRuntime): Worker[] {
   control.on("failed", (job, err) =>
     rt.log.error({ jobId: job?.id, err: err.message }, "tracking control job failed"),
   );
-  return [refresh, alerts, notifications, control];
+  return [refresh, alerts, control];
+}
+
+export type NotificationRuntime = Pick<
+  TrackingRuntime,
+  | "prisma"
+  | "metrics"
+  | "email"
+  | "push"
+  | "tokenSecret"
+  | "appUrl"
+  | "connection"
+  | "bullPrefix"
+  | "log"
+> & { queues: Pick<TrackingRuntime["queues"], "deadLetter">; concurrency: number };
+
+/**
+ * Notification delivery (email + web push). Independent of price tracking:
+ * account and search notifications are delivered even when tracking is off.
+ */
+export function startNotificationWorker(rt: NotificationRuntime): Worker {
+  return createTrackedWorker({
+    connection: rt.connection,
+    prefix: rt.bullPrefix,
+    deadLetter: rt.queues.deadLetter,
+    metrics: rt.metrics,
+    log: rt.log,
+    queue: QueueName.notificationDelivery,
+    schema: notificationDeliveryJob,
+    concurrency: rt.concurrency,
+    backoff: NOTIFICATION_BACKOFF,
+    process: (data, ctx) =>
+      processNotificationDelivery(
+        {
+          prisma: rt.prisma,
+          metrics: rt.metrics,
+          email: rt.email,
+          push: rt.push,
+          appUrl: rt.appUrl,
+          tokenSecret: rt.tokenSecret,
+        },
+        data,
+        ctx,
+      ),
+    onDeadLetter: async (data, reason) => {
+      await rt.prisma.notificationDelivery.updateMany({
+        where: { id: data.deliveryId, status: "PENDING" },
+        data: { status: "FAILED", lastError: reason.slice(0, 500) },
+      });
+    },
+  });
 }

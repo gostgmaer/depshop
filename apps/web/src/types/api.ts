@@ -6,10 +6,14 @@ import type {
   agentRunSummary,
   alertEvaluationView,
   createAlertInput,
+  updateAlertInput,
   alertView,
   categoryDetail,
   categoryView,
   notificationView,
+  notificationPreferences,
+  pushSubscribeInput,
+  updateNotificationPreferencesInput,
   offerView,
   planView,
   priceHistory,
@@ -64,7 +68,13 @@ export type PriceAlert = z.infer<typeof alertView>;
 export type AlertEvaluation = z.infer<typeof alertEvaluationView>;
 /** Request body of POST /alerts (type defaults to TARGET_PRICE). */
 export type CreateAlertRequest = z.input<typeof createAlertInput>;
+/** Request body of PATCH /alerts/:id. */
+export type UpdateAlertRequest = z.input<typeof updateAlertInput>;
 export type Notification = z.infer<typeof notificationView>;
+export type NotificationPreferences = z.infer<typeof notificationPreferences>;
+/** Request body of PATCH /users/me/notification-preferences. */
+export type UpdateNotificationPreferences = z.input<typeof updateNotificationPreferencesInput>;
+export type PushSubscribeRequest = z.input<typeof pushSubscribeInput>;
 export type Plan = z.infer<typeof planView>;
 export type Subscription = z.infer<typeof subscriptionView>;
 export type Usage = z.infer<typeof usageView>;
