@@ -71,6 +71,7 @@ import { createRedis, redisPlugin } from "./plugins/redis.js";
 import { TokenCipher } from "./lib/token-cipher.js";
 import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
 import { adminPlatformRoutes } from "./modules/admin/admin-platform-routes.js";
+import { adminTrackingRoutes } from "./modules/admin/admin-tracking-routes.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
 import {
   type AuthRateLimits,
@@ -334,6 +335,13 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       await v1.register(userRoutes, { prefix: "/users", users, sessions, auth });
       await v1.register(adminUserRoutes, { prefix: "/admin/users", prisma, sessions });
       await v1.register(adminPlatformRoutes, { prefix: "/admin", prisma });
+      await v1.register(adminTrackingRoutes, {
+        prefix: "/admin",
+        prisma,
+        redis,
+        redisPrefix: env.REDIS_KEY_PREFIX,
+        jobs,
+      });
       await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
       await v1.register(productRoutes, { prefix: "/products", catalog, pricing });

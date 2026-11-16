@@ -72,6 +72,7 @@ model User {
   watchlists             Watchlist[]
   watchlistItems         WatchlistItem[]
   priceAlerts            PriceAlert[]
+  alertEvaluations       AlertEvaluation[]
   notifications          Notification[]
   notificationDeliveries NotificationDelivery[]
   agentRuns              AgentRun[]
@@ -289,10 +290,17 @@ model ShoppingSource {
   circuitFailureThreshold Int                   @default(5)
   /// How long an open circuit rejects calls before a half-open probe.
   circuitOpenSeconds      Int                   @default(60)
+  /// Background price tracking for this source (still requires ACTIVE status and a lookup-capable connector).
+  trackingEnabled         Boolean               @default(true)
+  /// Refresh intervals by demand tier (minutes). Configurable per source; respect the marketplace's permitted usage.
+  trackingHighMinutes     Int                   @default(30)
+  trackingNormalMinutes   Int                   @default(180)
+  trackingLowMinutes      Int                   @default(720)
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
   offers               ProductOffer[]
+  priceChecks          PriceCheck[]
   searchRuns           SearchSourceRun[]
   priceAlerts          PriceAlert[]
   affiliateClicks      AffiliateClick[]
@@ -300,6 +308,60 @@ model ShoppingSource {
   matchReviews         ProductMatchReview[]
 
   @@index([status])
+}
+
+enum OfferTrackingState {
+  ACTIVE
+  MISSING
+  EXPIRED
+}
+
+/// Outcome of one global tracking check of one offer (append-only, retention-limited).
+enum PriceCheckOutcome {
+  UNCHANGED
+  PRICE_DECREASED
+  PRICE_INCREASED
+  /// Price unchanged; stock, MRP or shipping changed.
+  OTHER_CHANGED
+  /// The listing reappeared after being missing.
+  REAPPEARED
+  MISSING
+  /// Rejected data (validation failed or an implausible change awaiting confirmation).
+  INVALID
+  FAILED
+  SKIPPED
+  RATE_LIMITED
+}
+
+/// One background price check of one marketplace offer. Shared by all users.
+model PriceCheck {
+  id                 String            @id @default(uuid(7)) @db.Uuid
+  offerId            String            @db.Uuid
+  sourceId           String            @db.Uuid
+  outcome            PriceCheckOutcome
+  previousPricePaise BigInt?
+  newPricePaise      BigInt?
+  /// new − previous (signed, paise); null unless both prices are valid observations.
+  changePaise        BigInt?
+  /// Change in basis points of the previous price (signed, truncated toward zero).
+  changeBp           Int?
+  previousStock      StockStatus?
+  newStock           StockStatus?
+  /// The snapshot written by this check, if any.
+  snapshotId         String?           @db.Uuid
+  attempt            Int               @default(1)
+  durationMs         Int               @default(0)
+  errorCode          String?
+  errorMessage       String?
+  checkedAt          DateTime          @default(now())
+
+  offer       ProductOffer      @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  source      ShoppingSource    @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  evaluations AlertEvaluation[]
+
+  @@index([offerId, checkedAt(sort: Desc)])
+  @@index([checkedAt])
+  @@index([sourceId, checkedAt])
 }
 
 enum StockStatus {
@@ -326,50 +388,63 @@ enum MatchMethod {
 
 /// A listing of a variant on a source. Prices come only from source data.
 model ProductOffer {
-  id                String      @id @default(uuid(7)) @db.Uuid
+  id                  String             @id @default(uuid(7)) @db.Uuid
   /// Denormalized for lookups; must equal the variant's product (composite FK).
-  productId         String      @db.Uuid
-  variantId         String      @db.Uuid
-  sourceId          String      @db.Uuid
-  externalId        String
-  productUrl        String
+  productId           String             @db.Uuid
+  variantId           String             @db.Uuid
+  sourceId            String             @db.Uuid
+  externalId          String
+  productUrl          String
   /// productUrl without tracking parameters; detects one listing under two external ids.
-  canonicalUrl      String?
+  canonicalUrl        String?
   /// Original marketplace title, preserved verbatim.
-  title             String
-  sellerName        String?
-  mrpPaise          BigInt?
-  sellingPricePaise BigInt
-  shippingPaise     BigInt?
-  stockStatus       StockStatus @default(UNKNOWN)
+  title               String
+  sellerName          String?
+  mrpPaise            BigInt?
+  sellingPricePaise   BigInt
+  shippingPaise       BigInt?
+  stockStatus         StockStatus        @default(UNKNOWN)
   /// ISO 4217; DealMind is INR-only (CHECK constraint).
-  currency          String      @default("INR") @db.Char(3)
+  currency            String             @default("INR") @db.Char(3)
   /// Source-specific terms (bank offers, exchange, EMI), as published.
-  offerConditions   Json        @default("{}")
+  offerConditions     Json               @default("{}")
   /// When the source says it last updated the listing (if provided).
-  sourceUpdatedAt   DateTime?
+  sourceUpdatedAt     DateTime?
   /// When DealMind last observed the listing.
-  observedAt        DateTime    @default(now())
-  firstSeenAt       DateTime    @default(now())
-  /// When set, the offer is scheduled for background price tracking.
-  trackedUntil      DateTime?
-  matchMethod       MatchMethod @default(MANUAL)
+  observedAt          DateTime           @default(now())
+  firstSeenAt         DateTime           @default(now())
+  /// Optional end of background tracking for this offer (null = no end).
+  trackedUntil        DateTime?
+  /// Lifecycle seen by tracking: ACTIVE, MISSING (the source no longer returns it), EXPIRED (missing too long).
+  trackingState       OfferTrackingState @default(ACTIVE)
+  /// Last tracking attempt (any outcome) and the next due time (null = due now).
+  lastCheckedAt       DateTime?
+  nextCheckAt         DateTime?
+  /// Consecutive failed tracking attempts (drives backoff).
+  consecutiveFailures Int                @default(0)
+  /// First tracking check that did not find the listing.
+  missingSince        DateTime?
+  matchMethod         MatchMethod        @default(MANUAL)
   /// Matching confidence in basis points (0–10000).
-  matchConfidence   Int         @default(10000)
+  matchConfidence     Int                @default(10000)
   /// Signals that justified the match (identifier, model number, similarity…).
-  matchEvidence     Json        @default("{}")
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  matchEvidence       Json               @default("{}")
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
-  product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variant         ProductVariant   @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
-  source          ShoppingSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  snapshots       PriceSnapshot[]
-  searchResults   SearchResult[]
-  affiliateClicks AffiliateClick[]
+  product          Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant          ProductVariant    @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+  source           ShoppingSource    @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  snapshots        PriceSnapshot[]
+  priceChecks      PriceCheck[]
+  alertEvaluations AlertEvaluation[]
+  searchResults    SearchResult[]
+  affiliateClicks  AffiliateClick[]
 
   @@unique([sourceId, externalId])
   @@index([sourceId, canonicalUrl])
+  /// The tracking scheduler scans due offers.
+  @@index([trackingState, nextCheckAt])
   @@index([variantId, sellingPricePaise])
   @@index([productId, sellingPricePaise])
   @@index([trackedUntil])
@@ -636,26 +711,89 @@ enum AlertStatus {
   PAUSED
 }
 
+enum AlertType {
+  /// Delivered price at or below the target.
+  TARGET_PRICE
+  /// Delivered price strictly below the target.
+  PRICE_BELOW
+  /// Delivered price dropped by at least dropPercentBp from the baseline.
+  PERCENT_DROP
+  /// Delivered price below every observation in the last historicalWindowDays (with enough history).
+  HISTORICAL_LOW
+  /// Any observed price change (optionally on one marketplace).
+  PRICE_CHANGE
+  /// Out of stock or missing, then available again.
+  BACK_IN_STOCK
+}
+
+enum AlertEvaluationOutcome {
+  TRIGGERED
+  NOT_MET
+  COOLDOWN
+  /// Condition met, but the user turned off every notification channel.
+  SUPPRESSED
+  /// Not enough verified data to decide (never treated as met).
+  INSUFFICIENT_DATA
+}
+
+/// One evaluation of one user's alert against one global price check (idempotent per check).
+model AlertEvaluation {
+  id                 String                 @id @default(uuid(7)) @db.Uuid
+  userId             String                 @db.Uuid
+  alertId            String                 @db.Uuid
+  /// The global check evaluated (null once the check is pruned; the evaluation is kept).
+  checkId            String?                @db.Uuid
+  offerId            String                 @db.Uuid
+  outcome            AlertEvaluationOutcome
+  observedPricePaise BigInt?
+  reason             String
+  notificationId     String?                @db.Uuid
+  evaluatedAt        DateTime               @default(now())
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alert PriceAlert   @relation(fields: [alertId, userId], references: [id, userId], onDelete: Cascade)
+  check PriceCheck?  @relation(fields: [checkId], references: [id], onDelete: SetNull)
+  offer ProductOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, checkId])
+  @@index([userId, evaluatedAt(sort: Desc)])
+  @@index([alertId, evaluatedAt(sort: Desc)])
+  @@index([evaluatedAt])
+}
+
 model PriceAlert {
   id                      String      @id @default(uuid(7)) @db.Uuid
   userId                  String      @db.Uuid
   variantId               String      @db.Uuid
   /// Restrict to one source; null = any enabled source.
   sourceId                String?     @db.Uuid
-  targetPricePaise        BigInt
+  type                    AlertType   @default(TARGET_PRICE)
+  /// Required for TARGET_PRICE and PRICE_BELOW.
+  targetPricePaise        BigInt?
+  /// Required for PERCENT_DROP (basis points, 1–9000).
+  dropPercentBp           Int?
+  /// PERCENT_DROP reference price (set when the alert is created or first evaluated).
+  baselinePricePaise      BigInt?
+  /// HISTORICAL_LOW window (days).
+  historicalWindowDays    Int?
+  /// Minimum time between two notifications of this alert.
+  cooldownMinutes         Int         @default(1440)
   status                  AlertStatus @default(ACTIVE)
   lastTriggeredAt         DateTime?
   lastTriggeredPricePaise BigInt?
+  lastEvaluatedAt         DateTime?
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
-  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  variant ProductVariant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  source  ShoppingSource? @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  variant     ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  source      ShoppingSource?   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  evaluations AlertEvaluation[]
 
-  /// One alert per user/variant/source. NULL sourceId is also de-duplicated
-  /// (NULLS NOT DISTINCT, applied in the constraints migration).
-  @@unique([userId, variantId, sourceId])
+  /// One alert per user/variant/source/type. NULL sourceId is also de-duplicated
+  /// (NULLS NOT DISTINCT, applied in SQL).
+  @@unique([userId, variantId, sourceId, type])
+  @@unique([id, userId])
   /// Alert evaluation scans active alerts for a variant.
   @@index([variantId, status])
 }
@@ -664,6 +802,7 @@ enum NotificationType {
   PRICE_DROP
   TARGET_PRICE_REACHED
   BACK_IN_STOCK
+  PRICE_CHANGED
   SYSTEM
 }
 

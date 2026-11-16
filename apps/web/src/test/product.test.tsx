@@ -387,7 +387,13 @@ describe("10–11. watchlist and price alert integration", () => {
         {
           id: "a1",
           status: "ACTIVE",
+          type: "TARGET_PRICE",
           targetPricePaise: 2_200_000,
+          dropPercentBp: null,
+          baselinePricePaise: null,
+          historicalWindowDays: null,
+          cooldownMinutes: 1440,
+          lastEvaluatedAt: null,
           source: { id: "s2", slug: "mock_2", name: "Mock Store 2", isSample: true },
           variant: productDetail().variants[0],
           product: { id: PRODUCT, name: "Acme Nova 7 5G", brand: "Acme", imageUrl: null },
@@ -408,7 +414,7 @@ describe("10–11. watchlist and price alert integration", () => {
       />,
     );
     expect(await screen.findByRole("link", { name: "Diwali phones" })).toBeInTheDocument();
-    expect(screen.getByText("₹22,000")).toBeInTheDocument();
+    expect(screen.getByText("At or below ₹22,000")).toBeInTheDocument();
     expect(screen.getByText("on Mock Store 2", { exact: false })).toBeInTheDocument();
     expect(svc.alerts!.list!).toHaveBeenCalledWith(undefined, 1, V1);
     expect(svc.watchlists!.list!).toHaveBeenCalledWith({ variantId: V1 });
@@ -421,7 +427,9 @@ describe("10–11. watchlist and price alert integration", () => {
     await waitFor(() =>
       expect(svc.alerts!.create!).toHaveBeenCalledWith({
         variantId: V1,
+        type: "TARGET_PRICE",
         targetPricePaise: 2_199_950,
+        cooldownMinutes: 1440,
         sourceId: "s2",
       }),
     );

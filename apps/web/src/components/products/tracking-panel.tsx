@@ -14,7 +14,8 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/misc";
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useVariantTracking } from "@/hooks/queries";
-import { formatDate, rupees } from "@/lib/format";
+import { TRACKING_EXPLAINER, describeAlert } from "@/lib/alerts";
+import { formatDate } from "@/lib/format";
 
 const STATUS_TONE = { ACTIVE: "success", PAUSED: "neutral", TRIGGERED: "warning" } as const;
 
@@ -47,10 +48,7 @@ export function TrackingPanel({
           size="default"
         />
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Alerts are saved now; automatic price checks aren&apos;t running yet, so no notification is
-        sent until price tracking launches.
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground">{TRACKING_EXPLAINER}</p>
       <section aria-labelledby="tracking-history" className="mt-4 flex flex-col gap-2">
         <h3 id="tracking-history" className="text-sm font-semibold">
           Your tracking history
@@ -83,7 +81,7 @@ export function TrackingPanel({
             {alerts.map((a) => (
               <li key={a.id} className="flex flex-wrap items-center gap-2">
                 <Bell aria-hidden className="size-4 text-accent" />
-                Alert at <span className="font-medium tabular">{rupees(a.targetPricePaise)}</span>
+                <span className="font-medium">{describeAlert(a)}</span>
                 {a.source ? `on ${a.source.name}` : "on any marketplace"}
                 <Badge tone={STATUS_TONE[a.status]}>{a.status.toLowerCase()}</Badge>
                 <span className="text-xs text-muted-foreground">

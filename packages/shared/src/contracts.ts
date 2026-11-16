@@ -680,22 +680,100 @@ export const watchlistDetail = watchlistView.extend({ items: z.array(watchlistIt
 
 export const alertStatus = z.enum(["ACTIVE", "TRIGGERED", "PAUSED"]);
 
+export const ALERT_TYPES = [
+  "TARGET_PRICE",
+  "PRICE_BELOW",
+  "PERCENT_DROP",
+  "HISTORICAL_LOW",
+  "PRICE_CHANGE",
+  "BACK_IN_STOCK",
+] as const;
+export const alertType = z.enum(ALERT_TYPES);
+export type AlertTypeValue = z.infer<typeof alertType>;
+
+/** Which parameter each alert type requires (the others must be absent). */
+export const ALERT_TYPE_PARAM: Record<AlertTypeValue, "target" | "drop" | "window" | null> = {
+  TARGET_PRICE: "target",
+  PRICE_BELOW: "target",
+  PERCENT_DROP: "drop",
+  HISTORICAL_LOW: "window",
+  PRICE_CHANGE: null,
+  BACK_IN_STOCK: null,
+};
+
+const alertParams = {
+  targetPricePaise: z.number().int().positive(),
+  /** Whole percent (1–90) for PERCENT_DROP. */
+  dropPercent: z.number().int().min(1).max(90),
+  historicalWindowDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
+  /** Minimum minutes between two notifications of this alert (default 24 h). */
+  cooldownMinutes: z.number().int().min(0).max(43_200),
+};
+
+function checkAlertParams(
+  v: {
+    type: AlertTypeValue;
+    targetPricePaise?: number | undefined;
+    dropPercent?: number | undefined;
+    historicalWindowDays?: number | undefined;
+  },
+  ctx: z.RefinementCtx,
+) {
+  const want = ALERT_TYPE_PARAM[v.type];
+  const given = {
+    target: v.targetPricePaise !== undefined,
+    drop: v.dropPercent !== undefined,
+    window: v.historicalWindowDays !== undefined,
+  };
+  for (const [k, present] of Object.entries(given)) {
+    const field =
+      k === "target" ? "targetPricePaise" : k === "drop" ? "dropPercent" : "historicalWindowDays";
+    if (k === want && !present && k !== "window")
+      ctx.addIssue({ code: "custom", path: [field], message: `Required for ${v.type}` });
+    if (k !== want && present)
+      ctx.addIssue({ code: "custom", path: [field], message: `Not used by ${v.type}` });
+  }
+}
+
 export const createAlertInput = z
   .object({
     variantId: uuid,
-    targetPricePaise: z.number().int().positive(),
+    /** Defaults to TARGET_PRICE (earlier clients send only targetPricePaise). */
+    type: alertType.default("TARGET_PRICE"),
+    targetPricePaise: alertParams.targetPricePaise.optional(),
+    dropPercent: alertParams.dropPercent.optional(),
+    /** HISTORICAL_LOW window; defaults to 90 days. */
+    historicalWindowDays: alertParams.historicalWindowDays.optional(),
+    cooldownMinutes: alertParams.cooldownMinutes.optional(),
     /** Restrict to one source; omit for "any active source". */
     sourceId: uuid.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(checkAlertParams);
+export type CreateAlertInput = z.infer<typeof createAlertInput>;
 
 export const updateAlertInput = z
   .object({
-    targetPricePaise: z.number().int().positive().optional(),
+    targetPricePaise: alertParams.targetPricePaise.optional(),
+    dropPercent: alertParams.dropPercent.optional(),
+    historicalWindowDays: alertParams.historicalWindowDays.optional(),
+    cooldownMinutes: alertParams.cooldownMinutes.optional(),
     sourceId: uuid.nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field" });
+export type UpdateAlertInput = z.infer<typeof updateAlertInput>;
+
+export const alertEvaluationView = z.object({
+  id: uuid,
+  outcome: z.enum(["TRIGGERED", "NOT_MET", "COOLDOWN", "SUPPRESSED", "INSUFFICIENT_DATA"]),
+  observedPricePaise: paise.nullable(),
+  marketplace: z.object({ slug: z.string(), name: z.string() }),
+  reason: z.string(),
+  notificationId: uuid.nullable(),
+  evaluatedAt: iso,
+});
+export type AlertEvaluationView = z.infer<typeof alertEvaluationView>;
 
 export const alertListQuery = pageQuery
   .extend({ status: alertStatus.optional(), variantId: uuid.optional() })
@@ -704,7 +782,15 @@ export const alertListQuery = pageQuery
 export const alertView = z.object({
   id: uuid,
   status: alertStatus,
-  targetPricePaise: paise,
+  type: alertType,
+  /** TARGET_PRICE / PRICE_BELOW only. */
+  targetPricePaise: paise.nullable(),
+  dropPercentBp: z.number().int().nullable(),
+  /** PERCENT_DROP reference price (null until recorded). */
+  baselinePricePaise: paise.nullable(),
+  historicalWindowDays: z.number().int().nullable(),
+  cooldownMinutes: z.number().int(),
+  lastEvaluatedAt: iso.nullable(),
   source: sourceRef.nullable(),
   variant: variantView,
   product: productRef,

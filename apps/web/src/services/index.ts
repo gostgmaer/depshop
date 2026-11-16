@@ -8,6 +8,8 @@ import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
 export type HistoryDays = number | "all";
 
 import type {
+  AlertEvaluation,
+  CreateAlertRequest,
   CategoryDetail,
   CompareView,
   CategoryFiltersView,
@@ -126,8 +128,9 @@ export const watchlists = {
 export const alerts = {
   list: (status?: "ACTIVE" | "TRIGGERED" | "PAUSED", page = 1, variantId?: string) =>
     apiPage<PriceAlert>(`/alerts${queryString({ status, page, pageSize: 50, variantId })}`),
-  create: (input: { variantId: string; targetPricePaise: number; sourceId?: string }) =>
-    api<PriceAlert>("POST", "/alerts", input),
+  create: (input: CreateAlertRequest) => api<PriceAlert>("POST", "/alerts", input),
+  evaluations: (id: string, page = 1) =>
+    apiPage<AlertEvaluation>(`/alerts/${id}/evaluations${queryString({ page, pageSize: 20 })}`),
   update: (id: string, input: { targetPricePaise?: number; sourceId?: string | null }) =>
     api<PriceAlert>("PATCH", `/alerts/${id}`, input),
   pause: (id: string) => api<PriceAlert>("POST", `/alerts/${id}/pause`),

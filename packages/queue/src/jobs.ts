@@ -16,6 +16,10 @@ export const QueueName = {
   alertEvaluation: "alert-evaluation",
   notificationDelivery: "notification-delivery",
   connectorHealth: "connector-health",
+  /** Repeatable control jobs: the tracking scheduler tick and cleanup. */
+  trackingControl: "tracking-control",
+  /** Jobs that exhausted their retries (kept for inspection; never re-run automatically). */
+  deadLetter: "dead-letter",
 } as const;
 export type QueueName = (typeof QueueName)[keyof typeof QueueName];
 
@@ -35,11 +39,12 @@ export const priceRefreshJob = z.object({
 });
 export type PriceRefreshJob = z.infer<typeof priceRefreshJob>;
 
-/** Evaluate active alerts for a variant after new price data arrived. */
+/**
+ * Evaluate the users' alerts affected by one global price check. Keyed by the
+ * check, so a check is evaluated once however often the job is enqueued.
+ */
 export const alertEvaluationJob = z.object({
-  variantId: uuid,
-  /** The snapshot that triggered evaluation (dedupes repeated triggers). */
-  snapshotId: uuid,
+  checkId: uuid,
 });
 export type AlertEvaluationJob = z.infer<typeof alertEvaluationJob>;
 
@@ -48,6 +53,22 @@ export const notificationDeliveryJob = z.object({
   deliveryId: uuid,
 });
 export type NotificationDeliveryJob = z.infer<typeof notificationDeliveryJob>;
+
+/** Tracking control: "schedule" (enqueue due offers) or "cleanup" (expire, prune). */
+export const trackingControlJob = z.object({ task: z.enum(["schedule", "cleanup"]) }).strict();
+export type TrackingControlJob = z.infer<typeof trackingControlJob>;
+
+/** A job that exhausted its retries, recorded for operators. */
+export const deadLetterJob = z.object({
+  queue: z.string(),
+  jobId: z.string(),
+  name: z.string(),
+  data: z.unknown(),
+  failedReason: z.string().max(2000),
+  attemptsMade: z.number().int(),
+  failedAt: z.string(),
+});
+export type DeadLetterJob = z.infer<typeof deadLetterJob>;
 
 /** Periodic health check of every registered connector (scheduled by the worker). */
 export const connectorHealthJob = z.object({}).strict();
@@ -72,7 +93,7 @@ export const JOBS = {
   },
   [QueueName.alertEvaluation]: {
     schema: alertEvaluationJob,
-    jobId: (p: AlertEvaluationJob) => jobId("alerts", p.variantId, p.snapshotId),
+    jobId: (p: AlertEvaluationJob) => jobId("alerts", p.checkId),
   },
   [QueueName.notificationDelivery]: {
     schema: notificationDeliveryJob,
@@ -82,6 +103,14 @@ export const JOBS = {
     schema: connectorHealthJob,
     jobId: (_p: ConnectorHealthJob) => "connector-health",
   },
+  [QueueName.trackingControl]: {
+    schema: trackingControlJob,
+    jobId: (p: TrackingControlJob) => jobId("tracking", p.task),
+  },
+  [QueueName.deadLetter]: {
+    schema: deadLetterJob,
+    jobId: (p: DeadLetterJob) => jobId("dead", p.queue, p.jobId, String(p.attemptsMade)),
+  },
 } as const;
 
 export interface JobPayloads {
@@ -90,6 +119,25 @@ export interface JobPayloads {
   [QueueName.alertEvaluation]: AlertEvaluationJob;
   [QueueName.notificationDelivery]: NotificationDeliveryJob;
   [QueueName.connectorHealth]: ConnectorHealthJob;
+  [QueueName.trackingControl]: TrackingControlJob;
+  [QueueName.deadLetter]: DeadLetterJob;
+}
+
+/** Custom backoff type: exponential with full jitter (registered by the worker). */
+export const JITTER_BACKOFF = "jitter";
+
+/**
+ * Exponential backoff with full jitter: a random delay in [0, min(cap, base·2^(n-1))].
+ * Spreads retries so a recovering marketplace isn't hit by a synchronized burst.
+ */
+export function jitterBackoff(
+  attemptsMade: number,
+  baseMs: number,
+  capMs: number,
+  random: () => number = Math.random,
+): number {
+  const exp = Math.min(capMs, baseMs * 2 ** Math.max(0, attemptsMade - 1));
+  return Math.floor(random() * exp);
 }
 
 /** Retries with exponential backoff; completed jobs are kept briefly for dedupe/inspection. */

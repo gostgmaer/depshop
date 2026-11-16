@@ -244,7 +244,8 @@ services:
       - traefik.http.routers.web.entrypoints=web
       - traefik.http.services.web.loadbalancer.server.port=3000
 
-  # BullMQ worker: supervises the Python agent and runs connector health checks.
+  # BullMQ worker: supervises the Python agent, runs connector health checks and
+  # global price tracking (scheduler, refresh, alert evaluation, notifications).
   worker:
     <<: *restart
     profiles: [app]
@@ -263,7 +264,16 @@ services:
       AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}
       AMAZON_CREATORS_CREDENTIAL_SECRET: ${AMAZON_CREATORS_CREDENTIAL_SECRET:-}
       AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
-    networks: [dealmind]
+      TRACKING_ENABLED: ${TRACKING_ENABLED:-true}
+      TRACKING_SOURCE_SHARE: ${TRACKING_SOURCE_SHARE:-0.5}
+      TRACKING_MAX_QUEUED: ${TRACKING_MAX_QUEUED:-2000}
+      PRICE_TRACKING_CONCURRENCY: ${PRICE_TRACKING_CONCURRENCY:-8}
+      # Shared EasyDev notification service, reached by container name on core-network.
+      NOTIFICATION_SERVICE_URL: http://notification-service:4000
+      NOTIFICATION_API_KEY: ${NOTIFICATION_API_KEY:-}
+      NOTIFICATION_TENANT_ID: ${NOTIFICATION_TENANT_ID:-dealmind}
+      APP_URL: ${APP_URL:-http://localhost}
+    networks: [dealmind, core-network]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }

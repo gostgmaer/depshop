@@ -17,6 +17,7 @@ import { toSearchInput, EMPTY_SEARCH } from "@/components/search/search-input";
 import { ErrorState } from "@/components/ui/misc";
 import { WatchlistsView } from "@/app/(dashboard)/watchlists/watchlists-view";
 import { initialProgress, progressReducer } from "@/hooks/use-search-events";
+import { describeAlert } from "@/lib/alerts";
 import { ApiError } from "@/lib/api";
 import { shouldRetry } from "@/app/providers";
 import * as services from "@/services";
@@ -354,12 +355,66 @@ describe("10. price alert creation", () => {
     await waitFor(() =>
       expect(svc.alerts.create).toHaveBeenCalledWith({
         variantId: "20000000-0000-7000-8000-000000000001",
+        type: "TARGET_PRICE",
         targetPricePaise: 2_299_950,
+        cooldownMinutes: 1440,
         sourceId: "30000000-0000-7000-8000-000000000001",
       }),
     );
-    // Honest about alert evaluation not running yet.
-    expect(await screen.findByText(/not running yet/)).toBeInTheDocument();
+    // Says how and how often prices are actually checked.
+    expect(await screen.findByText(/re-checks prices in the background/)).toBeInTheDocument();
+  });
+
+  it("creates other alert types with only their own parameters", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <PriceAlertForm variantId="20000000-0000-7000-8000-000000000001" sources={[]} />,
+    );
+    await user.selectOptions(screen.getByLabelText("Notify me when"), "PERCENT_DROP");
+    expect(screen.queryByLabelText("Target price (₹)")).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Drop by (%)"));
+    await user.type(screen.getByLabelText("Drop by (%)"), "95");
+    await user.click(screen.getByRole("button", { name: "Create alert" }));
+    expect(await screen.findByText("Enter a whole percent from 1 to 90")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Drop by (%)"));
+    await user.type(screen.getByLabelText("Drop by (%)"), "15");
+    await user.selectOptions(screen.getByLabelText("Notify at most once every"), "360");
+    await user.click(screen.getByRole("button", { name: "Create alert" }));
+    await waitFor(() =>
+      expect(svc.alerts.create).toHaveBeenCalledWith({
+        variantId: "20000000-0000-7000-8000-000000000001",
+        type: "PERCENT_DROP",
+        dropPercent: 15,
+        cooldownMinutes: 360,
+      }),
+    );
+  });
+
+  it("describes every alert type plainly", () => {
+    const base = {
+      targetPricePaise: null,
+      dropPercentBp: null,
+      baselinePricePaise: null,
+      historicalWindowDays: null,
+    };
+    expect(describeAlert({ ...base, type: "TARGET_PRICE", targetPricePaise: 2_299_900 })).toBe(
+      "At or below ₹22,999",
+    );
+    expect(describeAlert({ ...base, type: "PERCENT_DROP", dropPercentBp: 1000 })).toBe(
+      "Drops 10% (baseline set at the next price check)",
+    );
+    expect(
+      describeAlert({
+        ...base,
+        type: "PERCENT_DROP",
+        dropPercentBp: 1000,
+        baselinePricePaise: 2_500_000,
+      }),
+    ).toBe("Drops 10% from ₹25,000");
+    expect(describeAlert({ ...base, type: "HISTORICAL_LOW", historicalWindowDays: 90 })).toBe(
+      "Lowest observed in 90 days",
+    );
+    expect(describeAlert({ ...base, type: "BACK_IN_STOCK" })).toBe("Back in stock");
   });
 
   it("rejects an unparseable amount", async () => {

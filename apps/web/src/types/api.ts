@@ -4,6 +4,8 @@
  */
 import type {
   agentRunSummary,
+  alertEvaluationView,
+  createAlertInput,
   alertView,
   categoryDetail,
   categoryView,
@@ -59,6 +61,9 @@ export type Watchlist = z.infer<typeof watchlistView>;
 export type WatchlistDetail = z.infer<typeof watchlistDetail>;
 export type WatchlistItem = z.infer<typeof watchlistItemView>;
 export type PriceAlert = z.infer<typeof alertView>;
+export type AlertEvaluation = z.infer<typeof alertEvaluationView>;
+/** Request body of POST /alerts (type defaults to TARGET_PRICE). */
+export type CreateAlertRequest = z.input<typeof createAlertInput>;
 export type Notification = z.infer<typeof notificationView>;
 export type Plan = z.infer<typeof planView>;
 export type Subscription = z.infer<typeof subscriptionView>;

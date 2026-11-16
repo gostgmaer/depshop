@@ -1,4 +1,11 @@
-import { alertListQuery, alertView, createAlertInput, updateAlertInput } from "@dealmind/shared";
+import {
+  alertEvaluationView,
+  alertListQuery,
+  alertView,
+  createAlertInput,
+  pageQuery,
+  updateAlertInput,
+} from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { getAuth } from "../../plugins/auth.js";
@@ -115,5 +122,21 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
       await alerts.remove(getAuth(req).userId, req.params.id);
       return reply.status(204).send(null);
     },
+  );
+
+  app.get(
+    "/:id/evaluations",
+    {
+      schema: {
+        tags: ["alerts"],
+        summary:
+          "Evaluation history of one of your alerts (each global price check it was checked against)",
+        security,
+        params: idParam,
+        querystring: pageQuery.strict(),
+        response: { 200: page(alertEvaluationView) },
+      },
+    },
+    async (req) => alerts.evaluations(getAuth(req).userId, req.params.id, req.query),
   );
 };

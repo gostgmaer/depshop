@@ -33,6 +33,7 @@ import {
 } from "@/hooks/queries";
 import { useMe } from "@/lib/auth-hooks";
 import { relativeTime, rupees } from "@/lib/format";
+import { describeAlert } from "@/lib/alerts";
 import type { Search } from "@/types/api";
 
 export function Welcome() {
@@ -293,12 +294,7 @@ export function ActiveAlerts() {
           {q.data.items.slice(0, 4).map((a) => (
             <li key={a.id} className="flex items-center justify-between gap-3 text-sm">
               <span className="min-w-0 truncate">{a.product.name}</span>
-              <span className="shrink-0 text-muted-foreground">
-                at or below{" "}
-                <span className="font-medium text-foreground tabular">
-                  {rupees(a.targetPricePaise)}
-                </span>
-              </span>
+              <span className="shrink-0 text-muted-foreground">{describeAlert(a)}</span>
             </li>
           ))}
         </ul>

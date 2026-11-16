@@ -231,6 +231,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@dealmind/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@dealmind/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -243,6 +246,12 @@ importers:
       '@dealmind/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@easydev_org/notification-sdk':
+        specifier: 1.0.3
+        version: 1.0.3
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.10.0
       bullmq:
         specifier: ^5.34.0
         version: 5.81.5

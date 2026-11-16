@@ -1,4 +1,4 @@
-import { type ConnectionOptions, Queue } from "bullmq";
+import { type ConnectionOptions, type JobsOptions, Queue } from "bullmq";
 import { DEFAULT_JOB_OPTIONS, JOBS, type JobPayloads, QueueName } from "./jobs.js";
 
 export interface JobQueuesOptions {
@@ -30,11 +30,15 @@ export class JobQueues {
   }
 
   /** Enqueues a job; returns its id. Re-enqueueing the same payload is a no-op. */
-  async enqueue<N extends QueueName>(name: N, payload: JobPayloads[N]): Promise<string> {
+  async enqueue<N extends QueueName>(
+    name: N,
+    payload: JobPayloads[N],
+    opts: JobsOptions = {},
+  ): Promise<string> {
     const spec = JOBS[name];
     const data = spec.schema.parse(payload);
     const jobId = (spec.jobId as (p: JobPayloads[N]) => string)(data as JobPayloads[N]);
-    await this.queue(name).add(name, data, { jobId });
+    await this.queue(name).add(name, data, { ...opts, jobId });
     return jobId;
   }
 

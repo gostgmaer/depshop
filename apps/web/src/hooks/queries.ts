@@ -221,6 +221,14 @@ export function useAlertMutations() {
   };
 }
 
+/** One alert's evaluation history (loaded when opened). */
+export const useAlertEvaluations = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ["alerts", id, "evaluations"] as const,
+    queryFn: () => alerts.evaluations(id),
+    enabled,
+  });
+
 // ── Notifications ──
 export const useNotifications = (unread?: boolean, page = 1) =>
   useQuery({

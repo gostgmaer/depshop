@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { redisConnectionFromUrl } from "./connection.js";
-import { JOBS, QueueName } from "./jobs.js";
+import { JOBS, QueueName, jitterBackoff } from "./jobs.js";
 
 const id = "0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -35,10 +35,18 @@ describe("job contracts", () => {
     const ids = [
       JOBS[QueueName.shoppingSearch].jobId({ searchId: id, userId: id }),
       JOBS[QueueName.priceRefresh].jobId({ offerId: id, slot: "2026-11-14T12:00" }),
-      JOBS[QueueName.alertEvaluation].jobId({ variantId: id, snapshotId: id }),
+      JOBS[QueueName.alertEvaluation].jobId({ checkId: id }),
+      JOBS[QueueName.trackingControl].jobId({ task: "schedule" }),
       JOBS[QueueName.notificationDelivery].jobId({ deliveryId: id }),
       JOBS[QueueName.connectorHealth].jobId({}),
     ];
     for (const j of ids) expect(j).not.toContain(":");
+  });
+
+  it("backs off exponentially with full jitter, capped", () => {
+    expect(jitterBackoff(1, 1000, 60_000, () => 0.999)).toBe(999);
+    expect(jitterBackoff(4, 1000, 60_000, () => 0.5)).toBe(4000);
+    expect(jitterBackoff(20, 1000, 60_000, () => 0.999)).toBe(59_940);
+    expect(jitterBackoff(3, 1000, 60_000, () => 0)).toBe(0);
   });
 });
