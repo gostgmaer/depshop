@@ -17,7 +17,8 @@ export type AlertType =
   | "PERCENT_DROP"
   | "HISTORICAL_LOW"
   | "PRICE_CHANGE"
-  | "BACK_IN_STOCK";
+  | "BACK_IN_STOCK"
+  | "PRICE_DROP";
 
 export type CheckOutcome =
   "UNCHANGED" | "PRICE_DECREASED" | "PRICE_INCREASED" | "OTHER_CHANGED" | "REAPPEARED";
@@ -29,6 +30,8 @@ export interface AlertState {
   baselinePricePaise: number | null;
   historicalWindowDays: number | null;
   lastTriggeredPricePaise: number | null;
+  /** PRICE_CHANGE / PRICE_DROP: minimum absolute change that counts (null = any). */
+  minChangePaise?: number | null;
 }
 
 export interface CheckContext {
@@ -102,19 +105,30 @@ export function evaluateAlert(alert: AlertState, ctx: CheckContext): Decision {
         };
       return notMet(AVAILABLE.has(ctx.stock) ? "Was already available." : "Still not available.");
     }
-    case "PRICE_CHANGE": {
-      if (ctx.outcome !== "PRICE_DECREASED" && ctx.outcome !== "PRICE_INCREASED")
-        return notMet("No price change in this check.");
+    case "PRICE_CHANGE":
+    case "PRICE_DROP": {
+      const dropOnly = alert.type === "PRICE_DROP";
+      if (ctx.outcome !== "PRICE_DECREASED" && (dropOnly || ctx.outcome !== "PRICE_INCREASED"))
+        return notMet(
+          dropOnly ? "No price decrease in this check." : "No price change in this check.",
+        );
       const prev = ctx.previousPricePaise!;
       const diff = ctx.sellingPricePaise - prev;
       const bp = signedRatioBp(BigInt(diff), BigInt(prev));
       const dir = diff < 0 ? "decreased" : "increased";
+      const min = alert.minChangePaise ?? null;
+      if (min !== null && Math.abs(diff) < min)
+        return notMet(
+          `Price ${dir} by ${formatPaise(Math.abs(diff))}, less than the ${formatPaise(min)} you asked for.`,
+        );
+      if (dropOnly && !AVAILABLE.has(ctx.stock))
+        return notMet(`Price dropped, but it is not available on ${ctx.marketplace}.`);
       return {
         ...base,
         outcome: "TRIGGERED",
         reason: `Price ${dir} by ${formatPaise(Math.abs(diff))} (${formatBasisPoints(Math.abs(bp))}).`,
         notification: {
-          kind: "PRICE_CHANGED",
+          kind: dropOnly ? "PRICE_DROP" : "PRICE_CHANGED",
           title: `${ctx.productName}: price ${dir} on ${ctx.marketplace}`,
           body: `The selling price ${dir} from ${formatPaise(prev)} to ${formatPaise(ctx.sellingPricePaise)} (${formatBasisPoints(Math.abs(bp))}) since the previous observation.`,
         },

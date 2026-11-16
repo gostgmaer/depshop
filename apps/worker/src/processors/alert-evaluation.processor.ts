@@ -94,6 +94,8 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
       variantId: offer.variantId,
       status: "ACTIVE",
       OR: [{ sourceId: null }, { sourceId: offer.sourceId }],
+      // Past its end date: cleanup marks it EXPIRED; it is no longer evaluated.
+      AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
       // An unchanged price only matters to alerts never evaluated yet.
       ...(changed ? {} : { lastEvaluatedAt: null }),
     },
@@ -139,6 +141,7 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
       historicalWindowDays: alert.historicalWindowDays,
       lastTriggeredPricePaise:
         alert.lastTriggeredPricePaise === null ? null : Number(alert.lastTriggeredPricePaise),
+      minChangePaise: alert.minChangePaise === null ? null : Number(alert.minChangePaise),
     };
     const ctx: CheckContext = {
       outcome: check.outcome as CheckOutcome,
@@ -157,8 +160,10 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
     };
     const decision = evaluateAlert(state, ctx);
     const prefs = alert.user.preference;
-    const inApp = prefs?.notifyInApp ?? true;
-    const email = (prefs?.notifyEmail ?? true) && Boolean(alert.user.email);
+    // A channel is used only if both the alert and the user's preferences allow it.
+    const inApp = alert.channels.includes("IN_APP") && (prefs?.notifyInApp ?? true);
+    const email =
+      alert.channels.includes("EMAIL") && (prefs?.notifyEmail ?? true) && Boolean(alert.user.email);
 
     try {
       const result = await prisma.$transaction(async (tx) => {
@@ -171,19 +176,22 @@ async function evaluate(deps: AlertEvaluationDeps, checkId: string): Promise<Eva
         if (decision.outcome === "TRIGGERED") {
           if (!inApp && !email) {
             outcome = "SUPPRESSED";
-            reason = `${reason} Not notified: every notification channel is turned off in your settings.`;
+            reason = `${reason} Not notified: none of this alert's channels is enabled in your settings.`;
           } else {
             // Atomic cooldown claim: only one trigger per window, across all checks.
             const claimed = await tx.$executeRaw`
               UPDATE "PriceAlert"
               SET "lastTriggeredAt" = ${now}, "lastTriggeredPricePaise" = ${BigInt(decision.deliveredPaise)},
-                  "lastEvaluatedAt" = ${now}, "updatedAt" = ${now}
+                  "lastEvaluatedAt" = ${now}, "updatedAt" = ${now},
+                  "triggerCount" = "triggerCount" + 1,
+                  -- One-shot alerts end here (re-armable by the user); repeating ones keep watching.
+                  "status" = CASE WHEN "repeat" THEN 'ACTIVE'::"AlertStatus" ELSE 'TRIGGERED'::"AlertStatus" END
               WHERE "id" = ${alert.id}::uuid AND "userId" = ${alert.userId}::uuid AND "status" = 'ACTIVE'
                 AND ("lastTriggeredAt" IS NULL
                      OR "lastTriggeredAt" <= ${now}::timestamp - make_interval(mins => "cooldownMinutes"))`;
             if (claimed === 0) {
               outcome = "COOLDOWN";
-              reason = `${reason} Not notified again within the alert's cooldown.`;
+              reason = `${reason} Not notified again within the alert's cooldown (or the alert was paused or triggered meanwhile).`;
             } else {
               const n = await notify(
                 tx,

@@ -3,7 +3,7 @@ import {
   alertListQuery,
   alertView,
   createAlertInput,
-  pageQuery,
+  alertHistoryQuery,
   updateAlertInput,
 } from "@dealmind/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
@@ -69,7 +69,8 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
     {
       schema: {
         tags: ["alerts"],
-        summary: "Update target price or source",
+        summary:
+          "Update the condition, channels, cooldown, expiry or marketplace (ACTIVE, PAUSED or TRIGGERED alerts)",
         security,
         params: idParam,
         body: updateAlertInput,
@@ -84,7 +85,7 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
     {
       schema: {
         tags: ["alerts"],
-        summary: "Pause an alert",
+        summary: "Pause an active alert (409 from other statuses)",
         security,
         params: idParam,
         response: { 200: ok(alertView) },
@@ -98,7 +99,7 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
     {
       schema: {
         tags: ["alerts"],
-        summary: "Resume an alert",
+        summary: "Resume a paused alert or re-arm a triggered one (409 if expired or cancelled)",
         security,
         params: idParam,
         response: { 200: ok(alertView) },
@@ -112,7 +113,7 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
     {
       schema: {
         tags: ["alerts"],
-        summary: "Delete an alert",
+        summary: "Delete an alert and its history (any status)",
         security,
         params: idParam,
         response: { 204: z.null() },
@@ -124,19 +125,36 @@ export const alertRoutes: FastifyPluginAsyncZod<{ alerts: AlertService }> = asyn
     },
   );
 
-  app.get(
-    "/:id/evaluations",
+  app.post(
+    "/:id/cancel",
     {
       schema: {
         tags: ["alerts"],
-        summary:
-          "Evaluation history of one of your alerts (each global price check it was checked against)",
+        summary: "Cancel an alert (kept with its history; final)",
         security,
         params: idParam,
-        querystring: pageQuery.strict(),
-        response: { 200: page(alertEvaluationView) },
+        response: { 200: ok(alertView) },
       },
     },
-    async (req) => alerts.evaluations(getAuth(req).userId, req.params.id, req.query),
+    async (req) => alerts.cancel(getAuth(req).userId, req.params.id),
   );
+
+  // "/history" (spec) and "/evaluations" (Phase 5.1 clients) are the same list.
+  for (const path of ["/:id/history", "/:id/evaluations"]) {
+    app.get(
+      path,
+      {
+        schema: {
+          tags: ["alerts"],
+          summary:
+            "Evaluation history of one of your alerts (outcome=TRIGGERED: previous triggers)",
+          security,
+          params: idParam,
+          querystring: alertHistoryQuery,
+          response: { 200: page(alertEvaluationView) },
+        },
+      },
+      async (req) => alerts.history(getAuth(req).userId, req.params.id, req.query),
+    );
+  }
 };

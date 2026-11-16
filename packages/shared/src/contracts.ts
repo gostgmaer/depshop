@@ -671,14 +671,58 @@ export const watchlistItemView = z.object({
   addedAt: iso,
   variant: variantView,
   product: productRef,
+  /** Lowest delivered price among fresh, available offers (same as current.deliveredPaise). */
   lowestPricePaise: paise.nullable(),
+  current: z
+    .object({
+      deliveredPaise: paise,
+      marketplace: z.object({ slug: z.string(), name: z.string() }),
+      observedAt: iso,
+      /** Fresh, available offers of this variant. */
+      offerCount: z.number().int(),
+    })
+    .nullable(),
+  /**
+   * Movement of the lowest delivered price over the last 7 days, from stored
+   * snapshots. Null when there was no observation 7 days ago (never estimated).
+   */
+  movement: z
+    .object({
+      days: z.literal(7),
+      previousPaise: paise,
+      changePaise: z.number().int(),
+      changeBp: z.number().int(),
+    })
+    .nullable(),
 });
 
 export const watchlistDetail = watchlistView.extend({ items: z.array(watchlistItemView) });
 
 // ── Price alerts (user-owned) ─────────────────────────────────────────────
 
-export const alertStatus = z.enum(["ACTIVE", "TRIGGERED", "PAUSED"]);
+export const ALERT_STATUSES = ["ACTIVE", "PAUSED", "TRIGGERED", "EXPIRED", "CANCELLED"] as const;
+export const alertStatus = z.enum(ALERT_STATUSES);
+export type AlertStatusValue = z.infer<typeof alertStatus>;
+
+/** User actions on an alert and the statuses each is allowed from. */
+export const ALERT_ACTIONS = {
+  /** Change the condition, channels, cooldown, expiry or marketplace. */
+  update: ["ACTIVE", "PAUSED", "TRIGGERED"],
+  pause: ["ACTIVE"],
+  /** Resume a paused alert, or re-arm a triggered one. */
+  resume: ["PAUSED", "TRIGGERED"],
+  cancel: ["ACTIVE", "PAUSED", "TRIGGERED"],
+  /** Delete is allowed from any status (removes the alert and its history). */
+  delete: ["ACTIVE", "PAUSED", "TRIGGERED", "EXPIRED", "CANCELLED"],
+} as const satisfies Record<string, readonly AlertStatusValue[]>;
+export type AlertAction = keyof typeof ALERT_ACTIONS;
+
+export function canTransition(action: AlertAction, from: AlertStatusValue): boolean {
+  return (ALERT_ACTIONS[action] as readonly string[]).includes(from);
+}
+
+export const DELIVERY_CHANNELS = ["IN_APP", "EMAIL"] as const;
+export const deliveryChannel = z.enum(DELIVERY_CHANNELS);
 
 export const ALERT_TYPES = [
   "TARGET_PRICE",
@@ -687,19 +731,31 @@ export const ALERT_TYPES = [
   "HISTORICAL_LOW",
   "PRICE_CHANGE",
   "BACK_IN_STOCK",
+  "PRICE_DROP",
 ] as const;
 export const alertType = z.enum(ALERT_TYPES);
 export type AlertTypeValue = z.infer<typeof alertType>;
 
 /** Which parameter each alert type requires (the others must be absent). */
-export const ALERT_TYPE_PARAM: Record<AlertTypeValue, "target" | "drop" | "window" | null> = {
+export const ALERT_TYPE_PARAM: Record<
+  AlertTypeValue,
+  "target" | "drop" | "window" | "minChange" | null
+> = {
   TARGET_PRICE: "target",
   PRICE_BELOW: "target",
   PERCENT_DROP: "drop",
   HISTORICAL_LOW: "window",
-  PRICE_CHANGE: null,
+  // Optional minimum change for these two.
+  PRICE_CHANGE: "minChange",
+  PRICE_DROP: "minChange",
   BACK_IN_STOCK: null,
 };
+
+const futureIso = z
+  .string()
+  .datetime({ offset: true })
+  .refine((v) => Date.parse(v) > Date.now(), "Must be in the future")
+  .refine((v) => Date.parse(v) <= Date.now() + 366 * 86_400_000, "At most one year ahead");
 
 const alertParams = {
   targetPricePaise: z.number().int().positive(),
@@ -708,6 +764,13 @@ const alertParams = {
   historicalWindowDays: z.union([z.literal(30), z.literal(90), z.literal(180), z.literal(365)]),
   /** Minimum minutes between two notifications of this alert (default 24 h). */
   cooldownMinutes: z.number().int().min(0).max(43_200),
+  /** PRICE_CHANGE / PRICE_DROP: minimum absolute change in paise (optional). */
+  minChangePaise: z.number().int().positive(),
+  /** Channels this alert may use (the user's preferences still apply). */
+  channels: z.array(deliveryChannel).min(1).max(2),
+  /** Keep watching after the condition is met (default: stop and mark TRIGGERED). */
+  repeat: z.boolean(),
+  expiresAt: futureIso,
 };
 
 function checkAlertParams(
@@ -716,9 +779,12 @@ function checkAlertParams(
     targetPricePaise?: number | undefined;
     dropPercent?: number | undefined;
     historicalWindowDays?: number | undefined;
+    minChangePaise?: number | undefined;
   },
   ctx: z.RefinementCtx,
 ) {
+  if (v.minChangePaise !== undefined && ALERT_TYPE_PARAM[v.type] !== "minChange")
+    ctx.addIssue({ code: "custom", path: ["minChangePaise"], message: `Not used by ${v.type}` });
   const want = ALERT_TYPE_PARAM[v.type];
   const given = {
     target: v.targetPricePaise !== undefined,
@@ -728,6 +794,11 @@ function checkAlertParams(
   for (const [k, present] of Object.entries(given)) {
     const field =
       k === "target" ? "targetPricePaise" : k === "drop" ? "dropPercent" : "historicalWindowDays";
+    if (want === "minChange") {
+      if (present)
+        ctx.addIssue({ code: "custom", path: [field], message: `Not used by ${v.type}` });
+      continue;
+    }
     if (k === want && !present && k !== "window")
       ctx.addIssue({ code: "custom", path: [field], message: `Required for ${v.type}` });
     if (k !== want && present)
@@ -745,7 +816,11 @@ export const createAlertInput = z
     /** HISTORICAL_LOW window; defaults to 90 days. */
     historicalWindowDays: alertParams.historicalWindowDays.optional(),
     cooldownMinutes: alertParams.cooldownMinutes.optional(),
-    /** Restrict to one source; omit for "any active source". */
+    minChangePaise: alertParams.minChangePaise.optional(),
+    channels: alertParams.channels.optional(),
+    repeat: alertParams.repeat.optional(),
+    expiresAt: alertParams.expiresAt.optional(),
+    /** Restrict to one source (the preferred marketplace); omit for "any active source". */
     sourceId: uuid.optional(),
   })
   .strict()
@@ -758,10 +833,23 @@ export const updateAlertInput = z
     dropPercent: alertParams.dropPercent.optional(),
     historicalWindowDays: alertParams.historicalWindowDays.optional(),
     cooldownMinutes: alertParams.cooldownMinutes.optional(),
+    minChangePaise: alertParams.minChangePaise.nullable().optional(),
+    channels: alertParams.channels.optional(),
+    repeat: alertParams.repeat.optional(),
+    expiresAt: alertParams.expiresAt.nullable().optional(),
     sourceId: uuid.nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field" });
+
+export const alertHistoryQuery = pageQuery
+  .extend({
+    /** Only these outcomes, e.g. TRIGGERED for previous triggers. */
+    outcome: z
+      .enum(["TRIGGERED", "NOT_MET", "COOLDOWN", "SUPPRESSED", "INSUFFICIENT_DATA"])
+      .optional(),
+  })
+  .strict();
 export type UpdateAlertInput = z.infer<typeof updateAlertInput>;
 
 export const alertEvaluationView = z.object({
@@ -791,6 +879,26 @@ export const alertView = z.object({
   historicalWindowDays: z.number().int().nullable(),
   cooldownMinutes: z.number().int(),
   lastEvaluatedAt: iso.nullable(),
+  minChangePaise: paise.nullable(),
+  repeat: z.boolean(),
+  expiresAt: iso.nullable(),
+  channels: z.array(deliveryChannel),
+  triggerCount: z.number().int(),
+  cancelledAt: iso.nullable(),
+  /** Current lowest delivered price of a fresh, available offer (on the alert's marketplace if set). */
+  current: z
+    .object({
+      deliveredPaise: paise,
+      marketplace: z.object({ slug: z.string(), name: z.string() }),
+      observedAt: iso,
+    })
+    .nullable(),
+  /**
+   * Target alerts: how far the price has moved from where it was when the
+   * alert started toward the target (0–10000 bp). Null without a start price
+   * or current price.
+   */
+  progressBp: z.number().int().min(0).max(10_000).nullable(),
   source: sourceRef.nullable(),
   variant: variantView,
   product: productRef,

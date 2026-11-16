@@ -511,7 +511,8 @@ describe("10–13. alert evaluation: many users, no duplicates, cooldown, prefer
     });
     beta.listings.set("beta-1", { sellingPricePaise: 1_980_000 });
     const u = await user(1);
-    const a = await alert(u.id, o.variantId, { cooldownMinutes: 60 });
+    // A repeating alert keeps watching after a trigger (cooldown applies).
+    const a = await alert(u.id, o.variantId, { cooldownMinutes: 60, repeat: true });
     alpha.listings.set(o.externalId, { sellingPricePaise: 1_990_000 });
     await evaluate(((await refresh(o.id)) as { checkId: string }).checkId);
     // Another marketplace drops further 5 minutes later: inside the cooldown.
@@ -798,4 +799,197 @@ describe("14–18. reliability: rate limits, retries, dead letters, restarts, co
     const summary = await metrics.summary(1);
     expect(summary.counters.price_changes).toBeGreaterThanOrEqual(8);
   }, 30_000);
+});
+
+describe("Phase 5.2: independent alerts, conditions, lifecycle and channels", () => {
+  const checkOf = async (offerId: string) =>
+    ((await refresh(offerId)) as { checkId: string }).checkId;
+
+  it("evaluates each user's target independently (₹30,000 vs ₹28,000 at ₹29,500)", async () => {
+    const o = await offer("mock_alpha", {}, 3_100_000);
+    const a = await user(1);
+    const b = await user(2);
+    const alertA = await alert(a.id, o.variantId, { targetPricePaise: 3_000_000n });
+    const alertB = await alert(b.id, o.variantId, { targetPricePaise: 2_800_000n });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_950_000 });
+    await evaluate(await checkOf(o.id));
+    const after = Object.fromEntries(
+      (await prisma.priceAlert.findMany()).map((x) => [x.id, x.status]),
+    );
+    expect(after).toEqual({ [alertA.id]: "TRIGGERED", [alertB.id]: "ACTIVE" });
+    const notes = await prisma.notification.findMany();
+    expect(notes.map((n) => n.userId)).toEqual([a.id]);
+    // B's own evaluation says why, without anything about A.
+    const evalB = await prisma.alertEvaluation.findFirstOrThrow({ where: { alertId: alertB.id } });
+    expect(evalB).toMatchObject({ outcome: "NOT_MET", userId: b.id });
+    expect(evalB.reason).toBe("₹29,500 is above the target of ₹28,000.");
+    expect(
+      (await prisma.priceAlert.findUniqueOrThrow({ where: { id: alertA.id } })).triggerCount,
+    ).toBe(1);
+  });
+
+  it("one-shot alerts stop after triggering until re-armed", async () => {
+    const o = await offer("mock_alpha", {}, 3_100_000);
+    const u = await user(1);
+    const a = await alert(u.id, o.variantId, { targetPricePaise: 3_000_000n });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_950_000 });
+    await evaluate(await checkOf(o.id));
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_900_000 });
+    clock = new Date(clock.getTime() + 2 * 86_400_000);
+    const s2 = await evaluate(await checkOf(o.id));
+    expect(s2.evaluated).toBe(0); // TRIGGERED alerts aren't evaluated
+    // The user re-arms it (API: resume) → it notifies again on the next qualifying check.
+    await prisma.priceAlert.update({
+      where: { id: a.id },
+      data: { status: "ACTIVE", lastTriggeredPricePaise: null, lastEvaluatedAt: null },
+    });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_850_000 });
+    await evaluate(await checkOf(o.id));
+    expect(await prisma.notification.count()).toBe(2);
+  });
+
+  it("percentage drop from the start price", async () => {
+    const o = await offer("mock_alpha", {}, 2_000_000);
+    const u = await user(1);
+    await alert(u.id, o.variantId, {
+      type: "PERCENT_DROP",
+      targetPricePaise: null,
+      dropPercentBp: 1000,
+      baselinePricePaise: 2_000_000n,
+    });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 1_850_000 }); // 7.5%
+    await evaluate(await checkOf(o.id));
+    expect(await prisma.notification.count()).toBe(0);
+    alpha.listings.set(o.externalId, { sellingPricePaise: 1_800_000 }); // 10%
+    await evaluate(await checkOf(o.id));
+    const n = await prisma.notification.findFirstOrThrow();
+    expect(n.type).toBe("PRICE_DROP");
+    expect(n.body).toContain("down 10% from ₹20,000 when your alert started");
+    expect(n.title).toMatch(/dropped 10%$/);
+  });
+
+  it("preferred-marketplace drop: only that marketplace counts, and only by the amount set", async () => {
+    const o = await offer("mock_alpha", {}, 2_000_000);
+    const betaId = await sourceId("mock_beta");
+    const ob = await prisma.productOffer.create({
+      data: {
+        productId: o.productId,
+        variantId: o.variantId,
+        sourceId: betaId,
+        externalId: "beta-pref",
+        productUrl: "https://example.com/beta-pref",
+        title: o.title,
+        sellingPricePaise: 2_000_000n,
+        stockStatus: "IN_STOCK",
+      },
+    });
+    const u = await user(1);
+    await alert(u.id, o.variantId, {
+      type: "PRICE_DROP",
+      targetPricePaise: null,
+      sourceId: betaId,
+      minChangePaise: 50_000n,
+    });
+    // A drop on another marketplace doesn't concern this alert.
+    alpha.listings.set(o.externalId, { sellingPricePaise: 1_500_000 });
+    expect((await evaluate(await checkOf(o.id))).evaluated).toBe(0);
+    // ₹300 on the preferred marketplace: below the ₹500 asked for.
+    beta.listings.set("beta-pref", { sellingPricePaise: 1_970_000 });
+    await evaluate(await checkOf(ob.id));
+    expect(await prisma.notification.count()).toBe(0);
+    beta.listings.set("beta-pref", { sellingPricePaise: 1_900_000 });
+    await evaluate(await checkOf(ob.id));
+    const n = await prisma.notification.findFirstOrThrow();
+    expect(n.title).toContain("price decreased on Mock Store Beta");
+  });
+
+  it("price change by an amount, in either direction", async () => {
+    const o = await offer("mock_alpha", {}, 2_000_000);
+    const u = await user(1);
+    await alert(u.id, o.variantId, {
+      type: "PRICE_CHANGE",
+      targetPricePaise: null,
+      minChangePaise: 100_000n,
+      repeat: true,
+      cooldownMinutes: 0,
+    });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_050_000 });
+    await evaluate(await checkOf(o.id));
+    expect(await prisma.notification.count()).toBe(0);
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_200_000 });
+    await evaluate(await checkOf(o.id));
+    expect((await prisma.notification.findFirstOrThrow()).type).toBe("PRICE_CHANGED");
+  });
+
+  it("uses only channels both the alert and the user allow", async () => {
+    const o = await offer("mock_alpha", {}, 3_100_000);
+    const u = await user(1);
+    await alert(u.id, o.variantId, { targetPricePaise: 3_000_000n, channels: ["EMAIL"] });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_950_000 });
+    await evaluate(await checkOf(o.id));
+    const n = await prisma.notification.findFirstOrThrow({ include: { deliveries: true } });
+    expect(Object.fromEntries(n.deliveries.map((d) => [d.channel, d.status]))).toEqual({
+      IN_APP: "SKIPPED",
+      EMAIL: "PENDING",
+    });
+    expect(enqueuedDeliveries).toHaveLength(1);
+  });
+
+  it("two concurrent checks can't both trigger a one-shot alert", async () => {
+    const o = await offer("mock_alpha", {}, 3_100_000);
+    const ob = await prisma.productOffer.create({
+      data: {
+        productId: o.productId,
+        variantId: o.variantId,
+        sourceId: await sourceId("mock_beta"),
+        externalId: "beta-race",
+        productUrl: "https://example.com/beta-race",
+        title: o.title,
+        sellingPricePaise: 3_100_000n,
+        stockStatus: "IN_STOCK",
+      },
+    });
+    const u = await user(1);
+    await alert(u.id, o.variantId, { targetPricePaise: 3_000_000n, cooldownMinutes: 0 });
+    alpha.listings.set(o.externalId, { sellingPricePaise: 2_950_000 });
+    beta.listings.set("beta-race", { sellingPricePaise: 2_940_000 });
+    const [c1, c2] = [await checkOf(o.id), await checkOf(ob.id)];
+    await Promise.all([evaluate(c1), evaluate(c2)]);
+    expect(await prisma.notification.count()).toBe(1);
+    const outcomes = (await prisma.alertEvaluation.findMany()).map((e) => e.outcome).sort();
+    expect(outcomes.filter((x) => x === "TRIGGERED")).toHaveLength(1);
+  });
+
+  it("expires alerts past their end date once, with an in-app notice", async () => {
+    const o = await offer("mock_alpha");
+    const u = await user(1);
+    const quiet = await user(2, { notifyInApp: false });
+    const a = await alert(u.id, o.variantId, { expiresAt: new Date(clock.getTime() + 3_600_000) });
+    await alert(quiet.id, o.variantId, {
+      status: "PAUSED",
+      expiresAt: new Date(clock.getTime() + 3_600_000),
+    });
+    const later = new Date(clock.getTime() + 2 * 3_600_000);
+    const r1 = await runCleanup({
+      prisma,
+      enqueueDelivery: async () => undefined,
+      now: () => later,
+    });
+    const r2 = await runCleanup({
+      prisma,
+      enqueueDelivery: async () => undefined,
+      now: () => later,
+    });
+    expect([r1.expiredAlerts, r2.expiredAlerts]).toEqual([2, 0]);
+    expect((await prisma.priceAlert.findUniqueOrThrow({ where: { id: a.id } })).status).toBe(
+      "EXPIRED",
+    );
+    const notes = await prisma.notification.findMany();
+    expect(notes).toHaveLength(1); // the quiet user turned in-app off
+    expect(notes[0]).toMatchObject({ userId: u.id, type: "ALERT_EXPIRED" });
+    // An expired alert is never evaluated again.
+    alpha.listings.set(o.externalId, { sellingPricePaise: 1_000_000 });
+    clock = later;
+    expect((await evaluate(await checkOf(o.id))).evaluated).toBe(0);
+  });
 });
