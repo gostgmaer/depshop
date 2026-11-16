@@ -17,11 +17,17 @@ export const NOTIFICATION_TYPES = [
   "SEARCH_FAILED",
   "PASSWORD_CHANGED",
   "NEW_SIGN_IN",
+  "SUBSCRIPTION_ACTIVATED",
+  "SUBSCRIPTION_RENEWED",
+  "PAYMENT_FAILED",
+  "SUBSCRIPTION_CANCELLED",
+  "SUBSCRIPTION_ENDED",
+  "REFUND_UPDATED",
   "SYSTEM",
 ] as const;
 export type NotificationTypeValue = (typeof NOTIFICATION_TYPES)[number];
 
-export const NOTIFICATION_CATEGORIES = ["PRICE_ALERTS", "SEARCH", "ACCOUNT"] as const;
+export const NOTIFICATION_CATEGORIES = ["PRICE_ALERTS", "SEARCH", "ACCOUNT", "BILLING"] as const;
 export type NotificationCategoryValue = (typeof NOTIFICATION_CATEGORIES)[number];
 
 export const CATEGORY_OF: Record<NotificationTypeValue, NotificationCategoryValue> = {
@@ -34,6 +40,12 @@ export const CATEGORY_OF: Record<NotificationTypeValue, NotificationCategoryValu
   SEARCH_FAILED: "SEARCH",
   PASSWORD_CHANGED: "ACCOUNT",
   NEW_SIGN_IN: "ACCOUNT",
+  SUBSCRIPTION_ACTIVATED: "BILLING",
+  SUBSCRIPTION_RENEWED: "BILLING",
+  PAYMENT_FAILED: "BILLING",
+  SUBSCRIPTION_CANCELLED: "BILLING",
+  SUBSCRIPTION_ENDED: "BILLING",
+  REFUND_UPDATED: "BILLING",
   SYSTEM: "ACCOUNT",
 };
 
@@ -55,6 +67,8 @@ export const DEFAULT_CATEGORY_CHANNELS: Record<NotificationCategoryValue, Channe
   SEARCH: { inApp: true, email: false, push: false },
   // Account emails are sent by the EasyDev account service (IAM), not DealMind.
   ACCOUNT: { inApp: true, email: false, push: true },
+  // Transactional: always shown in the app.
+  BILLING: { inApp: true, email: true, push: false },
 };
 
 /** "HH:MM", 24-hour. */
@@ -87,6 +101,7 @@ export const notificationPreferences = z.object({
     PRICE_ALERTS: channelSet,
     SEARCH: channelSet,
     ACCOUNT: channelSet,
+    BILLING: channelSet,
   }),
   quietHours: quietHours.nullable(),
   timezone: timeZone,
@@ -106,6 +121,7 @@ export const updateNotificationPreferencesInput = z
         PRICE_ALERTS: channelSet.partial().strict(),
         SEARCH: channelSet.partial().strict(),
         ACCOUNT: channelSet.partial().strict(),
+        BILLING: channelSet.partial().strict(),
       })
       .partial()
       .strict(),
@@ -133,6 +149,8 @@ export function categoryChannelsOf(raw: unknown): Record<NotificationCategoryVal
   }
   // Account notices are always in-app; DealMind never emails them.
   out.ACCOUNT = { ...out.ACCOUNT, inApp: true, email: false };
+  // Billing notices are transactional: always in-app.
+  out.BILLING = { ...out.BILLING, inApp: true };
   return out;
 }
 

@@ -43,6 +43,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@dealmind/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
       '@dealmind/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
@@ -277,6 +280,21 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.15
+
+  packages/billing:
+    dependencies:
+      '@dealmind/db':
+        specifier: workspace:*
+        version: link:../db
+      '@dealmind/notifications':
+        specifier: workspace:*
+        version: link:../notifications
+      '@dealmind/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
 
   packages/catalog:
     dependencies:

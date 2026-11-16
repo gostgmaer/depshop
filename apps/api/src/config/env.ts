@@ -100,6 +100,25 @@ const envSchema = z
       .regex(/^[A-Za-z0-9_-]{80,100}$/, "VAPID_PUBLIC_KEY must be a base64url P-256 key")
       .optional(),
 
+    // ── Billing (Phase 6.1) ────────────────────────────────────────────
+    /**
+     * "easydev-payments": the shared EasyDev payment service (Razorpay lives there).
+     * "sandbox": test double, no money moves (refused in production).
+     * "none": plans are shown but can't be bought.
+     */
+    BILLING_PROVIDER: z.enum(["none", "easydev-payments", "sandbox"]).default("none"),
+    PAYMENT_SERVICE_URL: z.string().url().optional(),
+    /** The payment service's service key (its API_KEY_HASH is the SHA-256 of this). */
+    PAYMENT_SERVICE_API_KEY: z.string().optional(),
+    /** The payment service's tenant for EasyDev customers (a config constant; DealMind has no tenancy). */
+    PAYMENT_TENANT_ID: z.string().min(1).default("easydev"),
+    /** IAM application id DealMind's plans are registered under in the payment service. */
+    PAYMENT_APPLICATION_ID: z.string().min(1).default("dealmind"),
+    /** Verifies the payment service's outbound webhooks (same value as its OUTBOUND_WEBHOOK_TARGETS secret). */
+    PAYMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
+    /** Days of paid access kept after a failed renewal while payment is retried. */
+    BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(14).default(3),
+
     // ── Shared EasyDev file-upload service (optional until used) ───────
     FILE_SERVICE_URL: z.string().url().optional(),
     FILE_SERVICE_HMAC_SECRET: z.string().optional(),
@@ -141,6 +160,23 @@ const envSchema = z
           message: "must not be false in production",
         });
       }
+    }
+    if (env.BILLING_PROVIDER === "sandbox" && env.NODE_ENV === "production") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["BILLING_PROVIDER"],
+        message: "the sandbox billing provider is not allowed in production",
+      });
+    }
+    if (
+      env.BILLING_PROVIDER === "easydev-payments" &&
+      (!env.PAYMENT_SERVICE_URL || !env.PAYMENT_SERVICE_API_KEY)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["BILLING_PROVIDER"],
+        message: "easydev-payments needs PAYMENT_SERVICE_URL and PAYMENT_SERVICE_API_KEY",
+      });
     }
     if (env.SESSION_IDLE_TIMEOUT_DAYS > env.SESSION_TTL_DAYS) {
       ctx.addIssue({

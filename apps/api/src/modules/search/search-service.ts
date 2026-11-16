@@ -27,7 +27,7 @@ import type { Redis } from "ioredis";
 import type { CacheService } from "../../lib/cache.js";
 import { iso, paginated } from "../../utils/http.js";
 import { toOfferView } from "../catalog/catalog-service.js";
-import type { PlanService } from "../subscriptions/plan-service.js";
+import type { EntitlementService } from "@dealmind/billing";
 
 const TERMINAL = new Set<string>(TERMINAL_SEARCH_STATUSES);
 
@@ -124,7 +124,7 @@ export class SearchService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly jobs: JobQueues,
-    private readonly plans: PlanService,
+    private readonly entitlements: EntitlementService,
     private readonly cache: CacheService,
     private readonly log: Pick<FastifyBaseLogger, "error">,
     private readonly offerStaleAfterMs = 24 * 3_600_000,
@@ -190,15 +190,26 @@ export class SearchService {
     const duplicate = recent.find((r) => canonical(r.filters ?? {}) === wanted);
     if (duplicate) return toSearchView(duplicate);
 
-    await this.plans.assertWithinLimit(userId, "searchesPerDay");
-    const search = await this.prisma.search.create({
-      data: { userId, query: input.query, filters: input.filters ?? {}, status: "PENDING" },
-      include: { _count: { select: { results: true } } },
+    // The daily counter and the search commit together: concurrent requests
+    // can't exceed the limit, and a failed insert doesn't use up a search.
+    const search = await this.prisma.$transaction(async (tx) => {
+      await this.entitlements.consumeUsage(tx, userId, "searches");
+      const s = await tx.search.create({
+        data: { userId, query: input.query, filters: input.filters ?? {}, status: "PENDING" },
+        include: { _count: { select: { results: true } } },
+      });
+      await tx.usageRecord.create({ data: { userId, metric: "SEARCH" } });
+      return s;
     });
-    await this.prisma.usageRecord.create({ data: { userId, metric: "SEARCH" } });
+    // Paid plans' searches are queued ahead of free ones (BullMQ: 1 = highest).
+    const priority = (await this.entitlements.checkEntitlement(userId, "prioritySearch")) ? 1 : 10;
 
     try {
-      await this.jobs.enqueue(QueueName.shoppingSearch, { searchId: search.id, userId });
+      await this.jobs.enqueue(
+        QueueName.shoppingSearch,
+        { searchId: search.id, userId },
+        { priority },
+      );
     } catch (err) {
       // Never leave a search waiting for a job that does not exist.
       this.log.error({ err, searchId: search.id }, "Failed to enqueue search job");

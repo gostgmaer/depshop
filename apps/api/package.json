@@ -11,9 +11,11 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
-    "test:contract": "dotenv -e ../../.env -- vitest run -c vitest.contract.config.ts"
+    "test:contract": "dotenv -e ../../.env -- vitest run -c vitest.contract.config.ts",
+    "billing:sync-plans": "tsx --env-file=../../.env src/scripts/billing-sync-plans.ts"
   },
   "dependencies": {
+    "@dealmind/billing": "workspace:*",
     "@dealmind/catalog": "workspace:*",
     "@dealmind/connectors": "workspace:*",
     "@dealmind/db": "workspace:*",

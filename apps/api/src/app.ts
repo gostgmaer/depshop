@@ -19,6 +19,8 @@ import { registerErrorHandler } from "./lib/error-handler.js";
 import {
   type JobQueues,
   JobQueues as JobQueuesImpl,
+  NOTIFICATION_DELIVERY_JOB_OPTIONS,
+  QueueName,
   redisConnectionFromUrl,
 } from "@dealmind/queue";
 import type { Redis } from "ioredis";
@@ -69,8 +71,20 @@ import { NotificationService } from "./modules/notifications/notification-servic
 import { RealtimeHub } from "./modules/notifications/realtime-hub.js";
 import { SearchService } from "./modules/search/search-service.js";
 import { searchRoutes } from "./modules/search/search-routes.js";
-import { PlanService } from "./modules/subscriptions/plan-service.js";
-import { subscriptionRoutes } from "./modules/subscriptions/subscription-routes.js";
+import {
+  type BillingProvider,
+  EasyDevPaymentsProvider,
+  EntitlementService,
+  SandboxBillingProvider,
+  SubscriptionSync,
+  provisionProviderPlans,
+} from "@dealmind/billing";
+import {
+  billingRoutes,
+  billingWebhookRoutes,
+  usageRoutes,
+} from "./modules/billing/billing-routes.js";
+import { BillingService } from "./modules/billing/billing-service.js";
 import { WatchlistService } from "./modules/watchlists/watchlist-service.js";
 import { watchlistRoutes } from "./modules/watchlists/watchlist-routes.js";
 import { envelopePlugin } from "./plugins/envelope.js";
@@ -100,6 +114,12 @@ import { csrfPlugin } from "./plugins/csrf.js";
 
 declare module "fastify" {
   interface FastifyInstance {
+    /** Billing services (exposed for tests and the internal API). */
+    billing: {
+      service: BillingService;
+      provider: BillingProvider | null;
+      entitlements: EntitlementService;
+    };
     /** Shared EasyDev platform services. notifications/files are null when not configured. */
     platform: {
       iam: IamClient;
@@ -128,6 +148,10 @@ export interface AppDeps {
   sessionTouchIntervalMs?: number;
   /** Connector registry for the internal API (tests inject scripted connectors). */
   connectorRegistry?: ConnectorRegistry;
+  /** Billing provider override (tests inject the sandbox); otherwise chosen by BILLING_PROVIDER. */
+  billingProvider?: BillingProvider | null;
+  /** Clock override for billing (tests). */
+  billingNow?: () => Date;
 }
 
 function trustProxy(value: string): boolean | string {
@@ -301,12 +325,59 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       app.log.warn({ err: (err as Error).message }, "connector metrics unavailable"),
     ),
   });
-  const plans = new PlanService(prisma);
+  const entitlements = new EntitlementService(prisma, {
+    graceDays: env.BILLING_GRACE_DAYS,
+    ...(deps.billingNow ? { now: deps.billingNow } : {}),
+  });
+  const billingProvider: BillingProvider | null =
+    deps.billingProvider !== undefined
+      ? deps.billingProvider
+      : env.BILLING_PROVIDER === "easydev-payments"
+        ? new EasyDevPaymentsProvider({
+            baseUrl: env.PAYMENT_SERVICE_URL!,
+            apiKey: env.PAYMENT_SERVICE_API_KEY!,
+            tenantId: env.PAYMENT_TENANT_ID,
+            applicationId: env.PAYMENT_APPLICATION_ID,
+            ...(deps.fetch ? { fetch: deps.fetch } : {}),
+          })
+        : env.BILLING_PROVIDER === "sandbox"
+          ? new SandboxBillingProvider()
+          : null;
+  // The in-memory sandbox registers its plans at startup; the real service is
+  // provisioned explicitly (pnpm --filter @dealmind/api billing:sync-plans).
+  if (billingProvider instanceof SandboxBillingProvider)
+    await provisionProviderPlans(prisma, entitlements, billingProvider);
+  const billingSync = billingProvider
+    ? new SubscriptionSync({
+        prisma,
+        provider: billingProvider,
+        entitlements,
+        graceDays: env.BILLING_GRACE_DAYS,
+        realtime: { redis, prefix: env.REDIS_KEY_PREFIX },
+        enqueueDelivery: async (deliveryId, notBefore) => {
+          const delay = notBefore ? Math.max(0, notBefore.getTime() - Date.now()) : 0;
+          await jobs.enqueue(
+            QueueName.notificationDelivery,
+            { deliveryId },
+            { ...NOTIFICATION_DELIVERY_JOB_OPTIONS, ...(delay ? { delay } : {}) },
+          );
+        },
+        ...(deps.billingNow ? { now: deps.billingNow } : {}),
+      })
+    : null;
+  const billing = new BillingService(prisma, entitlements, billingProvider, billingSync, {
+    applicationId: env.PAYMENT_APPLICATION_ID,
+    webhookSecret: env.PAYMENT_WEBHOOK_SECRET ?? null,
+    graceDays: env.BILLING_GRACE_DAYS,
+    log: app.log,
+    ...(deps.billingNow ? { now: deps.billingNow } : {}),
+  });
+  app.decorate("billing", { service: billing, provider: billingProvider, entitlements });
   const pricing = new PricingService(prisma);
   const search = new SearchService(
     prisma,
     jobs,
-    plans,
+    entitlements,
     cache,
     app.log,
     env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
@@ -325,8 +396,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         : {}),
     },
   );
-  const watchlists = new WatchlistService(prisma, plans, env.CATALOG_OFFER_STALE_HOURS * 3_600_000);
-  const alerts = new AlertService(prisma, plans);
+  const watchlists = new WatchlistService(
+    prisma,
+    entitlements,
+    env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+  );
+  const alerts = new AlertService(prisma, entitlements);
 
   await app.register(authPlugin, { sessions, cookies, secureCookies: env.COOKIE_SECURE });
   await app.register(healthRoutes, {
@@ -401,10 +476,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         notifications: notificationService,
         vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
       });
-      await v1.register(subscriptionRoutes, { prefix: "/subscriptions", plans });
+      await v1.register(billingRoutes, { prefix: "/billing", billing });
+      await v1.register(usageRoutes, { prefix: "/usage", billing });
     },
     { prefix: "/api/v1" },
   );
+
+  // Payment-service webhooks: outside /api (signature-authenticated, raw body).
+  await app.register(billingWebhookRoutes, { prefix: "/webhooks", billing });
 
   // Internal service API for the Python agent: only when explicitly configured.
   if (env.INTERNAL_API_TOKEN && env.AGENT_USER_CONTEXT_SECRET) {

@@ -34,9 +34,11 @@ describe("POST /api/v1/search", () => {
     expect(job?.data).toEqual({ searchId: search.id, userId });
     // Re-enqueueing the same logical job is a no-op (idempotent).
     await ctx.jobs.enqueue(QueueName.shoppingSearch, { searchId: search.id, userId });
-    expect(await ctx.jobs.queue(QueueName.shoppingSearch).getJobCounts("waiting")).toMatchObject({
-      waiting: 1,
-    });
+    // Searches are queued with a plan priority (free: 10), so BullMQ lists them as prioritized.
+    expect(
+      await ctx.jobs.queue(QueueName.shoppingSearch).getJobCounts("waiting", "prioritized"),
+    ).toMatchObject({ waiting: 0, prioritized: 1 });
+    expect(job?.opts.priority).toBe(10);
   });
 
   it("keeps searches private to their owner", async () => {

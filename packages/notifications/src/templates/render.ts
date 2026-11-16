@@ -62,12 +62,19 @@ const CTA: Partial<Record<NotificationTypeValue, string>> = {
   ALERT_EXPIRED: "Create a new alert",
   SEARCH_COMPLETED: "See results",
   SEARCH_FAILED: "Open search",
+  PAYMENT_FAILED: "Open billing",
+  SUBSCRIPTION_ACTIVATED: "Open billing",
+  SUBSCRIPTION_RENEWED: "Open billing",
+  SUBSCRIPTION_CANCELLED: "Open billing",
+  SUBSCRIPTION_ENDED: "See plans",
+  REFUND_UPDATED: "Open billing",
 };
 
 const CATEGORY_LABEL: Record<NotificationCategoryValue, string> = {
   PRICE_ALERTS: "price alerts",
   SEARCH: "search updates",
   ACCOUNT: "account notices",
+  BILLING: "billing notices",
 };
 
 /** Price facts shown in the email, from the notification's stored data only. */

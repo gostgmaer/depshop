@@ -11,7 +11,12 @@ import {
 } from "@dealmind/shared";
 import { type NotificationEvent, notificationEvent } from "../events/events.js";
 
-export type NotificationSourceValue = "ALERT_EVALUATION" | "ALERT_EXPIRY" | "SEARCH" | "ACCOUNT";
+export type NotificationSourceValue =
+  | "ALERT_EVALUATION"
+  | "ALERT_EXPIRY"
+  | "SEARCH"
+  | "ACCOUNT"
+  | "BILLING";
 
 export interface NotificationDraft {
   userId: string;
@@ -123,6 +128,53 @@ export function buildNotification(input: NotificationEvent): NotificationDraft {
         link: "/settings/security",
         data: { at: e.at },
       });
+    case "billing.subscription": {
+      const end = e.periodEnd ? dateText.format(new Date(e.periodEnd)) : null;
+      const copy: Record<typeof e.change, [NotificationTypeValue, string, string]> = {
+        activated: [
+          "SUBSCRIPTION_ACTIVATED",
+          `Your ${e.planName} plan is active`,
+          end ? `Payment confirmed. Your plan renews on ${end}.` : "Payment confirmed.",
+        ],
+        renewed: [
+          "SUBSCRIPTION_RENEWED",
+          `Your ${e.planName} plan renewed`,
+          end ? `Payment received. Next renewal: ${end}.` : "Payment received.",
+        ],
+        payment_failed: [
+          "PAYMENT_FAILED",
+          `Payment for your ${e.planName} plan failed`,
+          e.graceUntil
+            ? `We'll retry the payment. Your ${e.planName} features stay on until ${dateText.format(new Date(e.graceUntil))}; update your payment method to avoid losing them.`
+            : "We'll retry the payment. Update your payment method to keep your plan.",
+        ],
+        cancel_scheduled: [
+          "SUBSCRIPTION_CANCELLED",
+          `Your ${e.planName} plan will end`,
+          end ? `It won't renew. You keep ${e.planName} features until ${end}.` : "It won't renew.",
+        ],
+        ended: [
+          "SUBSCRIPTION_ENDED",
+          `Your ${e.planName} plan has ended`,
+          "You're on the Free plan now. You can upgrade again any time.",
+        ],
+        refund: [
+          "REFUND_UPDATED",
+          "Your refund was updated",
+          "See your billing page for the payment and refund status.",
+        ],
+      };
+      const [type, title, body] = copy[e.change];
+      return draft(e, type, {
+        sourceType: "BILLING",
+        sourceId: e.sourceKey,
+        dedupeKey: `billing:${e.change}:${e.sourceKey}`,
+        title,
+        body,
+        link: "/billing",
+        data: { subscriptionId: e.subscriptionId, change: e.change, periodEnd: e.periodEnd },
+      });
+    }
     case "account.new_sign_in":
       return draft(e, "NEW_SIGN_IN", {
         sourceType: "ACCOUNT",

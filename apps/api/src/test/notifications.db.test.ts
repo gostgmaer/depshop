@@ -202,6 +202,7 @@ describe("preferences", () => {
         PRICE_ALERTS: { inApp: true, email: true, push: true },
         SEARCH: { inApp: true, email: false, push: false },
         ACCOUNT: { inApp: true, email: false, push: true },
+        BILLING: { inApp: true, email: true, push: false },
       },
       quietHours: null,
       timezone: "Asia/Kolkata",

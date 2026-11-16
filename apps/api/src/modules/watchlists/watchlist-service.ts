@@ -13,7 +13,7 @@ import {
 } from "@dealmind/shared";
 import { paginated } from "../../utils/http.js";
 import { toVariantView } from "../catalog/catalog-service.js";
-import type { PlanService } from "../subscriptions/plan-service.js";
+import type { EntitlementService } from "@dealmind/billing";
 
 const itemInclude = {
   variant: {
@@ -34,7 +34,7 @@ const MOVEMENT_DAYS = 7 as const;
 export class WatchlistService {
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly plans: PlanService,
+    private readonly entitlements: EntitlementService,
     /** Offers not observed for this long are excluded from lowest prices. */
     private readonly offerStaleAfterMs = 24 * 3_600_000,
   ) {}
@@ -65,11 +65,18 @@ export class WatchlistService {
   }
 
   async create(userId: string, name: string) {
-    await this.plans.assertWithinLimit(userId, "watchlists");
     try {
-      const w = await this.prisma.watchlist.create({
-        data: { userId, name },
-        include: { _count: { select: { items: true } } },
+      const w = await this.prisma.$transaction(async (tx) => {
+        await this.entitlements.enforceGauge(
+          tx,
+          userId,
+          "watchlists",
+          this.entitlements.gaugeCounts(tx, userId).watchlists,
+        );
+        return tx.watchlist.create({
+          data: { userId, name },
+          include: { _count: { select: { items: true } } },
+        });
       });
       return this.view(w);
     } catch (err) {
@@ -243,8 +250,17 @@ export class WatchlistService {
     const variant = await this.prisma.productVariant.count({ where: { id: variantId } });
     if (!variant) throw AppError.notFound("Product variant");
     try {
-      await this.prisma.watchlistItem.create({
-        data: { userId, watchlistId, variantId, note: note ?? null },
+      await this.prisma.$transaction(async (tx) => {
+        // Bulk tracking: products across all watchlists, per plan.
+        await this.entitlements.enforceGauge(
+          tx,
+          userId,
+          "trackedProducts",
+          this.entitlements.gaugeCounts(tx, userId).trackedProducts,
+        );
+        await tx.watchlistItem.create({
+          data: { userId, watchlistId, variantId, note: note ?? null },
+        });
       });
     } catch (err) {
       if (isUniqueViolation(err))

@@ -918,30 +918,4 @@ export const alertView = z.object({
 
 // ── Subscriptions & usage (user-owned) ────────────────────────────────────
 
-export const planView = z.object({
-  code: PlanCode,
-  name: z.string(),
-  monthlyPricePaise: paise,
-  limits: z.object({
-    searchesPerDay: z.number().int(),
-    activeAlerts: z.number().int(),
-    watchlists: z.number().int(),
-  }),
-});
-export type PlanView = z.infer<typeof planView>;
-
-export const subscriptionView = z.object({
-  plan: planView,
-  status: z.enum(["ACTIVE", "PAST_DUE", "CANCELED"]),
-  currentPeriodStart: iso,
-  currentPeriodEnd: iso.nullable(),
-  cancelAtPeriodEnd: z.boolean(),
-});
-
-const usageCounter = z.object({ used: z.number().int(), limit: z.number().int() });
-export const usageView = z.object({
-  plan: PlanCode,
-  searchesToday: usageCounter.extend({ resetsAt: iso }),
-  activeAlerts: usageCounter,
-  watchlists: usageCounter,
-});
+// Plan, subscription and usage views moved to billing-contracts.ts (Phase 6.1).

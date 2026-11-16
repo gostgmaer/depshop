@@ -148,8 +148,22 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<SeedSumma
   for (const plan of plans) {
     await prisma.subscriptionPlan.upsert({
       where: { code: plan.code },
-      create: { ...plan, limits: { ...plan.limits } },
+      create: {
+        ...plan,
+        limits: { ...plan.limits },
+        features: { ...plan.features },
+      },
       update: {}, // keep admin-edited prices/limits
+    });
+    // Rows seeded before Phase 6.1: fill the new fields once (never overwrites edits).
+    await prisma.subscriptionPlan.updateMany({
+      where: { code: plan.code, description: "" },
+      data: {
+        description: plan.description,
+        annualPricePaise: plan.annualPricePaise,
+        features: { ...plan.features },
+        sortOrder: plan.sortOrder,
+      },
     });
   }
 

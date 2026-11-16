@@ -75,6 +75,8 @@ model User {
   alertEvaluations       AlertEvaluation[]
   notifications          Notification[]
   pushSubscriptions      PushSubscription[]
+  checkoutSessions       CheckoutSession[]
+  usageCounters          UsageCounter[]
   notificationDeliveries NotificationDelivery[]
   agentRuns              AgentRun[]
   subscription           Subscription?
@@ -837,6 +839,12 @@ enum NotificationType {
   SEARCH_FAILED
   PASSWORD_CHANGED
   NEW_SIGN_IN
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_RENEWED
+  PAYMENT_FAILED
+  SUBSCRIPTION_CANCELLED
+  SUBSCRIPTION_ENDED
+  REFUND_UPDATED
   SYSTEM
 }
 
@@ -844,6 +852,7 @@ enum NotificationCategory {
   PRICE_ALERTS
   SEARCH
   ACCOUNT
+  BILLING
 }
 
 /// The verified event a notification came from.
@@ -852,6 +861,7 @@ enum NotificationSource {
   ALERT_EXPIRY
   SEARCH
   ACCOUNT
+  BILLING
 }
 
 model Notification {
@@ -993,46 +1003,118 @@ enum PlanCode {
   BUSINESS
 }
 
-/// Global plan catalogue (admin-managed).
+enum BillingInterval {
+  MONTHLY
+  ANNUAL
+}
+
+/// Global plan catalogue (admin-managed): the single place prices, limits and
+/// features are configured (validated against DEFAULT_PLANS' shape).
 model SubscriptionPlan {
   code              PlanCode @id
   name              String
+  description       String   @default("")
   monthlyPricePaise BigInt
-  /// Usage limits, e.g. { "searchesPerDay": 20, "activeAlerts": 5, "watchlists": 2 }.
+  /// Null: no annual option.
+  annualPricePaise  BigInt?
+  /// Numeric limits (see PlanLimits in @dealmind/shared).
   limits            Json
+  /// On/off features (see PlanFeatures in @dealmind/shared).
+  features          Json     @default("{}")
+  sortOrder         Int      @default(0)
+  /// Plan ids in the shared EasyDev payment service per interval,
+  /// e.g. { "MONTHLY": "<uuid>", "ANNUAL": "<uuid>" }; set by billing:sync-plans.
+  providerPlanIds   Json     @default("{}")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  subscriptions Subscription[]
+  subscriptions    Subscription[]
+  checkoutSessions CheckoutSession[]
 }
 
 enum SubscriptionStatus {
+  TRIALING
   ACTIVE
   PAST_DUE
-  CANCELED
+  CANCELLED
+  EXPIRED
+  PAUSED
 }
 
 /// Subscriptions belong to individual users (one current subscription each).
+/// For paid plans this is a mirror of the shared payment service's record,
+/// written only from state fetched server-to-server from that service.
 model Subscription {
-  id                 String             @id @default(uuid(7)) @db.Uuid
-  userId             String             @unique @db.Uuid
-  planCode           PlanCode           @default(FREE)
-  status             SubscriptionStatus @default(ACTIVE)
-  currentPeriodStart DateTime           @default(now())
-  currentPeriodEnd   DateTime?
-  cancelAtPeriodEnd  Boolean            @default(false)
-  provider           String?
-  providerRef        String?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+  id                     String             @id @default(uuid(7)) @db.Uuid
+  userId                 String             @unique @db.Uuid
+  planCode               PlanCode           @default(FREE)
+  status                 SubscriptionStatus @default(ACTIVE)
+  interval               BillingInterval?
+  currentPeriodStart     DateTime           @default(now())
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  trialEnd               DateTime?
+  /// First time the subscription was seen PAST_DUE (start of the grace period).
+  pastDueSince           DateTime?
+  cancelledAt            DateTime?
+  provider               String?
+  /// The payment service's subscription id.
+  providerSubscriptionId String?
+  lastSyncedAt           DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan          SubscriptionPlan @relation(fields: [planCode], references: [code], onDelete: Restrict)
   billingEvents BillingEvent[]
 
-  @@unique([provider, providerRef])
+  @@unique([provider, providerSubscriptionId])
   @@index([planCode, status])
+  @@index([status, lastSyncedAt])
+}
+
+enum CheckoutStatus {
+  PENDING
+  /// Payment verified by the provider; waiting for its subscription record.
+  VERIFYING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+/// One attempt to buy a paid plan (user-owned). The amount is computed by the
+/// server from the plan; the plan is granted only from the provider's
+/// verified state, never from this row or the browser.
+model CheckoutSession {
+  id                    String          @id @default(uuid(7)) @db.Uuid
+  userId                String          @db.Uuid
+  planCode              PlanCode
+  interval              BillingInterval
+  amountPaise           BigInt
+  currency              String          @default("INR")
+  provider              String
+  status                CheckoutStatus  @default(PENDING)
+  providerTransactionId String?
+  providerAttemptId     String?
+  /// Razorpay public key id for Checkout (not a secret).
+  providerKeyId         String?
+  /// Razorpay subscription id (what Checkout opens), or the sandbox order id.
+  providerOrderId       String?
+  failureReason         String?
+  expiresAt             DateTime
+  completedAt           DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan SubscriptionPlan @relation(fields: [planCode], references: [code], onDelete: Restrict)
+
+  @@unique([id, userId])
+  @@unique([provider, providerOrderId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
 }
 
 enum UsageMetric {
@@ -1040,6 +1122,7 @@ enum UsageMetric {
   AI_INPUT_TOKENS
   AI_OUTPUT_TOKENS
   ALERT_CREATED
+  EXPORT
 }
 
 /// Append-only metering, aggregated per period to enforce plan limits.
@@ -1053,6 +1136,21 @@ model UsageRecord {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, metric, occurredAt])
+}
+
+/// Atomic per-period usage counters (one row per user, metric and window).
+/// Consumption is a single conditional upsert, so concurrent requests can't
+/// exceed the limit. Windows are IST calendar days / months.
+model UsageCounter {
+  userId      String      @db.Uuid
+  metric      UsageMetric
+  periodStart DateTime
+  quantity    Int         @default(0)
+  updatedAt   DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, metric, periodStart])
 }
 
 model AffiliateClick {
@@ -1113,26 +1211,43 @@ enum BillingEventType {
   PAYMENT_SUCCEEDED
   PAYMENT_FAILED
   REFUND_ISSUED
+  /// A provider webhook (verified signature) before it is classified.
+  WEBHOOK_RECEIVED
+}
+
+enum BillingEventProcessing {
+  RECEIVED
+  PROCESSED
+  /// Verified but not applicable (e.g. unknown customer).
+  IGNORED
+  FAILED
 }
 
 /// Immutable ledger of billing events from the payment provider.
 /// Restrict on user delete: financial records must be retained, so users with
 /// billing history are anonymised/suspended rather than hard-deleted.
 model BillingEvent {
-  id              String           @id @default(uuid(7)) @db.Uuid
-  userId          String           @db.Uuid
-  subscriptionId  String?          @db.Uuid
-  type            BillingEventType
-  provider        String
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  /// Null for a verified event whose customer isn't a DealMind user.
+  userId           String?                @db.Uuid
+  subscriptionId   String?                @db.Uuid
+  type             BillingEventType
+  provider         String
   /// Provider's event id: makes webhook processing idempotent.
-  providerEventId String
-  amountPaise     BigInt?
-  planCode        PlanCode?
-  payload         Json             @default("{}")
-  occurredAt      DateTime
-  createdAt       DateTime         @default(now())
+  providerEventId  String
+  /// The provider's own event type (e.g. "subscription.updated").
+  eventType        String                 @default("")
+  processingStatus BillingEventProcessing @default(RECEIVED)
+  processedAt      DateTime?
+  error            String?
+  attempts         Int                    @default(0)
+  amountPaise      BigInt?
+  planCode         PlanCode?
+  payload          Json                   @default("{}")
+  occurredAt       DateTime
+  createdAt        DateTime               @default(now())
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Restrict)
   subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
 
   @@unique([provider, providerEventId])

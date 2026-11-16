@@ -30,7 +30,7 @@ import {
 } from "@dealmind/shared";
 import { iso, paginated } from "../../utils/http.js";
 import { toVariantView } from "../catalog/catalog-service.js";
-import type { PlanService } from "../subscriptions/plan-service.js";
+import type { EntitlementService } from "@dealmind/billing";
 
 const include = {
   source: { select: { id: true, slug: true, name: true, isSample: true } },
@@ -60,7 +60,7 @@ interface CurrentPrice {
 export class AlertService {
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly plans: PlanService,
+    private readonly entitlements: EntitlementService,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -181,7 +181,6 @@ export class AlertService {
   }
 
   async create(userId: string, input: CreateAlertInput) {
-    await this.plans.assertWithinLimit(userId, "activeAlerts");
     if (!(await this.prisma.productVariant.count({ where: { id: input.variantId } }))) {
       throw AppError.notFound("Product variant");
     }
@@ -196,31 +195,41 @@ export class AlertService {
           )?.deliveredPaise ?? null)
         : null;
     try {
-      const alert = await this.prisma.priceAlert.create({
-        data: {
+      const alert = await this.prisma.$transaction(async (tx) => {
+        // Locked count + insert in one transaction: no over-limit under concurrency.
+        await this.entitlements.enforceGauge(
+          tx,
           userId,
-          variantId: input.variantId,
-          type: input.type,
-          targetPricePaise:
-            param === "target" && input.targetPricePaise !== undefined
-              ? BigInt(input.targetPricePaise)
-              : null,
-          dropPercentBp: param === "drop" && input.dropPercent ? input.dropPercent * 100 : null,
-          baselinePricePaise: start,
-          historicalWindowDays: param === "window" ? (input.historicalWindowDays ?? 90) : null,
-          minChangePaise:
-            param === "minChange" && input.minChangePaise ? BigInt(input.minChangePaise) : null,
-          ...(input.cooldownMinutes !== undefined
-            ? { cooldownMinutes: input.cooldownMinutes }
-            : {}),
-          ...(input.channels ? { channels: [...new Set(input.channels)] } : {}),
-          ...(input.repeat !== undefined ? { repeat: input.repeat } : {}),
-          ...(input.expiresAt ? { expiresAt: new Date(input.expiresAt) } : {}),
-          sourceId,
-        },
-        include,
+          "activeAlerts",
+          this.entitlements.gaugeCounts(tx, userId).activeAlerts,
+        );
+        const created = await tx.priceAlert.create({
+          data: {
+            userId,
+            variantId: input.variantId,
+            type: input.type,
+            targetPricePaise:
+              param === "target" && input.targetPricePaise !== undefined
+                ? BigInt(input.targetPricePaise)
+                : null,
+            dropPercentBp: param === "drop" && input.dropPercent ? input.dropPercent * 100 : null,
+            baselinePricePaise: start,
+            historicalWindowDays: param === "window" ? (input.historicalWindowDays ?? 90) : null,
+            minChangePaise:
+              param === "minChange" && input.minChangePaise ? BigInt(input.minChangePaise) : null,
+            ...(input.cooldownMinutes !== undefined
+              ? { cooldownMinutes: input.cooldownMinutes }
+              : {}),
+            ...(input.channels ? { channels: [...new Set(input.channels)] } : {}),
+            ...(input.repeat !== undefined ? { repeat: input.repeat } : {}),
+            ...(input.expiresAt ? { expiresAt: new Date(input.expiresAt) } : {}),
+            sourceId,
+          },
+          include,
+        });
+        await tx.usageRecord.create({ data: { userId, metric: "ALERT_CREATED" } });
+        return created;
       });
-      await this.prisma.usageRecord.create({ data: { userId, metric: "ALERT_CREATED" } });
       return (await this.views([alert]))[0]!;
     } catch (err) {
       if (isUniqueViolation(err)) throw AppError.conflict(DUPLICATE);
@@ -259,10 +268,21 @@ export class AlertService {
     userId: string,
     alert: AlertRow,
     data: Prisma.PriceAlertUpdateManyMutationInput,
+    /** For a move to ACTIVE: the plan's active-alert limit, checked atomically. */
+    gauge = false,
   ) {
-    const res = await this.prisma.priceAlert.updateMany({
-      where: { id: alert.id, userId, status: alert.status },
-      data,
+    const res = await this.prisma.$transaction(async (tx) => {
+      if (gauge)
+        await this.entitlements.enforceGauge(
+          tx,
+          userId,
+          "activeAlerts",
+          this.entitlements.gaugeCounts(tx, userId).activeAlerts,
+        );
+      return tx.priceAlert.updateMany({
+        where: { id: alert.id, userId, status: alert.status },
+        data,
+      });
     });
     if (res.count === 0)
       throw new AppError(ErrorCode.CONFLICT, "The alert changed meanwhile; reload and try again");
@@ -340,14 +360,18 @@ export class AlertService {
         status: alert.status,
         action: "resume",
       });
-    await this.plans.assertWithinLimit(userId, "activeAlerts");
-    return this.move(userId, alert, {
-      status: "ACTIVE",
-      // Re-armed: the next time the condition holds notifies again.
-      ...(alert.status === "TRIGGERED"
-        ? { lastTriggeredPricePaise: null, lastEvaluatedAt: null }
-        : {}),
-    });
+    return this.move(
+      userId,
+      alert,
+      {
+        status: "ACTIVE",
+        // Re-armed: the next time the condition holds notifies again.
+        ...(alert.status === "TRIGGERED"
+          ? { lastTriggeredPricePaise: null, lastEvaluatedAt: null }
+          : {}),
+      },
+      true,
+    );
   }
 
   /** Cancel keeps the alert and its history (delete removes both). */

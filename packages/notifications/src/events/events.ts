@@ -75,12 +75,27 @@ export const newSignInEvent = z.object({
   device: z.string().min(1).max(100),
 });
 
+/** A change to the user's subscription, read from the payment service (verified state). */
+export const billingEvent = z.object({
+  kind: z.literal("billing.subscription"),
+  userId: uuid,
+  change: z.enum(["activated", "renewed", "payment_failed", "cancel_scheduled", "ended", "refund"]),
+  /** The local subscription id. */
+  subscriptionId: uuid,
+  /** Stable key of the verified source (billing event id, or subscription + period). */
+  sourceKey: z.string().min(1).max(150),
+  planName: z.string().min(1).max(100),
+  periodEnd: z.string().datetime().nullable(),
+  graceUntil: z.string().datetime().nullable().optional(),
+});
+
 export const notificationEvent = z.discriminatedUnion("kind", [
   alertTriggeredEvent,
   alertExpiredEvent,
   searchFinishedEvent,
   passwordChangedEvent,
   newSignInEvent,
+  billingEvent,
 ]);
 export type NotificationEvent = z.infer<typeof notificationEvent>;
 export type AlertTriggeredEvent = z.infer<typeof alertTriggeredEvent>;

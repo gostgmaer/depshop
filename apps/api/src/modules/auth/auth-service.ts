@@ -189,7 +189,16 @@ export class AuthService {
             plan: {
               connectOrCreate: {
                 where: { code: free.code },
-                create: { ...free, limits: { ...free.limits } },
+                create: {
+                  code: free.code,
+                  name: free.name,
+                  description: free.description,
+                  monthlyPricePaise: free.monthlyPricePaise,
+                  annualPricePaise: free.annualPricePaise,
+                  limits: { ...free.limits },
+                  features: { ...free.features },
+                  sortOrder: free.sortOrder,
+                },
               },
             },
           },

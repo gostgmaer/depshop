@@ -8,3 +8,4 @@ export * from "./pricing-contracts.js";
 export * from "./spec-labels.js";
 export * from "./price-stats.js";
 export * from "./notification-contracts.js";
+export * from "./billing-contracts.js";
