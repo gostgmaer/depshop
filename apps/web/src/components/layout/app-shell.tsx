@@ -2,7 +2,7 @@
 
 import type { PublicUser } from "@dealmind/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, LogOut, Menu, Settings, Sparkles, UserRound } from "lucide-react";
+import { Bell, LogOut, Menu, Settings, ShieldCheck, Sparkles, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
@@ -128,6 +128,13 @@ export function AppShell({ user, children }: { user: PublicUser; children: React
                     <Settings aria-hidden className="size-4" /> Security
                   </Link>
                 </DropdownMenuItem>
+                {current.role === "ADMIN" ? (
+                  <DropdownMenuItem asChild>
+                    <Link href="/admin">
+                      <ShieldCheck aria-hidden className="size-4" /> Admin console
+                    </Link>
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem disabled={logout.isPending} onSelect={() => logout.mutate()}>
                   <LogOut aria-hidden className="size-4" />

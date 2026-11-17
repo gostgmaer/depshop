@@ -9,3 +9,4 @@ export * from "./spec-labels.js";
 export * from "./price-stats.js";
 export * from "./notification-contracts.js";
 export * from "./billing-contracts.js";
+export * from "./admin-contracts.js";

@@ -11,8 +11,7 @@ import { seedMockSources } from "@dealmind/connectors";
 import { seedReferenceData } from "@dealmind/db";
 import { CatalogImporter } from "@dealmind/intelligence";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type {
-  Agent} from "./harness.js";
+import type { Agent } from "./harness.js";
 import {
   type TestContext,
   createTestApp,

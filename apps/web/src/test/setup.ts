@@ -14,6 +14,7 @@ export const navigation = {
   push: vi.fn(),
   replace: vi.fn(),
   refresh: vi.fn(),
+  params: {} as Record<string, string>,
 };
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
@@ -22,6 +23,10 @@ vi.mock("next/navigation", () => ({
     push: navigation.push,
     replace: navigation.replace,
     refresh: navigation.refresh,
+  }),
+  useParams: () => navigation.params,
+  notFound: vi.fn(() => {
+    throw new Error("NEXT_NOT_FOUND");
   }),
   redirect: vi.fn((url: string) => {
     throw new Error(`NEXT_REDIRECT:${url}`);

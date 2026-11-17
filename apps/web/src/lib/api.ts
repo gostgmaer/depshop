@@ -48,7 +48,7 @@ async function fetchCsrfToken(): Promise<string> {
   return body.data.csrfToken;
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 /** No API call may hang the UI: after this the request fails with a TIMEOUT error. */
 export const REQUEST_TIMEOUT_MS = 20_000;

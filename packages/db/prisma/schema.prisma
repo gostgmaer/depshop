@@ -984,16 +984,31 @@ enum AiPurpose {
 }
 
 /// Global AI configuration, managed by admins.
+/// Admin-managed LLM settings, read by the agent service at run time (cached
+/// briefly). API keys are never stored here: the agent reads them from its own
+/// environment (GOOGLE_API_KEY / OPENAI_API_KEY); this row names the provider only.
+/// LLM settings never affect pricing or ranking (those are deterministic).
 model AiModelConfig {
-  id          String    @id @default(uuid(7)) @db.Uuid
-  purpose     AiPurpose @unique
-  provider    String
-  model       String
-  temperature Float     @default(0)
-  maxTokens   Int       @default(1024)
-  enabled     Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                          String    @id @default(uuid(7)) @db.Uuid
+  purpose                     AiPurpose @unique
+  /// "google" | "openai" | "rules" (no LLM).
+  provider                    String
+  model                       String
+  temperature                 Float     @default(0)
+  maxTokens                   Int       @default(1024)
+  /// Off: the agent uses rule-based extraction only (no LLM calls).
+  enabled                     Boolean   @default(true)
+  fallbackProvider            String?
+  fallbackModel               String?
+  /// Monthly token budget (input + output) across agent runs; null = no limit.
+  /// When reached, the agent stops calling the LLM until the next month.
+  monthlyTokenLimit           Int?
+  /// Optional admin-entered list prices (paise per million tokens) for cost estimates.
+  inputPaisePerMillionTokens  BigInt?
+  outputPaisePerMillionTokens BigInt?
+  updatedById                 String?   @db.Uuid
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 }
 
 // ═══════════════════════════════ MONETIZATION ═══════════════════════════════

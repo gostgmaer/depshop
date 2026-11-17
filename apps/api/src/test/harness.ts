@@ -114,7 +114,7 @@ export async function createTestApp(
 
 export { truncateAll };
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 /**
  * Behaves like a browser tab on the web app: keeps a cookie jar, sends the

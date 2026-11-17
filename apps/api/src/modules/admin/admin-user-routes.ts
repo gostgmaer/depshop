@@ -22,7 +22,8 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
   app,
   { prisma, sessions },
 ) => {
-  app.addHook("preHandler", app.requireAdmin);
+  // onRequest: non-admins are refused before validation.
+  app.addHook("onRequest", app.requireAdmin);
 
   app.get(
     "/",
@@ -45,12 +46,14 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
       const { limit, cursor, q } = req.query;
       const rows = await prisma.user.findMany({
         where: q
-          ? {
-              OR: [
-                { email: { contains: q, mode: "insensitive" } },
-                { name: { contains: q, mode: "insensitive" } },
-              ],
-            }
+          ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q)
+            ? { id: q }
+            : {
+                OR: [
+                  { email: { contains: q, mode: "insensitive" } },
+                  { name: { contains: q, mode: "insensitive" } },
+                ],
+              }
           : undefined,
         orderBy: { id: "asc" },
         take: limit + 1,

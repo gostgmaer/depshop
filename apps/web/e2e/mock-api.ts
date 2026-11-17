@@ -17,6 +17,17 @@ import {
   searchResult,
   searchResultVariant,
 } from "../src/test/fixtures.ts";
+import {
+  ADMIN_MOCK_USER_ID,
+  adminAiModels,
+  adminAnalytics,
+  adminAudit,
+  adminDashboard,
+  adminJobs,
+  adminSources,
+  adminSubscriptions,
+  adminUserDetailFixture,
+} from "../src/test/admin-fixtures.ts";
 
 const PORT = Number(process.env.MOCK_API_PORT ?? 4599);
 const USER = {
@@ -26,6 +37,14 @@ const USER = {
   role: "USER",
   emailVerified: true,
   createdAt: "2026-11-01T00:00:00.000Z",
+};
+/** Signs in when the login email starts with "admin@". */
+const ADMIN = {
+  ...USER,
+  id: "60000000-0000-7000-8000-000000000009",
+  email: "admin@example.com",
+  name: "Admin Mock",
+  role: "ADMIN",
 };
 const PRODUCT_ID = "10000000-0000-7000-8000-000000000001";
 const SEARCH_ID = "40000000-0000-7000-8000-000000000001";
@@ -98,7 +117,15 @@ function send(
 }
 
 const signedIn = (req: IncomingMessage) =>
-  (req.headers.cookie ?? "").includes("dm_session=e2e-session");
+  /dm_session=e2e-(session|admin)/.test(req.headers.cookie ?? "");
+const isAdmin = (req: IncomingMessage) =>
+  (req.headers.cookie ?? "").includes("dm_session=e2e-admin");
+const readBody = (req: IncomingMessage) =>
+  new Promise<string>((resolve) => {
+    let b = "";
+    req.on("data", (c: Buffer) => (b += c.toString()));
+    req.on("end", () => resolve(b));
+  });
 
 const product = productDetail({ sampleData: false, modelNumber: null });
 
@@ -113,15 +140,19 @@ const server = createServer((req, res) => {
       "set-cookie": "dm_csrf=e2e-csrf; Path=/; SameSite=Lax",
     });
   if (path === "/auth/login" && method === "POST") {
-    return send(res, 200, ok({ user: USER }), {
-      "set-cookie": "dm_session=e2e-session; Path=/; HttpOnly; SameSite=Lax",
+    void readBody(req).then((b) => {
+      const admin = /"email"\s*:\s*"admin@/.test(b);
+      send(res, 200, ok({ user: admin ? ADMIN : USER }), {
+        "set-cookie": `dm_session=${admin ? "e2e-admin" : "e2e-session"}; Path=/; HttpOnly; SameSite=Lax`,
+      });
     });
+    return;
   }
   if (path === "/auth/logout")
     return send(res, 200, ok({}), { "set-cookie": "dm_session=; Path=/; Max-Age=0" });
   if (path === "/auth/me")
     return signedIn(req)
-      ? send(res, 200, ok({ user: USER }))
+      ? send(res, 200, ok({ user: isAdmin(req) ? ADMIN : USER }))
       : send(res, 401, err("UNAUTHENTICATED", "Sign in"));
 
   // ── public catalog ──
@@ -395,6 +426,71 @@ const server = createServer((req, res) => {
         lastSyncedAt: null,
       }),
     );
+  // ── admin console (E2E mock data; ADMIN session only) ──
+  if (path.startsWith("/admin")) {
+    if (!signedIn(req)) return send(res, 401, err("UNAUTHENTICATED", "Sign in"));
+    if (!isAdmin(req)) return send(res, 403, err("FORBIDDEN", "Admin access required"));
+    if (path === "/admin/dashboard") return send(res, 200, ok(adminDashboard()));
+    if (path === "/admin/users")
+      return send(
+        res,
+        200,
+        ok({
+          items: [{ ...adminUserDetailFixture(), createdAt: "2026-11-01T00:00:00.000Z" }],
+          nextCursor: null,
+        }),
+      );
+    if (path === `/admin/users/${ADMIN_MOCK_USER_ID}`)
+      return send(res, 200, ok(adminUserDetailFixture()));
+    if (path === "/admin/sources") return send(res, 200, ok(adminSources()));
+    if (path === "/admin/ai-models") return send(res, 200, ok(adminAiModels()));
+    if (path === "/admin/analytics") return send(res, 200, ok(adminAnalytics()));
+    if (path === "/admin/subscriptions") return send(res, 200, ok(adminSubscriptions()));
+    if (path === "/admin/subscriptions/users") return send(res, 200, page([]));
+    if (path === "/admin/jobs") return send(res, 200, ok(adminJobs()));
+    if (path === "/admin/system")
+      return send(
+        res,
+        200,
+        ok({
+          checks: adminDashboard().infrastructure.checks,
+          queues: adminJobs().queues,
+          at: "2026-11-17T06:00:00.000Z",
+        }),
+      );
+    if (path === "/admin/audit-logs") return send(res, 200, page(adminAudit()));
+    if (path === "/admin/products") return send(res, 200, page([]));
+    if (path === "/admin/categories") return send(res, 200, ok([]));
+    if (path === "/admin/affiliates")
+      return send(
+        res,
+        200,
+        ok({
+          summary: {
+            from: "2026-10-18T00:00:00.000Z",
+            to: "2026-11-17T00:00:00.000Z",
+            clicks: {
+              total: 0,
+              blocked: 0,
+              signedIn: 0,
+              bySource: [],
+              byCategory: [],
+              byProvider: {},
+            },
+            conversions: Object.fromEntries(
+              ["PENDING", "APPROVED", "REJECTED", "REVERSED"].map((k) => [
+                k,
+                { count: 0, commissionPaise: 0, orderAmountPaise: 0 },
+              ]),
+            ),
+            payouts: Object.fromEntries(
+              ["PENDING", "PAID", "FAILED"].map((k) => [k, { count: 0, amountPaise: 0 }]),
+            ),
+          },
+          programs: [],
+        }),
+      );
+  }
   return send(res, 404, err("NOT_FOUND", `E2E mock has no ${method} ${path}`));
 });
 

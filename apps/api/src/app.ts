@@ -98,7 +98,8 @@ import { envelopePlugin } from "./plugins/envelope.js";
 import { createRedis, redisPlugin } from "./plugins/redis.js";
 import { TokenCipher } from "./lib/token-cipher.js";
 import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
-import { adminPlatformRoutes } from "./modules/admin/admin-platform-routes.js";
+import { AdminConsoleService } from "./modules/admin/admin-console-service.js";
+import { adminConsoleRoutes } from "./modules/admin/admin-console-routes.js";
 import { adminNotificationRoutes } from "./modules/admin/admin-notification-routes.js";
 import { adminTrackingRoutes } from "./modules/admin/admin-tracking-routes.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
@@ -384,6 +385,47 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ...(deps.billingNow ? { now: deps.billingNow } : {}),
   });
   app.decorate("billing", { service: billing, provider: billingProvider, entitlements });
+  // Admin console: connector readiness reports credential NAMES only (no values).
+  const adminConsole = new AdminConsoleService({
+    prisma,
+    jobs,
+    entitlements,
+    registry:
+      deps.connectorRegistry ??
+      createDefaultRegistry(env, { includeMocks: env.CONNECTORS_ALLOW_MOCKS }),
+    metrics: new RedisMetricsStore(redis, env.REDIS_KEY_PREFIX, () => undefined),
+    checks: {
+      ...deps.healthChecks,
+      redis: async () => {
+        await redis.ping();
+      },
+      iam: () => iam.health(),
+      notifications: notifications ? () => notifications.health() : null,
+      files: files ? () => files.health() : null,
+      agent: env.AGENT_SERVICE_URL
+        ? async () => {
+            const res = await (deps.fetch ?? fetch)(`${env.AGENT_SERVICE_URL}/health`, {
+              signal: AbortSignal.timeout(3_000),
+            });
+            if (!res.ok) throw new Error(String(res.status));
+          }
+        : null,
+      worker: async () => {
+        // A worker is connected to the notification queue (it runs in every worker process).
+        if (!(await jobs.queue(QueueName.notificationDelivery).getWorkers()).length)
+          throw new Error("no worker");
+      },
+      payments:
+        env.BILLING_PROVIDER === "easydev-payments" && env.PAYMENT_SERVICE_URL
+          ? async () => {
+              const res = await (deps.fetch ?? fetch)(`${env.PAYMENT_SERVICE_URL}/health`, {
+                signal: AbortSignal.timeout(3_000),
+              });
+              if (!res.ok) throw new Error(String(res.status));
+            }
+          : null,
+    },
+  });
   const affiliateRegistry =
     deps.affiliateRegistry ??
     new AffiliateRegistry({
@@ -458,7 +500,32 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       });
       await v1.register(userRoutes, { prefix: "/users", users, sessions, auth });
       await v1.register(adminUserRoutes, { prefix: "/admin/users", prisma, sessions });
-      await v1.register(adminPlatformRoutes, { prefix: "/admin", prisma });
+      await v1.register(adminConsoleRoutes, {
+        prefix: "/admin",
+        prisma,
+        console: adminConsole,
+        sessions,
+        redis,
+        redisPrefix: env.REDIS_KEY_PREFIX,
+        agentHealth: env.AGENT_SERVICE_URL
+          ? async () => {
+              const res = await (deps.fetch ?? fetch)(`${env.AGENT_SERVICE_URL}/health`, {
+                signal: AbortSignal.timeout(3_000),
+              });
+              if (!res.ok) throw new Error(`agent health ${res.status}`);
+              // Names only (provider/model); the agent never returns keys.
+              const body = (await res.json()) as Record<string, unknown>;
+              return { status: body.status, provider: body.provider, model: body.model };
+            }
+          : null,
+        enqueueHealthCheck: async () => {
+          const jobId = `connector-health-manual-${Date.now()}`;
+          await jobs
+            .queue(QueueName.connectorHealth)
+            .add(QueueName.connectorHealth, {}, { jobId, removeOnComplete: 100 });
+          return jobId;
+        },
+      });
       await v1.register(adminTrackingRoutes, {
         prefix: "/admin",
         prisma,

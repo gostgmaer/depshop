@@ -33,3 +33,26 @@ describe("fixtures match the shared Zod contracts", () => {
     expect(categoryFiltersSchema.safeParse(categoryFilters("washing-machines")).success).toBe(true);
   });
 });
+
+describe("admin fixtures match the shared admin contracts", () => {
+  it("dashboard, users, sources, AI, analytics, subscriptions, jobs and audit", async () => {
+    const s = await import("@dealmind/shared");
+    const f = await import("./admin-fixtures");
+    const check = (
+      schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } },
+      v: unknown,
+    ) => {
+      const r = schema.safeParse(v);
+      expect(r.success, JSON.stringify(r.error)).toBe(true);
+    };
+    check(s.adminDashboardView, f.adminDashboard());
+    check(s.adminUserDetail, f.adminUserDetailFixture());
+    for (const src of f.adminSources()) check(s.adminSourceView, src);
+    check(s.aiModelConfigView, f.adminAiModels().config);
+    check(s.aiUsageView, f.adminAiModels().usage);
+    check(s.searchAnalyticsView, f.adminAnalytics());
+    check(s.subscriptionAnalyticsView, f.adminSubscriptions());
+    check(s.adminJobsView, f.adminJobs());
+    for (const e of f.adminAudit()) check(s.adminAuditEntry, e);
+  });
+});

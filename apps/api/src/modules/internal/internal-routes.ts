@@ -342,6 +342,39 @@ export const internalRoutes: FastifyPluginAsyncZod<InternalDeps> = async (app, d
     },
   );
 
+  /**
+   * The admin-managed LLM configuration for the agent (Phase 6.3). No API keys:
+   * the agent uses its own environment keys for the named provider. When the
+   * monthly token budget is used up, `limitReached` tells the agent to stop
+   * calling the LLM (rule-based extraction only) until the next month.
+   */
+  app.get("/ai-config", { config: noRateLimit }, async () => {
+    const row = await prisma.aiModelConfig.findUnique({ where: { purpose: "INTENT_EXTRACTION" } });
+    if (!row) return { config: null, limitReached: false };
+    const now = new Date();
+    const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const used = row.monthlyTokenLimit
+      ? await prisma.agentRun.aggregate({
+          where: { startedAt: { gte: since } },
+          _sum: { inputTokens: true, outputTokens: true },
+        })
+      : null;
+    const tokens = (used?._sum.inputTokens ?? 0) + (used?._sum.outputTokens ?? 0);
+    return {
+      config: {
+        provider: row.provider,
+        model: row.model,
+        temperature: row.temperature,
+        maxTokens: row.maxTokens,
+        enabled: row.enabled,
+        fallbackProvider: row.fallbackProvider,
+        fallbackModel: row.fallbackModel,
+        updatedAt: row.updatedAt.toISOString(),
+      },
+      limitReached: row.monthlyTokenLimit !== null && tokens >= row.monthlyTokenLimit,
+    };
+  });
+
   app.get("/categories", { config: noRateLimit }, async () => ({
     categories: (await deps.catalog.listCategories()).map((c) => ({ slug: c.slug, name: c.name })),
   }));

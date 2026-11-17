@@ -164,7 +164,9 @@ describe("3–4. marketplace comparison and lowest price", () => {
     // destination), marked sponsored/nofollow, opening in a new tab, with the disclosure attached.
     const link = within(rows[0]!).getByRole("link", { name: /Buy on Mock Store 2/ });
     expect(link).toHaveAttribute("rel", "noopener nofollow sponsored");
-    expect(link.getAttribute("href")).toMatch(/^\/api\/v1\/affiliate\/click\/[0-9a-f-]{36}\?from=product$/);
+    expect(link.getAttribute("href")).toMatch(
+      /^\/api\/v1\/affiliate\/click\/[0-9a-f-]{36}\?from=product$/,
+    );
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAccessibleDescription(/may earn a commission/);
     expect(screen.getByText(/doesn't affect our rankings or recommendations/)).toBeInTheDocument();

@@ -20,6 +20,7 @@ from app.config.settings import Settings, get_settings
 from app.database.read_models import ReadModels
 from app.nodes.deps import AgentDeps
 from app.providers.base import StructuredLlm
+from app.providers.configurable import ConfigurableLlm
 from app.providers.factory import create_llm
 from app.services.execution_service import ExecutionService
 from app.utils.logging import configure_logging, get_logger
@@ -56,7 +57,12 @@ def create_app(
             if read_models:
                 stack.push_async_callback(read_models.dispose)
             intelligence = IntelligenceApiClient(api)
-            provider = llm or create_llm(cfg)
+            # Admin-managed LLM settings (read from the internal API, refreshed each minute).
+            provider = llm or ConfigurableLlm(
+                create_llm(cfg),
+                cfg,
+                lambda: api.request("GET", "/ai-config", correlation_id="ai-config"),
+            )
             deps = AgentDeps(
                 llm=provider,
                 marketplace=MarketplaceApiClient(api, concurrency=cfg.marketplace_concurrency),

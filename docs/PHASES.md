@@ -25,6 +25,7 @@ those pass.
 | 5.3 | Notification system: `@dealmind/notifications` (verified-source events, outbox, preference resolver, DealMind HTML/text email templates, signed unsubscribe, web push with VAPID); in-app center with categories, delete and live SSE updates; notification settings (channel × category, quiet hours, time zone, browser push); account notices (password changed, new device); search notices; admin delivery health                   | **Done, with gaps** (see NOTIFICATIONS.md)          |
 | 6.1 | Subscriptions, payments and usage: `@dealmind/billing` (configurable plans, entitlements, atomic usage counters, grace-period policy, provider abstraction over the shared EasyDev payment service, sandbox provider, signed idempotent webhooks, reconcile); checkout with server-side verification; cancel and plan changes; payments and invoices; CSV exports; pricing page and billing dashboard                                    | **Built; Razorpay not live** (see BILLING.md)       |
 | 6.2 | Affiliate links and click tracking: `@dealmind/affiliate` (Amazon Associates and Flipkart adapters to their documented link formats, direct fallback, host allowlists), validated click redirect with privacy-aware click records and retention, partner-reported conversion import (Flipkart Report API, manual reports), payouts, admin analytics API, disclosure                                                                      | **Built; no partnership active** (see AFFILIATE.md) |
+| 6.3 | Platform admin console: ADMIN-only `/admin` app (dashboard, users, subscriptions, products, categories, connectors, AI models, search analytics, affiliates, jobs, system health, audit log); audited actions with reasons; connector readiness without secrets; agent LLM configuration with monthly budget; k-anonymous analytics; single-job retry                                                                                    | **Done** (see ADMIN.md)                             |
 | 2   | ~~Web auth & account~~: delivered in 1.4. Remaining: admin bootstrap CLI, email change flow                                                                                                                                                                                                                                                                                                                                              | Partially done (1.4)                                |
 | 3   | Connector framework: registry, capability declarations, health checks, timeouts, rate limits, retries, normalization; admin connector management                                                                                                                                                                                                                                                                                         | Not started                                         |
 | 4   | Search engine: parallel bounded-concurrency fan-out, partial results, per-source errors, variant matching, dedup, deterministic filters & ranking, persistence of searches                                                                                                                                                                                                                                                               | Not started                                         |
@@ -557,3 +558,15 @@ See [AFFILIATE.md](AFFILIATE.md) (includes the marketplace integration status re
   - Croma, Tata CLiQ and Reliance Digital have no verified program;
   - Amazon conversions are manual-import only;
   - no live partner call was made.
+
+## Phase 6.3 — Platform admin console
+
+See [ADMIN.md](ADMIN.md).
+
+- **Database:** migration `20261124100000_admin_ai_config` (AiModelConfig fallback, budget, prices, updatedBy, CHECKs). Drift check empty.
+- **API:** `admin-console-service.ts`, `admin-console-routes.ts`, internal `GET /internal/v1/ai-config`; `admin-platform-routes.ts` removed (superseded).
+- **Agent:** `ConfigurableLlm` applies the admin configuration (keys stay in the agent's environment).
+- **Web:** `(admin)` route group with a server-side role gate and 15 pages.
+- **Verification:**
+  - `pnpm check --force` 52/52. Drift check empty.
+  - API DB 163 (9 new); worker DB 42; DB 68; agent pytest 66 (5 new); web 117 (10 new + admin fixture contracts); Playwright 28 (10 new).
