@@ -71,6 +71,7 @@ export class AgentClient {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: "error",
       });
     } catch (err) {
       throw new AgentUnavailableError(`Agent service unreachable: ${(err as Error).message}`);

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -8,7 +9,10 @@ export const metadata: Metadata = {
   description: "Compare prices across Indian shopping sites and find genuine deals.",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Reading the per-request CSP nonce (set by middleware) keeps every page
+  // dynamically rendered, so Next.js can apply the nonce to its scripts.
+  await headers();
   return (
     <html lang="en-IN">
       <body className="min-h-dvh antialiased">

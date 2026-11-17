@@ -141,6 +141,8 @@ export class FlipkartConnector implements ShoppingConnector {
         Accept: "application/json",
       },
       signal,
+      // Credentials ride in custom headers: never follow a redirect with them.
+      redirect: "error",
     });
     if (!res.ok) {
       const retryAfter = Number(res.headers.get("retry-after"));

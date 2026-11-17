@@ -14,6 +14,9 @@ COPY apps/agent/pyproject.toml apps/agent/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 FROM base AS runtime
+# Phase 7.1: apply Debian security updates; uv is a build tool, not needed at runtime.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+  && rm -rf /var/lib/apt/lists/* /usr/local/bin/uv
 RUN useradd --system --uid 10001 --home /app agent
 COPY --from=deps /app/.venv /app/.venv
 COPY apps/agent/app ./app

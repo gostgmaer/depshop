@@ -159,6 +159,8 @@ export class EasyDevPaymentsProvider implements BillingProvider {
         headers,
         ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
         signal: AbortSignal.timeout(this.opts.timeoutMs ?? 10_000),
+        // The API key is a custom header: never follow a redirect with it.
+        redirect: "error",
       });
     } catch (err) {
       throw new ProviderError(`Payment service unreachable: ${(err as Error).message}`);

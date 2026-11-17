@@ -215,6 +215,97 @@ export class AuthService {
     if (accessToken) await this.iam.logout(accessToken).catch(() => undefined);
   }
 
+  // ── Account deletion (Phase 7.1, privacy) ─────────────────────────────
+
+  /**
+   * Re-checks the caller's password with the IAM before a destructive action.
+   * Throttled exactly like sign-in (same lockout key), so it can't be used to
+   * guess passwords. The temporary IAM session is ended immediately.
+   */
+  private async confirmPassword(userId: string, password: string, client: ClientInfo) {
+    const { email } = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (await this.throttle.isLocked(email)) {
+      throw new AppError(ErrorCode.RATE_LIMITED, "Too many attempts. Try again later.");
+    }
+    try {
+      const r = await this.iam.login(email, password, client.ipAddress);
+      await this.iam.logout(r.accessToken).catch(() => undefined);
+    } catch (err) {
+      const e = iamFailure(err);
+      if (e.status === 401 || e.status === 404) {
+        await this.throttle.recordFailure(email);
+        throw new AppError(ErrorCode.BAD_REQUEST, "Password is incorrect");
+      }
+      if (e.status === 429)
+        throw new AppError(ErrorCode.RATE_LIMITED, "Too many attempts. Try again later.");
+      throw e;
+    }
+    await this.throttle.recordSuccess(email);
+  }
+
+  /**
+   * Permanently deletes the caller's DealMind account and personal data.
+   *
+   * - Refused while a paid subscription is still renewing (cancel it first, so
+   *   no charge can occur for a deleted account).
+   * - Every DealMind session (and its IAM session, best effort) is ended.
+   * - Rows owned by the user are deleted (database cascades). Records kept for
+   *   legal/financial or security reasons are detached from the person:
+   *   payment-webhook ledger rows (userId → null), affiliate clicks (userId →
+   *   null; IP hashes are already salted), audit entries (actor → null). One
+   *   `account.deleted` audit entry keeps only the former internal id.
+   * - The shared EasyDev identity (IAM) account is not deleted from here:
+   *   other EasyDev applications may use it, and DealMind holds no privileged
+   *   IAM credentials. The privacy notice says how to request that.
+   */
+  async deleteAccount(
+    auth: AuthContext,
+    password: string,
+    client: ClientInfo,
+    requestId: string,
+  ): Promise<void> {
+    await this.confirmPassword(auth.userId, password, client);
+    const sub = await this.prisma.subscription.findUnique({
+      where: { userId: auth.userId },
+      select: { planCode: true, status: true, cancelAtPeriodEnd: true },
+    });
+    if (
+      sub &&
+      sub.planCode !== "FREE" &&
+      ["ACTIVE", "TRIALING", "PAST_DUE"].includes(sub.status) &&
+      !sub.cancelAtPeriodEnd
+    ) {
+      throw new AppError(
+        ErrorCode.CONFLICT,
+        "Cancel your paid subscription before deleting your account, so no further charge is made.",
+      );
+    }
+    const accessToken = await this.sessions.getIamAccessToken(auth.sessionId).catch(() => null);
+    const iamSessions = await this.sessions.revokeAllForUser(auth.userId);
+    if (accessToken) {
+      await Promise.all(
+        iamSessions.map((id) => this.iam.revokeSession(accessToken, id).catch(() => undefined)),
+      );
+      await this.iam.logout(accessToken).catch(() => undefined);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.billingEvent.updateMany({ where: { userId: auth.userId }, data: { userId: null } });
+      await tx.user.delete({ where: { id: auth.userId } });
+      await tx.auditLog.create({
+        data: {
+          actorId: null,
+          action: "account.deleted",
+          entity: "User",
+          entityId: auth.userId,
+          metadata: { requestId },
+        },
+      });
+    });
+  }
+
   // ── Email verification ─────────────────────────────────────────────────
 
   async verifyEmail(token: string, auth: AuthContext | null): Promise<void> {

@@ -8,3 +8,6 @@ onlyBuiltDependencies:
   - esbuild
   - "@node-rs/argon2"
   - sharp
+overrides:
+  # Phase 7.1: Next 15 pins postcss 8.4.31 (GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849).
+  postcss: "^8.5.33"

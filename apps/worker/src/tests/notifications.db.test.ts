@@ -122,7 +122,7 @@ afterAll(async () => {
 describe("channels are independent", () => {
   it("email fails permanently while push and in-app still deliver", async () => {
     const u = await user();
-    await subscribe(u.id, "https://push.example/a");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/a");
     const r = await record(alertEvent(u.id));
     expect(r.inApp).toBe(true);
     expect(r.pending.map((d) => d.channel).sort()).toEqual(["EMAIL", "PUSH"]);
@@ -207,20 +207,20 @@ describe("email", () => {
 describe("web push", () => {
   it("expires gone subscriptions, delivers to the rest, and never resends on retry", async () => {
     const u = await user();
-    await subscribe(u.id, "https://push.example/gone");
-    await subscribe(u.id, "https://push.example/flaky");
-    await subscribe(u.id, "https://push.example/ok");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/gone");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/flaky");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/ok");
     const r = await record(alertEvent(u.id));
     const p = await delivery(r.notificationId, "PUSH");
-    push.failures.set("https://push.example/gone", [new DeliveryError("410", true, true)]);
-    push.failures.set("https://push.example/flaky", [new DeliveryError("503", false)]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/gone", [new DeliveryError("410", true, true)]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/flaky", [new DeliveryError("503", false)]);
 
     expect(await processNotificationDelivery(deps(), { deliveryId: p.id }, ctx1)).toMatchObject({
       action: "retry",
     });
-    expect(push.sent.map((s) => s.endpoint)).toEqual(["https://push.example/ok"]);
+    expect(push.sent.map((s) => s.endpoint)).toEqual(["https://fcm.googleapis.com/fcm/send/ok"]);
     const gone = await prisma.pushSubscription.findUniqueOrThrow({
-      where: { endpoint: "https://push.example/gone" },
+      where: { endpoint: "https://fcm.googleapis.com/fcm/send/gone" },
     });
     expect(gone.expiredAt).not.toBeNull();
 
@@ -229,22 +229,22 @@ describe("web push", () => {
     ).toEqual({ action: "done", status: "SENT" });
     // The retry went only to the subscription that hadn't received it.
     expect(push.sent.map((s) => s.endpoint)).toEqual([
-      "https://push.example/ok",
-      "https://push.example/flaky",
+      "https://fcm.googleapis.com/fcm/send/ok",
+      "https://fcm.googleapis.com/fcm/send/flaky",
     ]);
     expect((await delivery(r.notificationId, "PUSH")).sentTo).toHaveLength(2);
   });
 
   it("is skipped when push is off, and fails when every subscription is gone", async () => {
     const off = await user({ notifyPush: false });
-    await subscribe(off.id, "https://push.example/off");
+    await subscribe(off.id, "https://fcm.googleapis.com/fcm/send/off");
     const r1 = await record(alertEvent(off.id));
     expect((await delivery(r1.notificationId, "PUSH")).status).toBe("SKIPPED");
 
     const u = await user();
-    await subscribe(u.id, "https://push.example/only");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/only");
     const r2 = await record(alertEvent(u.id));
-    push.failures.set("https://push.example/only", [new DeliveryError("404", true, true)]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/only", [new DeliveryError("404", true, true)]);
     const p = await delivery(r2.notificationId, "PUSH");
     expect(await processNotificationDelivery(deps(), { deliveryId: p.id }, ctx1)).toEqual({
       action: "done",
@@ -256,7 +256,7 @@ describe("web push", () => {
 describe("quiet hours", () => {
   it("delays email and push until quiet hours end; in-app is immediate; critical isn't delayed", async () => {
     const u = await user({ quietHoursStart: "15:00", quietHoursEnd: "16:00" });
-    await subscribe(u.id, "https://push.example/q");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/q");
     const r = await record(alertEvent(u.id));
     const end = new Date("2026-11-21T10:30:00.000Z"); // 16:00 IST
     expect(r.inApp).toBe(true);
@@ -292,7 +292,7 @@ describe("recovery and dead letters", () => {
 
   it("cleanup re-enqueues deliveries still pending after they were due", async () => {
     const u = await user();
-    await subscribe(u.id, "https://push.example/r");
+    await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/r");
     const r = await record(alertEvent(u.id), new Date(Date.now() - 20 * 60_000));
     const enqueued: string[] = [];
     const res = await runCleanup({

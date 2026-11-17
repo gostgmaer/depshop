@@ -9,7 +9,11 @@
  *    the delivery id, so this is idempotent (outbox recovery);
  *  - alerts past their end date become EXPIRED (a conditional update per
  *    alert, so each is expired and announced once) with an "alert ended"
- *    notification on the alert's channels that the user's preferences allow.
+ *    notification on the alert's channels that the user's preferences allow;
+ *  - personal-data retention (Phase 7.1, data minimisation): ended sessions
+ *    (IP address, user agent) after 30 days; finished notification deliveries
+ *    after 90 days; notifications after 365 days; finished searches with their
+ *    results, source runs and agent runs after 365 days (configurable).
  */
 import { applyClickRetention } from "@dealmind/affiliate";
 import type { PrismaClient } from "@dealmind/db";
@@ -28,6 +32,13 @@ export interface CleanupDeps {
   expireMissingAfterDays?: number;
   checkRetentionDays?: number;
   evaluationRetentionDays?: number;
+  /** Days a revoked/expired session row (IP, user agent) is kept. */
+  sessionRetentionDays?: number;
+  /** Days a finished (SENT/FAILED/SKIPPED) delivery record is kept. */
+  deliveryRetentionDays?: number;
+  notificationRetentionDays?: number;
+  /** Days a finished search (and its results/runs) is kept. */
+  searchRetentionDays?: number;
   batchSize?: number;
   now?: () => Date;
 }
@@ -40,22 +51,33 @@ export interface CleanupResult {
   requeuedDeliveries: number;
   /** Affiliate clicks whose identifiers were cleared / that were deleted (retention). */
   affiliateClicks: { anonymized: number; deleted: number };
+  /** Personal-data retention (rows deleted). */
+  retention: { sessions: number; deliveries: number; notifications: number; searches: number };
 }
 
 const DAY = 86_400_000;
 
+/** Fixed retention conditions: `$1` is the cut-off time. Never built from input. */
+const RETENTION_RULES = {
+  PriceCheck: `"checkedAt" < $1`,
+  AlertEvaluation: `"evaluatedAt" < $1`,
+  UserSession: `("revokedAt" < $1 OR "expiresAt" < $1)`,
+  NotificationDelivery: `"status" IN ('SENT', 'FAILED', 'SKIPPED') AND "createdAt" < $1`,
+  Notification: `"createdAt" < $1`,
+  Search: `"status" NOT IN ('PENDING', 'RUNNING') AND "createdAt" < $1`,
+} as const;
+
 async function deleteInBatches(
   prisma: PrismaClient,
-  table: "PriceCheck" | "AlertEvaluation",
-  column: "checkedAt" | "evaluatedAt",
+  table: keyof typeof RETENTION_RULES,
   before: Date,
   batch: number,
 ): Promise<number> {
   let total = 0;
   for (;;) {
-    // Identifiers are fixed literals chosen above, never user input.
+    // Table names and conditions are the fixed literals above, never user input.
     const n = await prisma.$executeRawUnsafe(
-      `DELETE FROM "${table}" WHERE "id" IN (SELECT "id" FROM "${table}" WHERE "${column}" < $1 LIMIT $2)`,
+      `DELETE FROM "${table}" WHERE "id" IN (SELECT "id" FROM "${table}" WHERE ${RETENTION_RULES[table]} LIMIT $2)`,
       before,
       batch,
     );
@@ -78,14 +100,12 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
   const deletedEvaluations = await deleteInBatches(
     deps.prisma,
     "AlertEvaluation",
-    "evaluatedAt",
     new Date(now.getTime() - (deps.evaluationRetentionDays ?? 90) * DAY),
     batch,
   );
   const deletedChecks = await deleteInBatches(
     deps.prisma,
     "PriceCheck",
-    "checkedAt",
     new Date(now.getTime() - (deps.checkRetentionDays ?? 30) * DAY),
     batch,
   );
@@ -103,8 +123,36 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
   for (const d of stuck) await deps.enqueueDelivery(d.id);
   // Affiliate click privacy: identifiers cleared after 30 days, unconverted clicks deleted after 13 months.
   const affiliateClicks = await applyClickRetention(deps.prisma, now);
+  const cutoff = (days: number) => new Date(now.getTime() - days * DAY);
+  const retention = {
+    sessions: await deleteInBatches(
+      deps.prisma,
+      "UserSession",
+      cutoff(deps.sessionRetentionDays ?? 30),
+      batch,
+    ),
+    deliveries: await deleteInBatches(
+      deps.prisma,
+      "NotificationDelivery",
+      cutoff(deps.deliveryRetentionDays ?? 90),
+      batch,
+    ),
+    notifications: await deleteInBatches(
+      deps.prisma,
+      "Notification",
+      cutoff(deps.notificationRetentionDays ?? 365),
+      batch,
+    ),
+    searches: await deleteInBatches(
+      deps.prisma,
+      "Search",
+      cutoff(deps.searchRetentionDays ?? 365),
+      batch,
+    ),
+  };
   return {
     affiliateClicks,
+    retention,
     expiredAlerts,
     expiredOffers: expired.count,
     deletedChecks,

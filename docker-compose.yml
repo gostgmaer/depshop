@@ -187,7 +187,8 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       APP_URL: http://localhost
       TRUST_PROXY: uniquelocal
-      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-false}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in .env}
       # Shared EasyDev services, reached by container name on core-network.
       IAM_BASE_URL: http://auth-service:3000/api/v1/iam
@@ -244,6 +245,9 @@ services:
       API_INTERNAL_URL: http://api:4000
       # Traefik sits in front and overwrites client-supplied X-Forwarded-For.
       TRUSTED_PROXY_COUNT: "1"
+      # Privacy notice operator/contact (required before launch).
+      PRIVACY_OPERATOR_NAME: ${PRIVACY_OPERATOR_NAME:-}
+      PRIVACY_CONTACT_EMAIL: ${PRIVACY_CONTACT_EMAIL:-}
     networks: [dealmind]
     depends_on:
       api: { condition: service_healthy }

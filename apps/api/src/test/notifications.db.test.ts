@@ -295,7 +295,7 @@ async function signUpAgain(email: string) {
 
 describe("browser push subscriptions", () => {
   const sub = (n: number) => ({
-    endpoint: `https://push.example.com/send/${n}`,
+    endpoint: `https://fcm.googleapis.com/fcm/send/${n}`,
     expirationTime: null,
     keys: {
       p256dh:
@@ -387,7 +387,7 @@ describe("account events (verified sources)", () => {
     expect(await ctx.prisma.notification.count({ where: { userId } })).toBe(0);
     await agent.patch("/api/v1/users/me/notification-preferences", { pushEnabled: true });
     await agent.post("/api/v1/push/subscribe", {
-      endpoint: "https://push.example.com/send/dev",
+      endpoint: "https://fcm.googleapis.com/fcm/send/dev",
       keys: {
         p256dh:
           "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",

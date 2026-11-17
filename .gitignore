@@ -15,3 +15,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# Load-test output (Phase 7.1)
+load/results/

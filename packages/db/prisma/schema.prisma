@@ -122,6 +122,8 @@ model UserSession {
   @@index([familyId])
   @@index([expiresAt])
   @@index([iamSessionId])
+  /// Retention cleanup (Phase 7.1).
+  @@index([revokedAt])
 }
 
 model UserPreference {
@@ -630,6 +632,8 @@ model Search {
   /// Target of composite ownership foreign keys from child rows.
   @@unique([id, userId])
   @@index([userId, createdAt(sort: Desc)])
+  /// Retention cleanup (Phase 7.1).
+  @@index([createdAt])
 }
 
 enum SourceRunStatus {
@@ -892,6 +896,8 @@ model Notification {
   @@unique([userId, dedupeKey])
   @@index([userId, readAt, createdAt(sort: Desc)])
   @@index([userId, category, createdAt(sort: Desc)])
+  /// Retention cleanup (Phase 7.1).
+  @@index([createdAt])
 }
 
 enum DeliveryChannel {
@@ -932,6 +938,8 @@ model NotificationDelivery {
   @@index([userId])
   /// Delivery worker polls pending deliveries in schedule order.
   @@index([status, scheduledAt])
+  /// Retention cleanup (Phase 7.1).
+  @@index([createdAt])
 }
 
 // ═══════════════════════════════ AI (user-owned) ═══════════════════════════════

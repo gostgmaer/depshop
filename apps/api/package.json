@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
+    "test:load": "dotenv -e ../../.env -- vitest run -c vitest.load.config.ts",
     "test:contract": "dotenv -e ../../.env -- vitest run -c vitest.contract.config.ts",
     "billing:sync-plans": "tsx --env-file=../../.env src/scripts/billing-sync-plans.ts"
   },
@@ -31,7 +32,7 @@
     "@fastify/helmet": "^13.0.0",
     "@fastify/rate-limit": "^10.2.0",
     "@fastify/swagger": "^9.4.0",
-    "@fastify/swagger-ui": "^5.2.0",
+    "@fastify/swagger-ui": "^6.1.4",
     "bullmq": "^5.34.0",
     "fastify": "^5.2.0",
     "fastify-plugin": "^5.0.1",

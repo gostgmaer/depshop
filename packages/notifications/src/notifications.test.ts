@@ -294,7 +294,7 @@ describe("web push provider", () => {
     ecdh.generateKeys();
     const auth = randomBytes(16);
     const sub = {
-      endpoint: "https://push.example/send/abc",
+      endpoint: "https://fcm.googleapis.com/fcm/send/abc",
       keys: { p256dh: ecdh.getPublicKey().toString("base64url"), auth: auth.toString("base64url") },
     };
     const payload = JSON.stringify({ title: "Secret price", body: "₹29,500" });
@@ -318,7 +318,7 @@ describe("web push provider", () => {
 
   it("marks 404/410 subscriptions gone, 429/5xx transient", async () => {
     const p = new WebPushProvider(vapid);
-    const target = { endpoint: "https://push.example/x", p256dh: "a", auth: "b" };
+    const target = { endpoint: "https://fcm.googleapis.com/fcm/send/x", p256dh: "a", auth: "b" };
     const payload = { title: "t", body: "b", url: "/", tag: "x", type: "PRICE_DROP" as const };
     const fail = (status: number) =>
       vi

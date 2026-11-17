@@ -1,11 +1,5 @@
 import { z } from "zod";
 
-const bool = (fallback: "true" | "false") =>
-  z
-    .enum(["true", "false"])
-    .default(fallback)
-    .transform((v) => v === "true");
-
 const csv = (fallback: string) =>
   z
     .string()
@@ -52,7 +46,8 @@ const envSchema = z
     APP_URL: z.string().url().default("http://localhost:3000"),
     /** Extra origins allowed to call the API with cookies (comma-separated). */
     CORS_ORIGINS: csv(""),
-    API_DOCS_ENABLED: bool("true"),
+    /** OpenAPI docs at /docs. Default: on in development, OFF in production (attack surface). */
+    API_DOCS_ENABLED: z.enum(["true", "false"]).optional(),
 
     /** HMAC key for CSRF tokens. Min 32 chars; rotate to invalidate all CSRF tokens. */
     SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
@@ -127,6 +122,8 @@ const envSchema = z
     // ── Internal service API (/internal/v1) for the Python agent ────────
     /** Bearer token the Python agent presents. Unset → internal API disabled (404). */
     INTERNAL_API_TOKEN: z.string().min(32).optional(),
+    /** Bearer token for GET /metrics (Prometheus). Unset = no metrics endpoint. */
+    METRICS_TOKEN: z.string().min(32).optional(),
     /** Python agent service (used for search cancellation). */
     AGENT_SERVICE_URL: z.string().url().optional(),
     AGENT_SERVICE_TOKEN: z.string().min(32).optional(),
@@ -189,6 +186,9 @@ const envSchema = z
   .transform((env) => ({
     ...env,
     COOKIE_SECURE: env.COOKIE_SECURE ? env.COOKIE_SECURE === "true" : env.NODE_ENV === "production",
+    API_DOCS_ENABLED: env.API_DOCS_ENABLED
+      ? env.API_DOCS_ENABLED === "true"
+      : env.NODE_ENV !== "production",
     /** Every origin allowed to make cookie-authenticated, state-changing requests. */
     ALLOWED_ORIGINS: [...new Set([new URL(env.APP_URL).origin, ...env.CORS_ORIGINS])],
     IAM_JWKS_URL: env.IAM_JWKS_URL ?? `${env.IAM_BASE_URL}/.well-known/jwks.json`,

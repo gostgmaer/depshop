@@ -187,13 +187,39 @@ export const notificationListQuery = z
 
 const base64url = z.string().regex(/^[A-Za-z0-9_-]+=*$/, "Expected base64url");
 
+/**
+ * Browser push services (Phase 7.1, SSRF): the worker POSTs to a stored
+ * endpoint, so only the push services browsers actually use are accepted —
+ * never an internal or arbitrary host. Checked at subscribe time and again
+ * before every send.
+ */
+const PUSH_HOSTS = new Set([
+  "fcm.googleapis.com", // Chrome, Chromium-based Edge, Android
+  "android.googleapis.com", // legacy GCM endpoints
+  "updates.push.services.mozilla.com", // Firefox
+  "web.push.apple.com", // Safari
+]);
+const PUSH_HOST_SUFFIXES = [".push.services.mozilla.com", ".notify.windows.com", ".push.apple.com"];
+
+export function isAllowedPushEndpoint(endpoint: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.port !== "" || u.username || u.password) return false;
+  const host = u.hostname.toLowerCase();
+  return PUSH_HOSTS.has(host) || PUSH_HOST_SUFFIXES.some((s) => host.endsWith(s));
+}
+
 export const pushSubscribeInput = z
   .object({
     endpoint: z
       .string()
       .url()
       .max(2048)
-      .refine((u) => u.startsWith("https://"), "Push endpoints must use HTTPS"),
+      .refine(isAllowedPushEndpoint, "Not a supported browser push service endpoint"),
     expirationTime: z.number().nullable().optional(),
     keys: z.object({ p256dh: base64url.max(200), auth: base64url.max(100) }).strict(),
   })

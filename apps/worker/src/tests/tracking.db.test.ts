@@ -1011,3 +1011,82 @@ describe("Phase 5.2: independent alerts, conditions, lifecycle and channels", ()
     expect((await evaluate(await checkOf(o.id))).evaluated).toBe(0);
   });
 });
+
+describe("personal-data retention (Phase 7.1)", () => {
+  it("deletes ended sessions, old notifications, finished deliveries and old finished searches only", async () => {
+    const u = await user(1);
+    const now = new Date("2026-11-17T00:00:00.000Z");
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
+    const session = (id: string, over: { revokedAt?: Date; expiresAt: Date }) =>
+      prisma.userSession.create({
+        data: {
+          id,
+          userId: u.id,
+          tokenHash: randomUUID(),
+          familyId: randomUUID(),
+          iamAccessTokenEnc: "x",
+          iamAccessTokenExpiresAt: now,
+          iamRefreshTokenEnc: "x",
+          iamRefreshTokenExpiresAt: now,
+          createdAt: daysAgo(60),
+          lastUsedAt: daysAgo(45),
+          ...over,
+        },
+      });
+    const oldRevoked = randomUUID();
+    const oldExpired = randomUUID();
+    const live = randomUUID();
+    await session(oldRevoked, { revokedAt: daysAgo(40), expiresAt: daysAgo(-10) });
+    await session(oldExpired, { expiresAt: daysAgo(31) });
+    await session(live, { expiresAt: daysAgo(-20) });
+    const note = (createdAt: Date) =>
+      prisma.notification.create({
+        data: {
+          userId: u.id,
+          type: "ALERT_EXPIRED",
+          category: "PRICE_ALERTS",
+          sourceType: "ALERT_EXPIRY",
+          sourceId: randomUUID(),
+          dedupeKey: randomUUID(),
+          title: "t",
+          body: "b",
+          createdAt,
+        },
+      });
+    const oldNote = await note(daysAgo(400));
+    const recentNote = await note(daysAgo(100));
+    const delivery = (status: "SENT" | "PENDING", createdAt: Date, channel: "EMAIL" | "PUSH") =>
+      prisma.notificationDelivery.create({
+        data: {
+          notificationId: recentNote.id,
+          userId: u.id,
+          channel,
+          status,
+          createdAt,
+          ...(status === "SENT" ? { sentAt: createdAt } : {}),
+        },
+      });
+    const sent = await delivery("SENT", daysAgo(100), "EMAIL");
+    const pending = await delivery("PENDING", daysAgo(100), "PUSH");
+    const search = (status: "COMPLETED" | "RUNNING", createdAt: Date) =>
+      prisma.search.create({ data: { userId: u.id, query: "q", status, createdAt } });
+    const oldDone = await search("COMPLETED", daysAgo(400));
+    const oldRunning = await search("RUNNING", daysAgo(400));
+    const recent = await search("COMPLETED", daysAgo(10));
+
+    const r = await runCleanup({ prisma, enqueueDelivery: async () => undefined, now: () => now });
+    expect(r.retention).toEqual({ sessions: 2, deliveries: 1, notifications: 1, searches: 1 });
+    expect((await prisma.userSession.findMany({ select: { id: true } })).map((s) => s.id)).toEqual([
+      live,
+    ]);
+    expect(await prisma.notification.count({ where: { id: oldNote.id } })).toBe(0);
+    expect(await prisma.notificationDelivery.count({ where: { id: sent.id } })).toBe(0);
+    expect(await prisma.notificationDelivery.count({ where: { id: pending.id } })).toBe(1);
+    expect(await prisma.search.count({ where: { id: oldDone.id } })).toBe(0);
+    expect(await prisma.search.count({ where: { id: { in: [oldRunning.id, recent.id] } } })).toBe(
+      2,
+    );
+    // The user and their recent data stay.
+    expect(await prisma.user.count({ where: { id: u.id } })).toBe(1);
+  });
+});

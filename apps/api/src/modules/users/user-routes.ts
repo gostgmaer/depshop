@@ -10,7 +10,9 @@ import { z } from "zod";
 import type { AuthService } from "../auth/auth-service.js";
 import type { SessionService } from "../auth/session-service.js";
 import { ok } from "../../utils/http.js";
-import { getAuth } from "../../plugins/auth.js";
+import { clientInfo, getAuth } from "../../plugins/auth.js";
+import { exportAccountData } from "./account-data.js";
+import type { PrismaClient } from "@dealmind/db";
 import type { UserService } from "./user-service.js";
 
 const security = [{ sessionCookie: [] }];
@@ -20,11 +22,12 @@ export interface UserRoutesOptions {
   users: UserService;
   sessions: SessionService;
   auth: AuthService;
+  prisma: PrismaClient;
 }
 
 export const userRoutes: FastifyPluginAsyncZod<UserRoutesOptions> = async (
   app,
-  { users, sessions, auth },
+  { users, sessions, auth, prisma },
 ) => {
   app.addHook("preHandler", app.requireAuth);
 
@@ -39,6 +42,52 @@ export const userRoutes: FastifyPluginAsyncZod<UserRoutesOptions> = async (
       },
     },
     async (req) => ({ user: await users.getMe(getAuth(req).userId) }),
+  );
+
+  // ── Privacy: data export and account deletion (Phase 7.1) ──
+  app.get(
+    "/me/export",
+    {
+      config: { rateLimit: { max: 3, timeWindow: "1 hour" } },
+      schema: {
+        tags: ["users"],
+        summary: "Download everything DealMind stores about you (JSON)",
+        security,
+      },
+    },
+    async (req, reply) => {
+      const data = await exportAccountData(prisma, getAuth(req).userId);
+      return reply
+        .header("content-type", "application/json; charset=utf-8")
+        .header("content-disposition", 'attachment; filename="dealmind-account-export.json"')
+        .header("cache-control", "no-store")
+        .send(JSON.stringify(data, null, 2));
+    },
+  );
+
+  app.post(
+    "/me/delete",
+    {
+      config: { rateLimit: { max: 5, timeWindow: "15 minutes" } },
+      schema: {
+        tags: ["users"],
+        summary:
+          "Permanently delete your DealMind account (password and typed confirmation required)",
+        security,
+        body: z
+          .object({
+            password: z.string().min(1).max(200),
+            confirm: z.literal("DELETE MY ACCOUNT"),
+          })
+          .strict(),
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      await auth.deleteAccount(getAuth(req), req.body.password, clientInfo(req), req.id);
+      app.clearSessionCookie(reply);
+      return reply.status(204).send(null);
+    },
   );
 
   app.get(

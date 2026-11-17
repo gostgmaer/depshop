@@ -7,6 +7,7 @@ export function agentCanceller(baseUrl: string, token: string, fetchImpl: typeof
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(5_000),
+        redirect: "error",
       },
     );
     // 404: the execution already finished or never started on this instance.

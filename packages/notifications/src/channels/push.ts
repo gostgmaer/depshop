@@ -3,6 +3,7 @@
  * come from the environment; the payload is encrypted for the subscription
  * (aes128gcm) so the push service can't read it.
  */
+import { isAllowedPushEndpoint } from "@dealmind/shared";
 import webpush from "web-push";
 import { DeliveryError, isPermanentStatus, safeErrorText } from "../delivery/errors.js";
 import type { PushPayload } from "../templates/render.js";
@@ -46,6 +47,10 @@ export class WebPushProvider implements PushProvider {
   }
 
   async send(target: PushTarget, payload: PushPayload): Promise<void> {
+    // Re-checked at send time (covers rows stored before the allowlist): never
+    // POST to an internal or arbitrary host. Treated as "gone" (permanent).
+    if (!isAllowedPushEndpoint(target.endpoint))
+      throw new DeliveryError("Push endpoint host is not an allowed push service", true, true);
     try {
       await webpush.sendNotification(
         { endpoint: target.endpoint, keys: { p256dh: target.p256dh, auth: target.auth } },

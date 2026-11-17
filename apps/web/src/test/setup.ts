@@ -40,17 +40,20 @@ class ResizeObserverStub {
   disconnect() {}
 }
 globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
-const proto = Element.prototype as unknown as Record<string, unknown>;
-proto.scrollIntoView ??= () => undefined;
-proto.hasPointerCapture ??= () => false;
-proto.releasePointerCapture ??= () => undefined;
-(window as unknown as Record<string, unknown>).matchMedia ??= ((query: string) => ({
-  matches: false,
-  media: query,
-  onchange: null,
-  addListener: () => undefined,
-  removeListener: () => undefined,
-  addEventListener: () => undefined,
-  removeEventListener: () => undefined,
-  dispatchEvent: () => false,
-})) as typeof window.matchMedia;
+// Only under jsdom (some tests run in the node environment).
+if (typeof window !== "undefined") {
+  const proto = Element.prototype as unknown as Record<string, unknown>;
+  proto.scrollIntoView ??= () => undefined;
+  proto.hasPointerCapture ??= () => false;
+  proto.releasePointerCapture ??= () => undefined;
+  (window as unknown as Record<string, unknown>).matchMedia ??= ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+}

@@ -100,6 +100,7 @@ import { TokenCipher } from "./lib/token-cipher.js";
 import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
 import { AdminConsoleService } from "./modules/admin/admin-console-service.js";
 import { adminConsoleRoutes } from "./modules/admin/admin-console-routes.js";
+import { metricsPlugin } from "./plugins/metrics.js";
 import { adminNotificationRoutes } from "./modules/admin/admin-notification-routes.js";
 import { adminTrackingRoutes } from "./modules/admin/admin-tracking-routes.js";
 import { adminUserRoutes } from "./modules/admin/admin-user-routes.js";
@@ -190,10 +191,26 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         ],
         censor: "[redacted]",
       },
+      // Phase 7.1: log the path only. Query strings can hold search text and
+      // other personal data; the route and request id are enough to correlate.
+      serializers: {
+        req: (req: { method: string; url: string; id: string }) => ({
+          method: req.method,
+          url: req.url.split("?")[0],
+          reqId: req.id,
+        }),
+      },
     },
     trustProxy: trustProxy(env.TRUST_PROXY),
     bodyLimit: 1_048_576,
-    genReqId: () => crypto.randomUUID(),
+    // Correlation: keep the web tier's x-request-id when well-formed, else a new UUID.
+    requestIdHeader: false,
+    genReqId: (req) => {
+      const given = req.headers["x-request-id"];
+      return typeof given === "string" && /^[A-Za-z0-9._-]{8,128}$/.test(given)
+        ? given
+        : crypto.randomUUID();
+    },
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -219,6 +236,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     await jobs.close();
   });
   await app.register(envelopePlugin);
+  app.addHook("onSend", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+  });
+  await app.register(metricsPlugin, {
+    token: env.METRICS_TOKEN,
+    jobs,
+    queueNames: Object.values(QueueName),
+  });
   // Shared across API instances via Redis. If Redis is down, requests are
   // allowed (skipOnError) rather than rejecting all traffic; /ready reports it.
   await app.register(rateLimit, {
@@ -498,7 +523,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         users,
         rateLimits: deps.rateLimits ?? DEFAULT_AUTH_RATE_LIMITS,
       });
-      await v1.register(userRoutes, { prefix: "/users", users, sessions, auth });
+      await v1.register(userRoutes, { prefix: "/users", users, sessions, auth, prisma });
       await v1.register(adminUserRoutes, { prefix: "/admin/users", prisma, sessions });
       await v1.register(adminConsoleRoutes, {
         prefix: "/admin",

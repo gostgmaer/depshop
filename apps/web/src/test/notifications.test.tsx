@@ -72,7 +72,7 @@ vi.mock("@/services", () => ({
   },
   alerts: { create: vi.fn(async () => ({})), update: vi.fn(async () => ({})) },
 }));
-type Mocked = Record<string, Record<string, ReturnType<typeof vi.fn>>>;
+type Mocked = Record<string, Record<string, ReturnType<typeof vi.fn<(...args: never[]) => unknown>>>>;
 const svc = services as unknown as Mocked;
 
 beforeEach(() => {
@@ -210,9 +210,9 @@ describe("browser push", () => {
     });
     (window as unknown as Record<string, unknown>).PushManager = function () {};
     const subscription = {
-      endpoint: "https://push.example.com/send/1",
+      endpoint: "https://fcm.googleapis.com/fcm/send/1",
       toJSON: () => ({
-        endpoint: "https://push.example.com/send/1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/1",
         expirationTime: null,
         keys: { p256dh: "p256", auth: "auth" },
       }),
@@ -237,7 +237,7 @@ describe("browser push", () => {
     await user.click(button);
     await waitFor(() =>
       expect(svc.push!.subscribe!).toHaveBeenCalledWith({
-        endpoint: "https://push.example.com/send/1",
+        endpoint: "https://fcm.googleapis.com/fcm/send/1",
         expirationTime: null,
         keys: { p256dh: "p256", auth: "auth" },
       }),

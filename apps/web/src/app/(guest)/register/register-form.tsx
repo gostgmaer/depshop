@@ -95,6 +95,13 @@ export function RegisterForm() {
           />
         )}
       </Field>
+      <p className="text-xs text-muted-foreground">
+        By creating an account you agree that DealMind uses your data as described in the{" "}
+        <Link href="/privacy" className="underline" target="_blank">
+          privacy notice
+        </Link>
+        . You can download or delete your data at any time.
+      </p>
       <Button type="submit" disabled={isSubmitting}>
         {isSubmitting ? "Creating account…" : "Create account"}
       </Button>

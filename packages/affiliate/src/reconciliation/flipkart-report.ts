@@ -76,6 +76,8 @@ export async function fetchFlipkartOrders(input: {
           accept: "application/json",
         },
         signal: AbortSignal.timeout(input.timeoutMs ?? 15_000),
+        // Credentials ride in custom headers: never follow a redirect with them.
+        redirect: "error",
       });
       if (!res.ok) throw new Error(`Flipkart report ${status}: HTTP ${res.status}`);
       const body = page.parse(await res.json());

@@ -124,6 +124,7 @@ export class IamClient {
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(this.opts.timeoutMs),
+        redirect: "error",
       });
     } catch (err) {
       const reason =
