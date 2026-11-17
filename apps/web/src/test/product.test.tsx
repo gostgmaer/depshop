@@ -160,9 +160,14 @@ describe("3–4. marketplace comparison and lowest price", () => {
     expect(within(rows[0]!).getByText("Seller not stated")).toBeInTheDocument();
     expect(within(rows[1]!).queryByText("Lowest delivered")).not.toBeInTheDocument();
     expect(within(rows[1]!).getByText("Free")).toBeInTheDocument();
-    // Real listings link out, marked nofollow and opening in a new tab.
-    const link = within(rows[0]!).getByRole("link", { name: /View on Mock Store 2/ });
-    expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");
+    // Real listings link out through the click endpoint (the server picks and validates the
+    // destination), marked sponsored/nofollow, opening in a new tab, with the disclosure attached.
+    const link = within(rows[0]!).getByRole("link", { name: /Buy on Mock Store 2/ });
+    expect(link).toHaveAttribute("rel", "noopener nofollow sponsored");
+    expect(link.getAttribute("href")).toMatch(/^\/api\/v1\/affiliate\/click\/[0-9a-f-]{36}\?from=product$/);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAccessibleDescription(/may earn a commission/);
+    expect(screen.getByText(/doesn't affect our rankings or recommendations/)).toBeInTheDocument();
   });
 });
 

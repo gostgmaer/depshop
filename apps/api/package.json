@@ -15,6 +15,7 @@
     "billing:sync-plans": "tsx --env-file=../../.env src/scripts/billing-sync-plans.ts"
   },
   "dependencies": {
+    "@dealmind/affiliate": "workspace:*",
     "@dealmind/billing": "workspace:*",
     "@dealmind/catalog": "workspace:*",
     "@dealmind/connectors": "workspace:*",

@@ -60,6 +60,7 @@ describe("schema: no multi-tenancy", () => {
       [
         "AffiliateClick",
         "AffiliateConversion",
+        "AffiliatePayout",
         "AgentRun",
         "AiModelConfig",
         "AlertEvaluation",

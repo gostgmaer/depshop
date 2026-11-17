@@ -11,6 +11,7 @@
  *    alert, so each is expired and announced once) with an "alert ended"
  *    notification on the alert's channels that the user's preferences allow.
  */
+import { applyClickRetention } from "@dealmind/affiliate";
 import type { PrismaClient } from "@dealmind/db";
 import {
   type PendingDelivery,
@@ -37,6 +38,8 @@ export interface CleanupResult {
   deletedChecks: number;
   deletedEvaluations: number;
   requeuedDeliveries: number;
+  /** Affiliate clicks whose identifiers were cleared / that were deleted (retention). */
+  affiliateClicks: { anonymized: number; deleted: number };
 }
 
 const DAY = 86_400_000;
@@ -98,7 +101,10 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
     take: 1_000,
   });
   for (const d of stuck) await deps.enqueueDelivery(d.id);
+  // Affiliate click privacy: identifiers cleared after 30 days, unconverted clicks deleted after 13 months.
+  const affiliateClicks = await applyClickRetention(deps.prisma, now);
   return {
+    affiliateClicks,
     expiredAlerts,
     expiredOffers: expired.count,
     deletedChecks,

@@ -317,6 +317,7 @@ model ShoppingSource {
   priceAlerts          PriceAlert[]
   affiliateClicks      AffiliateClick[]
   affiliateConversions AffiliateConversion[]
+  affiliatePayouts     AffiliatePayout[]
   matchReviews         ProductMatchReview[]
 
   @@index([status])
@@ -1153,19 +1154,40 @@ model UsageCounter {
   @@id([userId, metric, periodStart])
 }
 
+enum AffiliateRedirectStatus {
+  /// Sent to the marketplace (with or without an affiliate tag).
+  REDIRECTED
+  /// Not sent: the stored destination failed validation (domain, scheme).
+  BLOCKED
+}
+
 model AffiliateClick {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  /// Opaque reference appended to the affiliate link for attribution.
-  clickRef  String   @unique
+  id                String                  @id @default(uuid(7)) @db.Uuid
+  /// Opaque reference appended to the affiliate link for attribution
+  /// (e.g. Flipkart affExtParam1), so partner reports can be matched to clicks.
+  clickRef          String                  @unique
   /// Null for anonymous visitors; set to NULL when a user is deleted so revenue
   /// reporting survives account deletion.
-  userId    String?  @db.Uuid
-  offerId   String   @db.Uuid
-  sourceId  String   @db.Uuid
-  /// Salted hash only; raw IP addresses are never stored.
-  ipHash    String?
-  userAgent String?
-  createdAt DateTime @default(now())
+  userId            String?                 @db.Uuid
+  offerId           String                  @db.Uuid
+  sourceId          String                  @db.Uuid
+  productId         String?                 @db.Uuid
+  variantId         String?                 @db.Uuid
+  /// Affiliate provider used ("amazon-associates", "flipkart-affiliate", "direct" = no affiliate tag).
+  provider          String                  @default("direct")
+  /// The (non-secret) tracking id attached to the link, if any.
+  trackingId        String?
+  destinationDomain String                  @default("")
+  redirectStatus    AffiliateRedirectStatus @default(REDIRECTED)
+  /// Where on DealMind the click came from (product, search, compare, watchlist).
+  surface           String?
+  /// Referrer host only (never the full URL).
+  referrerDomain    String?
+  /// Salted hash only; raw IP addresses are never stored. Cleared after the retention window.
+  ipHash            String?
+  /// Coarse device class only ("mobile" / "desktop"); cleared after the retention window.
+  userAgent         String?
+  createdAt         DateTime                @default(now())
 
   user        User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   offer       ProductOffer          @relation(fields: [offerId], references: [id], onDelete: Restrict)
@@ -1175,12 +1197,15 @@ model AffiliateClick {
   @@index([userId])
   @@index([sourceId, createdAt])
   @@index([offerId])
+  @@index([createdAt])
 }
 
 enum ConversionStatus {
   PENDING
   APPROVED
   REJECTED
+  /// Approved earlier, then cancelled or returned (commission clawed back).
+  REVERSED
 }
 
 /// Global affiliate revenue reporting, imported from affiliate networks.
@@ -1188,19 +1213,56 @@ model AffiliateConversion {
   id               String           @id @default(uuid(7)) @db.Uuid
   clickId          String?          @db.Uuid
   sourceId         String           @db.Uuid
+  /// Provider that reported it (the authoritative commission source).
+  provider         String           @default("")
+  /// The provider's order (item) id.
   externalOrderRef String
   orderAmountPaise BigInt
   commissionPaise  BigInt
+  currency         String           @default("INR")
   status           ConversionStatus @default(PENDING)
+  /// The provider's own status text, verbatim.
+  providerStatus   String?
+  orderedAt        DateTime?
   reportedAt       DateTime
+  payoutId         String?          @db.Uuid
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  click  AffiliateClick? @relation(fields: [clickId], references: [id], onDelete: SetNull)
-  source ShoppingSource  @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  click  AffiliateClick?  @relation(fields: [clickId], references: [id], onDelete: SetNull)
+  source ShoppingSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  payout AffiliatePayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
 
   @@unique([sourceId, externalOrderRef])
   @@index([clickId])
+  @@index([status, reportedAt])
+}
+
+enum AffiliatePayoutStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+/// Payouts as reported by the partner (never computed by DealMind).
+model AffiliatePayout {
+  id              String                @id @default(uuid(7)) @db.Uuid
+  provider        String
+  sourceId        String?               @db.Uuid
+  amountPaise     BigInt
+  currency        String                @default("INR")
+  status          AffiliatePayoutStatus @default(PENDING)
+  payoutReference String
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  paidAt          DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  source      ShoppingSource?       @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  conversions AffiliateConversion[]
+
+  @@unique([provider, payoutReference])
 }
 
 enum BillingEventType {

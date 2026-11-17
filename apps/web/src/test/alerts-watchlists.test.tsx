@@ -68,7 +68,9 @@ vi.mock("@/services", () => ({
   billing: {
     usage: vi.fn(async () => ({
       plan: "FREE",
-      items: [{ key: "activeAlerts", label: "Active price alerts", used: 1, limit: 3, resetsAt: null }],
+      items: [
+        { key: "activeAlerts", label: "Active price alerts", used: 1, limit: 3, resetsAt: null },
+      ],
       historyDays: 90,
       compareItems: 2,
     })),

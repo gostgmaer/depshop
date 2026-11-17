@@ -164,7 +164,7 @@ function Comparison({ productId }: { productId: string }) {
         <ErrorState message="Couldn't load prices." onRetry={() => void pricing.refetch()} />
       ) : pricing.data.offers.length ? (
         <>
-          <OfferComparisonTable data={pricing.data} />
+          <OfferComparisonTable data={pricing.data} surface="compare" />
           {pricing.data.comparison.notes.length ? (
             <ul className="mt-3 text-xs text-muted-foreground">
               {pricing.data.comparison.notes.map((n) => (

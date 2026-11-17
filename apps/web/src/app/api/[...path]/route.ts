@@ -18,6 +18,9 @@ const TRUSTED_PROXY_COUNT = Number(process.env.TRUSTED_PROXY_COUNT ?? "0");
 const FORWARDED_REQUEST_HEADERS = [
   "accept",
   "content-type",
+  "location",
+  "referrer-policy",
+  "x-robots-tag",
   "cookie",
   "origin",
   "sec-fetch-site",
@@ -26,6 +29,9 @@ const FORWARDED_REQUEST_HEADERS = [
 ];
 const FORWARDED_RESPONSE_HEADERS = [
   "content-type",
+  "location",
+  "referrer-policy",
+  "x-robots-tag",
   "cache-control",
   "retry-after",
   "x-ratelimit-limit",

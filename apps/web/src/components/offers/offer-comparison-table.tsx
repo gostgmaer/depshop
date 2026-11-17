@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime, rupees } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { OfferPricingView, ProductPricingView } from "@/types/api";
+import { AffiliateDisclosure, DISCLOSURE_ID, buyHref } from "./affiliate-disclosure";
 import { BenefitList, DiscountIndicator, ObservedAt, StockBadge } from "./pricing-parts";
 
 /**
@@ -13,9 +14,17 @@ import { BenefitList, DiscountIndicator, ObservedAt, StockBadge } from "./pricin
  * goes only to the lowest eligible (fresh, available) delivered price; offers
  * not observed recently are listed as "last seen", never as current.
  */
-export function OfferComparisonTable({ data }: { data: ProductPricingView }) {
+export function OfferComparisonTable({
+  data,
+  surface = "product",
+}: {
+  data: ProductPricingView;
+  /** Where the click came from (recorded with the click; no personal data). */
+  surface?: "product" | "compare";
+}) {
   const cheapest = data.comparison.cheapestDelivered;
   if (!data.offers.length) return null;
+  const real = data.offers.some((o) => !o.offer.source.isSample);
   const stale = data.offers.filter((o) => o.offer.isStale).length;
   return (
     <div className="flex flex-col gap-3">
@@ -58,7 +67,12 @@ export function OfferComparisonTable({ data }: { data: ProductPricingView }) {
           </thead>
           <tbody>
             {data.offers.map((row) => (
-              <OfferRow key={row.offer.id} row={row} best={row.offer.id === cheapest} />
+              <OfferRow
+                key={row.offer.id}
+                row={row}
+                best={row.offer.id === cheapest}
+                surface={surface}
+              />
             ))}
           </tbody>
         </table>
@@ -66,10 +80,11 @@ export function OfferComparisonTable({ data }: { data: ProductPricingView }) {
       <ul className="flex flex-col gap-3 lg:hidden">
         {data.offers.map((row) => (
           <li key={row.offer.id}>
-            <OfferCard row={row} best={row.offer.id === cheapest} />
+            <OfferCard row={row} best={row.offer.id === cheapest} surface={surface} />
           </li>
         ))}
       </ul>
+      {real ? <AffiliateDisclosure /> : null}
     </div>
   );
 }
@@ -115,7 +130,17 @@ function Marketplace({ row, best }: { row: OfferPricingView; best: boolean }) {
   );
 }
 
-function OfferRow({ row, best }: { row: OfferPricingView; best: boolean }) {
+type Surface = "product" | "compare";
+
+function OfferRow({
+  row,
+  best,
+  surface,
+}: {
+  row: OfferPricingView;
+  best: boolean;
+  surface: Surface;
+}) {
   const p = row.pricing;
   const m = mrp(row);
   const stale = row.offer.isStale;
@@ -160,13 +185,21 @@ function OfferRow({ row, best }: { row: OfferPricingView; best: boolean }) {
         )}
       </td>
       <td className="px-3 py-3">
-        <MarketplaceLink row={row} />
+        <MarketplaceLink row={row} surface={surface} />
       </td>
     </tr>
   );
 }
 
-export function OfferCard({ row, best }: { row: OfferPricingView; best: boolean }) {
+export function OfferCard({
+  row,
+  best,
+  surface,
+}: {
+  row: OfferPricingView;
+  best: boolean;
+  surface: Surface;
+}) {
   const p = row.pricing;
   const m = mrp(row);
   const stale = row.offer.isStale;
@@ -208,24 +241,31 @@ export function OfferCard({ row, best }: { row: OfferPricingView; best: boolean 
       <BenefitList benefits={p.benefits} limit={2} />
       <div className="flex items-center justify-between">
         <StockBadge status={p.stockStatus} />
-        <MarketplaceLink row={row} />
+        <MarketplaceLink row={row} surface={surface} />
       </div>
     </article>
   );
 }
 
-function MarketplaceLink({ row }: { row: OfferPricingView }) {
+function MarketplaceLink({
+  row,
+  surface,
+}: {
+  row: OfferPricingView;
+  surface: "product" | "compare";
+}) {
   if (row.offer.source.isSample)
     return <span className="text-xs text-muted-foreground">Sample store — no real listing</span>;
   return (
     <a
-      href={row.offer.productUrl}
+      href={buyHref(row.offer.id, surface)}
       target="_blank"
-      rel="noopener noreferrer nofollow"
+      rel="noopener nofollow sponsored"
+      aria-describedby={DISCLOSURE_ID}
       className="inline-flex items-center gap-1 text-sm font-medium whitespace-nowrap text-accent hover:underline"
     >
-      View <ExternalLink aria-hidden className="size-3.5" />
-      <span className="sr-only">on {row.offer.source.name} (opens in a new tab)</span>
+      Buy on {row.offer.source.name} <ExternalLink aria-hidden className="size-3.5" />
+      <span className="sr-only">(opens the marketplace in a new tab)</span>
     </a>
   );
 }

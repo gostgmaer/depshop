@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -85,6 +86,11 @@ import {
   usageRoutes,
 } from "./modules/billing/billing-routes.js";
 import { BillingService } from "./modules/billing/billing-service.js";
+import { AffiliateRegistry } from "@dealmind/affiliate";
+import {
+  adminAffiliateRoutes,
+  affiliateClickRoutes,
+} from "./modules/affiliate/affiliate-routes.js";
 import { exportRoutes } from "./modules/billing/export-routes.js";
 import { WatchlistService } from "./modules/watchlists/watchlist-service.js";
 import { watchlistRoutes } from "./modules/watchlists/watchlist-routes.js";
@@ -153,6 +159,10 @@ export interface AppDeps {
   billingProvider?: BillingProvider | null;
   /** Clock override for billing (tests). */
   billingNow?: () => Date;
+  /** Affiliate program registry override (tests inject mock providers). */
+  affiliateRegistry?: AffiliateRegistry;
+  /** fetch for partner report APIs (tests). */
+  affiliateFetch?: typeof fetch;
 }
 
 function trustProxy(value: string): boolean | string {
@@ -374,6 +384,22 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     ...(deps.billingNow ? { now: deps.billingNow } : {}),
   });
   app.decorate("billing", { service: billing, provider: billingProvider, entitlements });
+  const affiliateRegistry =
+    deps.affiliateRegistry ??
+    new AffiliateRegistry({
+      amazonPartnerTag: env.AMAZON_ASSOCIATES_PARTNER_TAG ?? null,
+      flipkartAffiliateId: env.FLIPKART_AFFILIATE_ID ?? null,
+      flipkartAffiliateToken: env.FLIPKART_AFFILIATE_TOKEN ?? null,
+    });
+  const affiliateDeps = {
+    prisma,
+    registry: affiliateRegistry,
+    redis,
+    redisPrefix: env.REDIS_KEY_PREFIX,
+    // IP hashes use a key derived from the session secret (never stored, never sent).
+    ipSalt: createHmac("sha256", env.SESSION_SECRET).update("dealmind:affiliate-ip").digest("hex"),
+    ...(deps.affiliateFetch ? { fetch: deps.affiliateFetch } : {}),
+  };
   const pricing = new PricingService(prisma);
   const search = new SearchService(
     prisma,
@@ -489,6 +515,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       });
       await v1.register(billingRoutes, { prefix: "/billing", billing });
       await v1.register(usageRoutes, { prefix: "/usage", billing });
+      await v1.register(affiliateClickRoutes, { prefix: "/affiliate", ...affiliateDeps });
+      await v1.register(adminAffiliateRoutes, { prefix: "/admin/affiliates", ...affiliateDeps });
       await v1.register(exportRoutes, { prefix: "/exports", prisma, entitlements });
     },
     { prefix: "/api/v1" },

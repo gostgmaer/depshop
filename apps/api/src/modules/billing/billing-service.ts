@@ -166,7 +166,11 @@ export class BillingService {
         );
       // A payment verified in the last hour but not yet recorded: never start a second one.
       const verifying = await tx.checkoutSession.count({
-        where: { userId, status: "VERIFYING", updatedAt: { gt: new Date(now.getTime() - 3_600_000) } },
+        where: {
+          userId,
+          status: "VERIFYING",
+          updatedAt: { gt: new Date(now.getTime() - 3_600_000) },
+        },
       });
       if (verifying)
         throw new AppError(
