@@ -23,8 +23,9 @@ const USER_OWNED_TABLES = [
   "AgentRun",
   "Subscription",
   "UsageRecord",
-  "BillingEvent",
   "PushSubscription",
+  "CheckoutSession",
+  "UsageCounter",
 ];
 
 /** Child → parent pairs protected by composite (parentId, userId) foreign keys. */
@@ -64,6 +65,7 @@ describe("schema: no multi-tenancy", () => {
         "AlertEvaluation",
         "AuditLog",
         "BillingEvent",
+        "CheckoutSession",
         "Category",
         "Notification",
         "NotificationDelivery",
@@ -83,6 +85,7 @@ describe("schema: no multi-tenancy", () => {
         "ShoppingSource",
         "Subscription",
         "SubscriptionPlan",
+        "UsageCounter",
         "UsageRecord",
         "User",
         "UserPreference",
@@ -115,6 +118,16 @@ describe("schema: user ownership", () => {
     },
   );
 
+  it("BillingEvent keeps financial records: nullable userId (unknown customers), FK with ON DELETE RESTRICT", async () => {
+    const rows = await prisma.$queryRaw<{ nullable: string; type: string; deltype: string }[]>`
+      SELECT c.is_nullable AS nullable, c.data_type AS type, k.confdeltype AS deltype
+      FROM information_schema.columns c
+      JOIN pg_constraint k ON k.conrelid = '"BillingEvent"'::regclass AND k.contype = 'f'
+        AND k.confrelid = '"User"'::regclass
+      WHERE c.table_schema = 'public' AND c.table_name = 'BillingEvent' AND c.column_name = 'userId'`;
+    expect(rows).toEqual([{ nullable: "YES", type: "uuid", deltype: "r" }]);
+  });
+
   it.each(COMPOSITE_OWNERSHIP_FKS)(
     "$table → $parent is a composite ($columns) ownership FK",
     async ({ table, parent, columns }) => {
@@ -138,8 +151,8 @@ describe("schema: types and conventions", () => {
       WHERE table_schema = 'public' AND column_name = 'id' AND table_name <> '_prisma_migrations'`;
     const nonUuid = rows.filter((r) => r.data_type !== "uuid");
     expect(nonUuid).toEqual([]);
-    // SubscriptionPlan (code) and PlatformSetting (key) use natural keys.
-    expect(rows).toHaveLength((await publicTables()).length - 2);
+    // SubscriptionPlan (code), PlatformSetting (key) and UsageCounter (user, metric, period) use natural keys.
+    expect(rows).toHaveLength((await publicTables()).length - 3);
   });
 
   it("generates time-ordered UUIDv7 ids", async () => {

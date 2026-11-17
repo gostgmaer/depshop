@@ -12,9 +12,7 @@
  *  - Every record belongs to the authenticated user; another user's checkout
  *    is "not found".
  */
-import type {
-  EntitlementService,
-  SubscriptionSync} from "@dealmind/billing";
+import type { EntitlementService, SubscriptionSync } from "@dealmind/billing";
 import {
   type BillingProvider,
   type CustomerRef,
@@ -42,6 +40,7 @@ import {
 } from "@dealmind/shared";
 import { recordAudit } from "../users/audit.js";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LIVE = ["ACTIVE", "TRIALING", "PAST_DUE", "PAUSED"] as const;
 const isLive = (s: string) => (LIVE as readonly string[]).includes(s);
 
@@ -164,6 +163,15 @@ export class BillingService {
         throw new AppError(
           ErrorCode.CONFLICT,
           "You already have a subscription. Change your plan instead.",
+        );
+      // A payment verified in the last hour but not yet recorded: never start a second one.
+      const verifying = await tx.checkoutSession.count({
+        where: { userId, status: "VERIFYING", updatedAt: { gt: new Date(now.getTime() - 3_600_000) } },
+      });
+      if (verifying)
+        throw new AppError(
+          ErrorCode.CONFLICT,
+          "Your last payment is still being confirmed. You'll be notified when your plan is active.",
         );
       const open = await tx.checkoutSession.findFirst({
         where: { userId, status: "PENDING", expiresAt: { gt: now } },
@@ -527,10 +535,13 @@ export class BillingService {
     if (event.applicationId !== this.opts.applicationId)
       return { status: 202, body: { ignored: "other application" } };
 
-    const user = await this.prisma.user.findUnique({
-      where: { iamUserId: event.data.customerId },
-      select: { id: true },
-    });
+    // IAM ids are UUIDs; anything else can't be a DealMind user (and must not reach the UUID column).
+    const user = UUID_RE.test(event.data.customerId)
+      ? await this.prisma.user.findUnique({
+          where: { iamUserId: event.data.customerId },
+          select: { id: true },
+        })
+      : null;
     const inserted = await this.prisma.billingEvent.createManyAndReturn({
       data: [
         {

@@ -30,6 +30,10 @@ const CATEGORY: Record<NotificationCategoryValue, { label: string; hint: string 
     label: "Account & security",
     hint: "Password changes and sign-ins from new devices. Always shown in the app; security emails come from your EasyDev account service.",
   },
+  BILLING: {
+    label: "Billing",
+    hint: "Payments, renewals, failed payments and plan changes. Always shown in the app.",
+  },
 };
 const CHANNEL: Record<NotificationChannelKey, string> = {
   inApp: "In the app",
@@ -55,7 +59,7 @@ const TIME_ZONES = [
 
 /** A channel can't be changed for this category (fixed by policy). */
 const locked = (c: NotificationCategoryValue, ch: NotificationChannelKey) =>
-  c === "ACCOUNT" && (ch === "inApp" || ch === "email");
+  (c === "ACCOUNT" && (ch === "inApp" || ch === "email")) || (c === "BILLING" && ch === "inApp");
 
 export function NotificationSettings() {
   const prefs = useNotificationPreferences();

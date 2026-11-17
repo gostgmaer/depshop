@@ -65,7 +65,14 @@ vi.mock("@/services", () => ({
     history: vi.fn(async () => page([])),
   },
   watchlists: { get: vi.fn(), rename: vi.fn(async () => ({})), removeItem: vi.fn() },
-  billing: { usage: vi.fn(async () => ({ activeAlerts: { used: 1, limit: 3 } })) },
+  billing: {
+    usage: vi.fn(async () => ({
+      plan: "FREE",
+      items: [{ key: "activeAlerts", label: "Active price alerts", used: 1, limit: 3, resetsAt: null }],
+      historyDays: 90,
+      compareItems: 2,
+    })),
+  },
   notifications: { unreadCount: vi.fn(async () => ({ unread: 0 })) },
 }));
 type Mocked = Record<string, Record<string, ReturnType<typeof vi.fn>>>;

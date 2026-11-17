@@ -5,7 +5,7 @@
  * reused. A changed price yields a new provider plan; existing subscribers
  * keep billing on the old one (the provider's versioning).
  */
-import type { Prisma, PrismaClient } from "@dealmind/db";
+import type { PrismaClient } from "@dealmind/db";
 import type { BillingIntervalValue } from "@dealmind/shared";
 import type { EntitlementService } from "../entitlements/service.js";
 import type { BillingProvider, ProviderPlanSpec } from "../providers/interface.js";
@@ -42,7 +42,7 @@ export async function provisionProviderPlans(
     }
     await prisma.subscriptionPlan.updateMany({
       where: { code: plan.code },
-      data: { providerPlanIds: providerPlanIds as Prisma.InputJsonObject },
+      data: { providerPlanIds: providerPlanIds },
     });
   }
   return ids;

@@ -26,6 +26,9 @@ export default async function HomePage() {
           DealMind<span className="text-primary"> AI</span>
         </span>
         <div className="flex gap-2">
+          <Button size="sm" variant="ghost" asChild>
+            <Link href="/pricing">Pricing</Link>
+          </Button>
           {user ? (
             <Button size="sm" variant="outline" asChild>
               <Link href="/dashboard">Dashboard</Link>

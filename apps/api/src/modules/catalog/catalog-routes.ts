@@ -4,6 +4,7 @@
  */
 import {
   AppError,
+  ErrorCode,
   compareQuery,
   compareView,
   productPricingQuery,
@@ -25,6 +26,7 @@ import {
   variantView,
 } from "@dealmind/shared";
 import { type PricingService, compareOffers, recommend } from "@dealmind/intelligence";
+import type { EntitlementService } from "@dealmind/billing";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { ok, page } from "../../utils/http.js";
@@ -90,7 +92,8 @@ export const categoryRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> 
 export const productRoutes: FastifyPluginAsyncZod<{
   catalog: CatalogService;
   pricing: PricingService;
-}> = async (app, { catalog, pricing }) => {
+  entitlements: EntitlementService;
+}> = async (app, { catalog, pricing, entitlements }) => {
   app.get(
     "/",
     {
@@ -207,10 +210,28 @@ export const productRoutes: FastifyPluginAsyncZod<{
           response: { 200: ok(priceHistory) },
         },
       },
-      async (req) => catalog.getPriceHistory(req.params.id, req.query),
+      async (req) => {
+        // Plan limit on history depth (signed-out visitors get FREE's).
+        const limit = await historyLimit(entitlements, await app.optionalAuth(req));
+        const wanted = req.query.days;
+        const clamp = limit > 0 && (wanted === "all" || wanted > limit);
+        const history = await catalog.getPriceHistory(req.params.id, {
+          ...req.query,
+          days: clamp ? limit : wanted,
+        });
+        return { ...history, planLimitDays: clamp ? limit : null };
+      },
     );
   }
 };
+
+async function historyLimit(
+  entitlements: EntitlementService,
+  auth: { userId: string } | null,
+): Promise<number> {
+  if (auth) return (await entitlements.context(auth.userId)).plan.limits.historyDays;
+  return (await entitlements.plans()).get("FREE")!.limits.historyDays;
+}
 
 export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
   app,
@@ -263,7 +284,8 @@ export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = 
 export const compareRoutes: FastifyPluginAsyncZod<{
   catalog: CatalogService;
   pricing: PricingService;
-}> = async (app, { catalog, pricing }) => {
+  entitlements: EntitlementService;
+}> = async (app, { catalog, pricing, entitlements }) => {
   app.get(
     "/",
     {
@@ -277,6 +299,16 @@ export const compareRoutes: FastifyPluginAsyncZod<{
       },
     },
     async (req) => {
+      const auth = await app.optionalAuth(req);
+      const max = auth
+        ? (await entitlements.context(auth.userId)).plan.limits.compareItems
+        : (await entitlements.plans()).get("FREE")!.limits.compareItems;
+      if (req.query.items.length > max)
+        throw new AppError(
+          ErrorCode.PLAN_UPGRADE_REQUIRED,
+          `Your plan compares up to ${max} products at a time. Upgrade to compare more.`,
+          { limit: "compareItems", allowed: max },
+        );
       const items = await Promise.all(
         req.query.items.map(async (item) => {
           const variants = await catalog.getVariants(item.productId); // 404 for unknown products

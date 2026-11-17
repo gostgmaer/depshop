@@ -45,6 +45,48 @@ const err = (code: string, message: string) => ({
   meta: { requestId: "e2e" },
 });
 
+const mockLimits = (n: number) => ({
+  searchesPerDay: 20 * n,
+  activeAlerts: 5 * n,
+  watchlists: 2 * n,
+  trackedProducts: 25 * n,
+  historyDays: n === 1 ? 90 : 365,
+  compareItems: n === 1 ? 2 : 4,
+  exportsPerMonth: n === 1 ? 0 : 10,
+});
+const MOCK_PLANS = [
+  {
+    code: "FREE",
+    name: "Free",
+    description: "Sample free plan",
+    monthlyPricePaise: 0,
+    annualPricePaise: null,
+    limits: mockLimits(1),
+    features: { prioritySearch: false, exports: false },
+    purchasableIntervals: [],
+  },
+  {
+    code: "PRO",
+    name: "Pro",
+    description: "Sample paid plan",
+    monthlyPricePaise: 19_900,
+    annualPricePaise: 199_000,
+    limits: mockLimits(10),
+    features: { prioritySearch: true, exports: true },
+    purchasableIntervals: ["MONTHLY", "ANNUAL"],
+  },
+  {
+    code: "BUSINESS",
+    name: "Business",
+    description: "Sample paid plan",
+    monthlyPricePaise: 99_900,
+    annualPricePaise: 999_000,
+    limits: mockLimits(100),
+    features: { prioritySearch: true, exports: true },
+    purchasableIntervals: ["MONTHLY", "ANNUAL"],
+  },
+];
+
 function send(
   res: ServerResponse,
   status: number,
@@ -304,15 +346,53 @@ const server = createServer((req, res) => {
       }),
     );
   if (path === "/push/config") return send(res, 200, ok({ publicKey: null }));
-  if (path === "/subscriptions/me/usage")
+  if (path === "/usage")
     return send(
       res,
       200,
       ok({
         plan: "FREE",
-        searchesToday: { used: 1, limit: 10, resetsAt: new Date().toISOString() },
-        activeAlerts: { used: 0, limit: 3 },
-        watchlists: { used: 0, limit: 2 },
+        items: [
+          {
+            key: "searches",
+            label: "AI searches today",
+            used: 1,
+            limit: 20,
+            resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          { key: "activeAlerts", label: "Active price alerts", used: 0, limit: 5, resetsAt: null },
+          { key: "watchlists", label: "Watchlists", used: 0, limit: 2, resetsAt: null },
+          { key: "trackedProducts", label: "Tracked products", used: 0, limit: 25, resetsAt: null },
+          {
+            key: "exports",
+            label: "Exports this month",
+            used: 0,
+            limit: 0,
+            resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        ],
+        historyDays: 90,
+        compareItems: 2,
+      }),
+    );
+  // Sample plans (E2E mock data; real prices come from the API's configurable plan rows).
+  if (path === "/billing/plans") return send(res, 200, ok(MOCK_PLANS));
+  if (path === "/billing/subscription")
+    return send(
+      res,
+      200,
+      ok({
+        plan: MOCK_PLANS[0],
+        effectivePlan: "FREE",
+        status: "ACTIVE",
+        interval: null,
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        trialEnd: null,
+        graceUntil: null,
+        provider: null,
+        lastSyncedAt: null,
       }),
     );
   return send(res, 404, err("NOT_FOUND", `E2E mock has no ${method} ${path}`));

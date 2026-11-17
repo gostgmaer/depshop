@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/auth-hooks";
 import { notifications } from "@/services";
 
-const LABEL = { PRICE_ALERTS: "price alert", SEARCH: "search update", ACCOUNT: "account" } as const;
+const LABEL = {
+  PRICE_ALERTS: "price alert",
+  SEARCH: "search update",
+  ACCOUNT: "account",
+  BILLING: "billing",
+} as const;
 
 export function Unsubscribe() {
   const token = useSearchParams().get("token");

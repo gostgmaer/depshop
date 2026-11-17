@@ -85,6 +85,7 @@ import {
   usageRoutes,
 } from "./modules/billing/billing-routes.js";
 import { BillingService } from "./modules/billing/billing-service.js";
+import { exportRoutes } from "./modules/billing/export-routes.js";
 import { WatchlistService } from "./modules/watchlists/watchlist-service.js";
 import { watchlistRoutes } from "./modules/watchlists/watchlist-routes.js";
 import { envelopePlugin } from "./plugins/envelope.js";
@@ -447,8 +448,18 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       });
       await v1.register(adminCatalogRoutes, { prefix: "/admin/catalog", prisma, catalog });
       await v1.register(categoryRoutes, { prefix: "/categories", catalog });
-      await v1.register(productRoutes, { prefix: "/products", catalog, pricing });
-      await v1.register(compareRoutes, { prefix: "/compare", catalog, pricing });
+      await v1.register(productRoutes, {
+        prefix: "/products",
+        catalog,
+        pricing,
+        entitlements,
+      });
+      await v1.register(compareRoutes, {
+        prefix: "/compare",
+        catalog,
+        pricing,
+        entitlements,
+      });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
       await v1.register(searchRoutes, {
         prefix: "/search",
@@ -478,6 +489,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       });
       await v1.register(billingRoutes, { prefix: "/billing", billing });
       await v1.register(usageRoutes, { prefix: "/usage", billing });
+      await v1.register(exportRoutes, { prefix: "/exports", prisma, entitlements });
     },
     { prefix: "/api/v1" },
   );

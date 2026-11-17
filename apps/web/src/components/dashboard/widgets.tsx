@@ -1,5 +1,6 @@
 "use client";
 
+import { usageOf } from "@/lib/billing";
 import { TERMINAL_SEARCH_STATUSES } from "@dealmind/shared";
 import {
   BellRing,
@@ -317,11 +318,11 @@ export function ActivityOverview() {
     ? [
         {
           label: "Searches today",
-          value: `${usage.data.searchesToday.used} / ${usage.data.searchesToday.limit}`,
+          value: `${usageOf(usage.data, "searches").used} / ${usageOf(usage.data, "searches").limit}`,
         },
         {
           label: "Active alerts",
-          value: `${usage.data.activeAlerts.used} / ${usage.data.activeAlerts.limit}`,
+          value: `${usageOf(usage.data, "activeAlerts").used} / ${usageOf(usage.data, "activeAlerts").limit}`,
         },
         { label: "Watched items", value: String(watched) },
       ]

@@ -25,6 +25,9 @@ import type {
   sourceStatus,
   subscriptionView,
   usageView,
+  checkoutView,
+  invoiceView,
+  paymentView,
   variantView,
   watchlistDetail,
   watchlistItemView,
@@ -78,3 +81,6 @@ export type PushSubscribeRequest = z.input<typeof pushSubscribeInput>;
 export type Plan = z.infer<typeof planView>;
 export type Subscription = z.infer<typeof subscriptionView>;
 export type Usage = z.infer<typeof usageView>;
+export type Checkout = z.infer<typeof checkoutView>;
+export type Payment = z.infer<typeof paymentView>;
+export type Invoice = z.infer<typeof invoiceView>;

@@ -281,4 +281,26 @@ export const usePlans = () =>
   useQuery({ queryKey: keys.plans, queryFn: billing.plans, staleTime: 10 * 60_000 });
 export const useSubscription = () =>
   useQuery({ queryKey: keys.subscription, queryFn: billing.subscription });
-export const useUsage = () => useQuery({ queryKey: keys.usage, queryFn: billing.usage });
+export const useUsage = () => useQuery({ queryKey: keys.usage, queryFn: () => billing.usage() });
+export const usePayments = () =>
+  useQuery({ queryKey: ["billing", "payments"] as const, queryFn: () => billing.payments() });
+export const useInvoices = () =>
+  useQuery({ queryKey: ["billing", "invoices"] as const, queryFn: () => billing.invoices() });
+export function useBillingMutations() {
+  const qc = useQueryClient();
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["billing"] });
+    void qc.invalidateQueries({ queryKey: keys.usage });
+  };
+  return {
+    cancel: useMutation({
+      mutationFn: (reason?: string) => billing.cancel(reason),
+      onSuccess: done,
+    }),
+    changePlan: useMutation({
+      mutationFn: (v: Parameters<typeof billing.changePlan>[0]) => billing.changePlan(v),
+      onSuccess: done,
+    }),
+    refresh: done,
+  };
+}

@@ -89,7 +89,19 @@ describe("GET /products/:id/history", () => {
     expect(week.status, week.raw).toBe(200);
     // The import's own snapshot (now) and the one 5 days ago; nothing invented in between.
     expect(week.body.data.points.map((p) => p.sellingPricePaise)).toEqual([2_570_000, 2_499_900]);
+    // Signed out: the FREE plan's 90-day history limit applies, and says so.
+    const limited = await get<History & { planLimitDays: number | null }>(
+      `/api/v1/products/${productId}/history?days=all`,
+    );
+    expect(limited.body.data.planLimitDays).toBe(90);
+    expect(limited.body.data.points).toHaveLength(3);
+    // A plan with unlimited history (0) returns everything stored.
+    await ctx.prisma.subscriptionPlan.update({
+      where: { code: "FREE" },
+      data: { limits: { historyDays: 0 } },
+    });
     const all = await get<History>(`/api/v1/products/${productId}/history?days=all`);
+    await ctx.prisma.subscriptionPlan.update({ where: { code: "FREE" }, data: { limits: {} } });
     expect(all.body.data.points).toHaveLength(5);
     expect(all.body.data.trackingSince).toBe(all.body.data.points[0]!.observedAt);
     expect(Date.parse(all.body.data.trackingSince!)).toBeLessThan(now - 399 * DAY);

@@ -17,10 +17,21 @@ import {
   RedisRateLimiter,
   createDefaultRegistry,
 } from "@dealmind/connectors";
+import {
+  EasyDevPaymentsProvider,
+  EntitlementService,
+  SubscriptionSync,
+  reconcileSubscriptions,
+} from "@dealmind/billing";
 import { SharedServiceEmailProvider, WebPushProvider } from "@dealmind/notifications";
 import { NotificationClient } from "@easydev_org/notification-sdk";
 import { createPrismaClient } from "@dealmind/db";
-import { QueueName, redisConnectionFromUrl, shoppingSearchJob } from "@dealmind/queue";
+import {
+  QueueName,
+  billingControlJob,
+  redisConnectionFromUrl,
+  shoppingSearchJob,
+} from "@dealmind/queue";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { pino } from "pino";
@@ -77,6 +88,13 @@ const env = z
     APP_URL: z.string().url().default("http://localhost:3100"),
     /** Searches running at least this long notify their owner when they finish. */
     SEARCH_NOTIFY_MIN_SECONDS: z.coerce.number().int().min(0).max(3_600).default(20),
+    // ── Billing reconcile (shared EasyDev payment service) ──
+    BILLING_PROVIDER: z.enum(["none", "easydev-payments", "sandbox"]).default("none"),
+    PAYMENT_SERVICE_URL: z.string().url().optional(),
+    PAYMENT_SERVICE_API_KEY: z.string().optional(),
+    PAYMENT_TENANT_ID: z.string().min(1).default("easydev"),
+    PAYMENT_APPLICATION_ID: z.string().min(1).default("dealmind"),
+    BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(14).default(3),
     /** Signs email unsubscribe links (≥ 32 chars; same value in the API). */
     NOTIFICATION_TOKEN_SECRET: z.string().min(32).optional(),
     /** Web push (VAPID). All three or none; unset: push deliveries are SKIPPED. */
@@ -103,6 +121,7 @@ const log = pino({
     "*.AGENT_SERVICE_TOKEN",
     "*.AGENT_USER_CONTEXT_SECRET",
     "*.NOTIFICATION_API_KEY",
+    "*.PAYMENT_SERVICE_API_KEY",
     "*.NOTIFICATION_TOKEN_SECRET",
     "*.VAPID_PRIVATE_KEY",
     "*.privateKey",
@@ -300,6 +319,52 @@ if (env.TRACKING_ENABLED === "true") {
   log.warn("price tracking disabled (TRACKING_ENABLED=false)");
 }
 
+// ── Billing: hourly payment-status reconcile (lost webhooks, expired checkouts) ──
+const billingQueue = new Queue(QueueName.billingControl, { connection, prefix: bullPrefix });
+let billingWorker: Worker | null = null;
+if (
+  env.BILLING_PROVIDER === "easydev-payments" &&
+  env.PAYMENT_SERVICE_URL &&
+  env.PAYMENT_SERVICE_API_KEY
+) {
+  const entitlements = new EntitlementService(prisma, { graceDays: env.BILLING_GRACE_DAYS });
+  const sync = new SubscriptionSync({
+    prisma,
+    provider: new EasyDevPaymentsProvider({
+      baseUrl: env.PAYMENT_SERVICE_URL,
+      apiKey: env.PAYMENT_SERVICE_API_KEY,
+      tenantId: env.PAYMENT_TENANT_ID,
+      applicationId: env.PAYMENT_APPLICATION_ID,
+    }),
+    entitlements,
+    graceDays: env.BILLING_GRACE_DAYS,
+    enqueueDelivery: enqueueDelivery({ queues: { notification: notificationQueue } }),
+    realtime: { redis, prefix },
+  });
+  billingWorker = new Worker(
+    QueueName.billingControl,
+    async (job) => {
+      billingControlJob.parse(job.data);
+      const r = await reconcileSubscriptions(prisma, sync);
+      log.info(r, "billing reconciled");
+      return r;
+    },
+    { connection, prefix: bullPrefix, concurrency: 1 },
+  );
+  billingWorker.on("failed", (job, err) =>
+    log.error({ jobId: job?.id, err: err.message }, "billing reconcile failed"),
+  );
+  await billingQueue.upsertJobScheduler(
+    "billing-reconcile",
+    { every: 3_600_000 },
+    { name: "reconcile", data: { task: "reconcile" } },
+  );
+} else {
+  await billingQueue.removeJobScheduler("billing-reconcile");
+  if (env.BILLING_PROVIDER === "sandbox")
+    log.info("billing reconcile off: the sandbox provider lives in the API process only");
+}
+
 for (const w of [searchWorker, healthWorker]) {
   w.on("failed", (job, err) =>
     log.error({ queue: w.name, jobId: job?.id, err: err.message }, "job failed"),
@@ -326,6 +391,8 @@ async function shutdown(signal: string): Promise<void> {
     searchWorker.close(),
     healthWorker.close(),
     notificationWorker.close(),
+    billingWorker?.close(),
+    billingQueue.close(),
     ...trackingWorkers.map((w) => w.close()),
   ]);
   await Promise.all([

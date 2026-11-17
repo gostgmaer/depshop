@@ -1,5 +1,6 @@
 "use client";
 
+import { usageOf } from "@/lib/billing";
 import type { AlertStatusValue } from "@dealmind/shared";
 import { Ban, BellRing, Info, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -40,7 +41,7 @@ export function AlertsView() {
         title="Price alerts"
         description={
           usage.data
-            ? `${usage.data.activeAlerts.used} of ${usage.data.activeAlerts.limit} active alerts on your plan.`
+            ? `${usageOf(usage.data, "activeAlerts").used} of ${usageOf(usage.data, "activeAlerts").limit} active alerts on your plan.`
             : "Get notified when a product meets your condition."
         }
       />

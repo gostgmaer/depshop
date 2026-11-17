@@ -18,6 +18,7 @@ export const QueueName = {
   connectorHealth: "connector-health",
   /** Repeatable control jobs: the tracking scheduler tick and cleanup. */
   trackingControl: "tracking-control",
+  billingControl: "billing-control",
   /** Jobs that exhausted their retries (kept for inspection; never re-run automatically). */
   deadLetter: "dead-letter",
 } as const;
@@ -57,6 +58,10 @@ export type NotificationDeliveryJob = z.infer<typeof notificationDeliveryJob>;
 /** Tracking control: "schedule" (enqueue due offers) or "cleanup" (expire, prune). */
 export const trackingControlJob = z.object({ task: z.enum(["schedule", "cleanup"]) }).strict();
 export type TrackingControlJob = z.infer<typeof trackingControlJob>;
+
+/** Billing housekeeping: "reconcile" (re-read due/stale subscriptions, expire checkouts). */
+export const billingControlJob = z.object({ task: z.enum(["reconcile"]) }).strict();
+export type BillingControlJob = z.infer<typeof billingControlJob>;
 
 /** A job that exhausted its retries, recorded for operators. */
 export const deadLetterJob = z.object({
@@ -107,6 +112,10 @@ export const JOBS = {
     schema: trackingControlJob,
     jobId: (p: TrackingControlJob) => jobId("tracking", p.task),
   },
+  [QueueName.billingControl]: {
+    schema: billingControlJob,
+    jobId: (p: BillingControlJob) => jobId("billing", p.task),
+  },
   [QueueName.deadLetter]: {
     schema: deadLetterJob,
     jobId: (p: DeadLetterJob) => jobId("dead", p.queue, p.jobId, String(p.attemptsMade)),
@@ -120,6 +129,7 @@ export interface JobPayloads {
   [QueueName.notificationDelivery]: NotificationDeliveryJob;
   [QueueName.connectorHealth]: ConnectorHealthJob;
   [QueueName.trackingControl]: TrackingControlJob;
+  [QueueName.billingControl]: BillingControlJob;
   [QueueName.deadLetter]: DeadLetterJob;
 }
 

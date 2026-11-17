@@ -1,5 +1,6 @@
 "use client";
 
+import { usageOf } from "@/lib/billing";
 import { Plus, Star, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useState } from "react";
@@ -38,7 +39,7 @@ export function WatchlistsView() {
         title="Watchlists"
         description={
           usage.data
-            ? `${usage.data.watchlists.used} of ${usage.data.watchlists.limit} watchlists on your plan.`
+            ? `${usageOf(usage.data, "watchlists").used} of ${usageOf(usage.data, "watchlists").limit} watchlists on your plan.`
             : "Follow the prices of products you care about."
         }
       />

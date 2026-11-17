@@ -335,11 +335,10 @@ describe("recovery and dead letters", () => {
       concurrency: 1,
       backoff: { ...NOTIFICATION_BACKOFF, baseMs: 10, capMs: 20 },
       process: (data, c) =>
-        processNotificationDelivery(
-          deps({ email: failing, now: () => new Date() }),
-          data,
-          { attempt: c.attempt, maxAttempts: 3 },
-        ),
+        processNotificationDelivery(deps({ email: failing, now: () => new Date() }), data, {
+          attempt: c.attempt,
+          maxAttempts: 3,
+        }),
       onDeadLetter: async (data, reason) => {
         await prisma.notificationDelivery.updateMany({
           where: { id: data.deliveryId, status: "PENDING" },
@@ -408,4 +407,3 @@ describe("search notifications", () => {
     expect(enqueued).toEqual([]);
   });
 });
-

@@ -46,6 +46,10 @@ Browser ──cookie──► DealMind API ──► IAM  (/auth/login, /auth/re
   (`subject` + `html` + `text`), added for DealMind on the service's
   `feat/prerendered-email` branch (uncommitted, not yet deployed). See
   [NOTIFICATIONS.md](NOTIFICATIONS.md).
+- Payments go through the shared EasyDev `payment-microservice` (Razorpay keys live
+  there, never in DealMind), called with its service key. DealMind receives its
+  billing changes through signed outbound webhooks added on the service's
+  `feat/outbound-webhooks` branch (uncommitted, not deployed). See [BILLING.md](BILLING.md).
 
 ## IAM contract (observed on the running service, 2026-11-14)
 

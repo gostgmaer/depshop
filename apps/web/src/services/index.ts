@@ -6,6 +6,7 @@ import type {
   AlertStatusValue,
   CreateSearchInput,
   NotificationCategoryValue,
+  BillingIntervalValue,
 } from "@dealmind/shared";
 import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
 /** History period: days, or every stored observation. */
@@ -20,6 +21,9 @@ import type {
   CategoryFiltersView,
   CategoryNode,
   Notification,
+  Checkout,
+  Invoice,
+  Payment,
   NotificationPreferences,
   PushSubscribeRequest,
   UpdateNotificationPreferences,
@@ -184,7 +188,25 @@ export const push = {
 // ── Subscription (user-owned) ─────────────────────────────────────────────
 
 export const billing = {
-  plans: () => api<Plan[]>("GET", "/subscriptions/plans"),
-  subscription: () => api<Subscription>("GET", "/subscriptions/me"),
-  usage: () => api<Usage>("GET", "/subscriptions/me/usage"),
+  plans: () => api<Plan[]>("GET", "/billing/plans"),
+  subscription: () => api<Subscription>("GET", "/billing/subscription"),
+  usage: () => api<Usage>("GET", "/usage"),
+  startCheckout: (body: { plan: "PRO" | "BUSINESS"; interval: BillingIntervalValue }) =>
+    api<Checkout>("POST", "/billing/checkout", body),
+  checkout: (id: string) => api<Checkout>("GET", `/billing/checkout/${id}`),
+  /** Forwards the payment proof for server-side verification (never trusted by itself). */
+  confirmCheckout: (
+    id: string,
+    body:
+      | { razorpayPaymentId: string; razorpaySubscriptionId: string; razorpaySignature: string }
+      | { sandboxOutcome: "success" | "failure" },
+  ) => api<Checkout>("POST", `/billing/checkout/${id}/confirm`, body),
+  cancel: (reason?: string) =>
+    api<Subscription>("POST", "/billing/cancel", reason ? { reason } : {}),
+  changePlan: (body: { plan: "FREE" | "PRO" | "BUSINESS"; interval: BillingIntervalValue }) =>
+    api<Subscription>("POST", "/billing/change-plan", body),
+  payments: () => api<Payment[]>("GET", "/billing/payments"),
+  invoices: () => api<Invoice[]>("GET", "/billing/invoices"),
+  /** Same-origin CSV download (plan feature). */
+  exportUrl: (kind: "watchlists" | "alerts" | "searches") => `/api/v1/exports/${kind}.csv`,
 };

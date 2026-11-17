@@ -237,6 +237,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@dealmind/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
       '@dealmind/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog

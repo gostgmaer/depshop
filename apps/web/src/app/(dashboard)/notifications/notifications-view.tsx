@@ -25,6 +25,7 @@ export const CATEGORY_LABEL: Record<NotificationCategoryValue, string> = {
   PRICE_ALERTS: "Price alerts",
   SEARCH: "Searches",
   ACCOUNT: "Account",
+  BILLING: "Billing",
 };
 
 export function NotificationList({
@@ -157,6 +158,7 @@ export function NotificationsView() {
               { value: "PRICE_ALERTS", label: CATEGORY_LABEL.PRICE_ALERTS },
               { value: "SEARCH", label: CATEGORY_LABEL.SEARCH },
               { value: "ACCOUNT", label: CATEGORY_LABEL.ACCOUNT },
+              { value: "BILLING", label: CATEGORY_LABEL.BILLING },
             ]}
           />
         </div>

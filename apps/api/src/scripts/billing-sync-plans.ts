@@ -3,7 +3,11 @@
  * the provider plan ids (pnpm --filter @dealmind/api billing:sync-plans).
  * Idempotent; prints only plan keys and ids (no secrets).
  */
-import { EasyDevPaymentsProvider, EntitlementService, provisionProviderPlans } from "@dealmind/billing";
+import {
+  EasyDevPaymentsProvider,
+  EntitlementService,
+  provisionProviderPlans,
+} from "@dealmind/billing";
 import { createPrismaClient } from "@dealmind/db";
 import { loadEnv } from "../config/env.js";
 

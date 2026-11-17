@@ -7,7 +7,6 @@
 import { z } from "zod";
 import { pageQuery } from "./envelope.js";
 import { pricingResultSchema } from "./pricing-contracts.js";
-import { PlanCode } from "./schemas.js";
 
 const uuid = z.string().uuid();
 const paise = z.number().int().nonnegative();
@@ -391,6 +390,8 @@ export const priceHistory = z.object({
   trackingSince: iso.nullable(),
   /** True when the period had more observations than returned (the newest are always kept). */
   truncated: z.boolean(),
+  /** Set when the caller's plan limited the period to this many days. */
+  planLimitDays: z.number().int().positive().nullable().optional(),
 });
 
 // ── Shopping sources ──────────────────────────────────────────────────────

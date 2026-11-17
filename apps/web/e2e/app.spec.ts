@@ -183,6 +183,8 @@ for (const scheme of ["light", "dark"] as const) {
       "/history",
       "/notifications",
       "/settings/notifications",
+      "/billing",
+      "/pricing",
       "/unsubscribe?token=sample",
       "/categories",
       "/compare",

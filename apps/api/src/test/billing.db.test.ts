@@ -67,7 +67,7 @@ type Checkout = {
 };
 
 async function iamIdOf(userId: string) {
-  return (await ctx.prisma.user.findUniqueOrThrow({ where: { id: userId } })).iamUserId!;
+  return (await ctx.prisma.user.findUniqueOrThrow({ where: { id: userId } })).iamUserId;
 }
 
 /** Sends a webhook signed like the shared payment service. */
@@ -115,16 +115,15 @@ describe("1. plans", () => {
   it("lists plans with server prices in paise, limits, features and purchasable intervals", async () => {
     const res = await ctx.app.inject({ method: "GET", url: "/api/v1/billing/plans" });
     expect(res.statusCode).toBe(200);
-    const plans =
-      data<
-        {
-          code: string;
-          monthlyPricePaise: number;
-          annualPricePaise: number | null;
-          purchasableIntervals: string[];
-          limits: Record<string, number>;
-        }[]
-      >(res);
+    const plans = data<
+      {
+        code: string;
+        monthlyPricePaise: number;
+        annualPricePaise: number | null;
+        purchasableIntervals: string[];
+        limits: Record<string, number>;
+      }[]
+    >(res);
     expect(plans.map((p) => p.code)).toEqual(["FREE", "PRO", "BUSINESS"]);
     expect(plans[0]).toMatchObject({ monthlyPricePaise: 0, purchasableIntervals: [] });
     expect(plans[1]).toMatchObject({
@@ -399,8 +398,8 @@ describe("12–13. usage limits (atomic)", () => {
       data: { limits: { searchesPerDay: 2 } },
     });
     const search = (q: string) => agent.post("/api/v1/search", { query: q });
-    expect((await search("phone one")).statusCode).toBe(201);
-    expect((await search("phone two")).statusCode).toBe(201);
+    expect((await search("phone one")).statusCode).toBe(202);
+    expect((await search("phone two")).statusCode).toBe(202);
     const third = await search("phone three");
     expect(third.statusCode).toBe(429);
     expect(third.json<{ error: { code: string } }>().error.code).toBe("USAGE_LIMIT_EXCEEDED");
@@ -413,7 +412,7 @@ describe("12–13. usage limits (atomic)", () => {
       resetsAt: "2026-11-16T18:30:00.000Z",
     });
     clock = new Date("2026-11-16T18:31:00.000Z"); // 00:01 IST next day
-    expect((await search("phone four")).statusCode).toBe(201);
+    expect((await search("phone four")).statusCode).toBe(202);
   });
 
   it("never exceeds a limit under concurrent requests", async () => {
@@ -427,7 +426,7 @@ describe("12–13. usage limits (atomic)", () => {
         agent.post("/api/v1/search", { query: `race query ${i}` }),
       ),
     );
-    expect(searches.filter((r) => r.statusCode === 201)).toHaveLength(3);
+    expect(searches.filter((r) => r.statusCode === 202)).toHaveLength(3);
     expect(searches.filter((r) => r.statusCode === 429)).toHaveLength(7);
     expect(await ctx.prisma.search.count({ where: { userId } })).toBe(3);
     const counter = await ctx.prisma.usageCounter.findFirstOrThrow({
@@ -448,10 +447,10 @@ describe("12–13. usage limits (atomic)", () => {
       where: { code: "FREE" },
       data: { limits: { searchesPerDay: 1 } },
     });
-    expect((await agent.post("/api/v1/search", { query: "first search" })).statusCode).toBe(201);
+    expect((await agent.post("/api/v1/search", { query: "first search" })).statusCode).toBe(202);
     expect((await agent.post("/api/v1/search", { query: "second search" })).statusCode).toBe(429);
     await subscribe(agent);
-    expect((await agent.post("/api/v1/search", { query: "second search" })).statusCode).toBe(201);
+    expect((await agent.post("/api/v1/search", { query: "second search" })).statusCode).toBe(202);
     const job = await ctx.app.billing.entitlements.checkEntitlement(
       (await ctx.prisma.user.findUniqueOrThrow({ where: { email: "raise@example.com" } })).id,
       "prioritySearch",
@@ -498,5 +497,60 @@ describe("17. refunds", () => {
     const pays = data<{ status: string }[]>(await agent.get("/api/v1/billing/payments"));
     expect(pays[0]!.status).toBe("REFUNDED");
     expect((await notes(userId)).map((n) => n.type)).toContain("REFUND_UPDATED");
+  });
+});
+
+describe("payment status synchronization (reconcile)", () => {
+  it("re-reads due subscriptions and expires abandoned checkouts", async () => {
+    const { reconcileSubscriptions } = await import("@dealmind/billing");
+    const paid = await signUp(ctx, "rec-paid@example.com");
+    await subscribe(paid.agent);
+    const idle = await signUp(ctx, "rec-idle@example.com");
+    await idle.agent.post("/api/v1/billing/checkout", { plan: "PRO" });
+    const providerSub = [...sandbox.subscriptions.values()][0]!;
+    clock = new Date(providerSub.currentPeriodEnd.getTime() + 60_000);
+    sandbox.renew(providerSub.id, "failure"); // no webhook
+    const sync = (
+      ctx.app.billing.service as unknown as { sync: Parameters<typeof reconcileSubscriptions>[1] }
+    ).sync;
+    const r = await reconcileSubscriptions(ctx.prisma, sync, { now: clock });
+    expect(r).toEqual({ checked: 1, changed: 1, failed: 0, expiredCheckouts: 1 });
+    expect(data<Sub>(await paid.agent.get("/api/v1/billing/subscription")).status).toBe("PAST_DUE");
+    // A provider outage is counted, not thrown; the next run retries.
+    clock = new Date(clock.getTime() + 7 * 3_600_000);
+    sandbox.failNext = "down";
+    expect((await reconcileSubscriptions(ctx.prisma, sync, { now: clock })).failed).toBe(1);
+  });
+});
+
+describe("exports (plan feature)", () => {
+  it("is refused on FREE, works on PRO with a monthly limit, and is formula-safe", async () => {
+    const { agent, userId } = await signUp(ctx, "export@example.com");
+    expect((await agent.get("/api/v1/exports/watchlists.csv")).statusCode).toBe(403);
+    await subscribe(agent);
+    await ctx.prisma.subscriptionPlan.update({
+      where: { code: "PRO" },
+      data: { limits: { exportsPerMonth: 1 } },
+    });
+    await agent.post("/api/v1/watchlists", { name: '=HYPERLINK("x")' });
+    await ctx.prisma.search.create({ data: { userId, query: 'phone, "5G"', status: "COMPLETED" } });
+    const res = await agent.get("/api/v1/exports/searches.csv");
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/csv");
+    expect(res.body).toContain('"phone, ""5G"""');
+    expect((await agent.get("/api/v1/exports/watchlists.csv")).statusCode).toBe(429);
+    const { csvCell } = await import("../modules/billing/export-routes.js");
+    expect(csvCell('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
+  });
+});
+
+describe("double-payment guard", () => {
+  it("refuses a new checkout while a verified payment is still being recorded", async () => {
+    const { agent, userId } = await signUp(ctx, "guard@example.com");
+    const c = data<Checkout>(await agent.post("/api/v1/billing/checkout", { plan: "PRO" }));
+    await ctx.prisma.checkoutSession.update({ where: { id: c.id }, data: { status: "VERIFYING" } });
+    const again = await agent.post("/api/v1/billing/checkout", { plan: "PRO" });
+    expect(again.statusCode).toBe(409);
+    expect(await ctx.prisma.checkoutSession.count({ where: { userId } })).toBe(1);
   });
 });
