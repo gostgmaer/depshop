@@ -27,7 +27,7 @@ Steps 4, 6, 7 and 9 are measurable now. Steps 1–2, 5 (product visits) and 8 ne
 1. Technical SEO and an honest landing page: **done** ([seo-architecture.md](seo-architecture.md)).
 2. Privacy-safe activation events: product-detail view, first search, notification-click-through ([growth-analytics.md](growth-analytics.md)).
 3. Public discovery pages, once real catalog data exists ([programmatic-seo.md](programmatic-seo.md)).
-4. Short onboarding ([onboarding-flow.md](onboarding-flow.md)).
+4. Short onboarding: **done** ([onboarding-flow.md](onboarding-flow.md)).
 5. Search suggestions from k-anonymous popular queries (data exists; UI after launch).
 6. Referrals, lifecycle e-mails, editorial guides and experiments: each after the measured need and the legal review in [privacy-and-growth.md](privacy-and-growth.md).
 
@@ -38,7 +38,7 @@ Steps 4, 6, 7 and 9 are measurable now. Steps 1–2, 5 (product visits) and 8 ne
 | 1. Growth baseline and event definitions | Event definitions written ([growth-analytics.md](growth-analytics.md)); baseline **BLOCKED** (not launched)                |
 | 2. Technical SEO and public landing page | **IMPLEMENTED AND VERIFIED** (unit, built-app HTTP in both modes, Playwright; real crawling BLOCKED until a domain exists) |
 | 3. Product and category discovery pages  | **BLOCKED:** no trustworthy catalog data; policy written                                                                   |
-| 4. Onboarding                            | **RECOMMENDED** (design ready)                                                                                             |
+| 4. Onboarding                            | **IMPLEMENTED AND VERIFIED** (round 2; effect on activation not measurable before launch)                                  |
 | 5. Search suggestions                    | **RECOMMENDED:** the static examples and catalog autocomplete already exist; popular searches need traffic                 |
 | 6. Referrals                             | **RECOMMENDED** after legal review (design ready)                                                                          |
 | 7. Lifecycle communications              | **RECOMMENDED:** transactional already built; marketing needs consent design and legal review                              |

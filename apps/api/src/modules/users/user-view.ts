@@ -7,6 +7,7 @@ export const userSelect = {
   name: true,
   role: true,
   emailVerifiedAt: true,
+  onboardingCompletedAt: true,
   createdAt: true,
 } as const;
 
@@ -16,6 +17,7 @@ export interface UserViewRow {
   name: string;
   role: UserRole;
   emailVerifiedAt: Date | null;
+  onboardingCompletedAt: Date | null;
   createdAt: Date;
 }
 
@@ -27,6 +29,7 @@ export function toPublicUser(user: UserViewRow): PublicUser {
     name: user.name,
     role: user.role,
     emailVerified: user.emailVerifiedAt !== null,
+    onboardingCompleted: user.onboardingCompletedAt !== null,
     createdAt: user.createdAt.toISOString(),
   };
 }

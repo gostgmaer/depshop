@@ -51,18 +51,22 @@ enum UserStatus {
 /// this row so its own data can reference users by foreign key, plus the
 /// DealMind-specific role and status. Profile fields are synced at sign-in.
 model User {
-  id              String     @id @default(uuid(7)) @db.Uuid
+  id                    String     @id @default(uuid(7)) @db.Uuid
   /// The IAM user id (JWT `sub`). Immutable link to the IAM identity.
-  iamUserId       String     @unique @db.Uuid
+  iamUserId             String     @unique @db.Uuid
   /// Always stored lower-case (CHECK constraint), so uniqueness is case-insensitive.
-  email           String     @unique
-  name            String
-  role            UserRole   @default(USER)
-  status          UserStatus @default(ACTIVE)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  email                 String     @unique
+  name                  String
+  role                  UserRole   @default(USER)
+  status                UserStatus @default(ACTIVE)
+  emailVerifiedAt       DateTime?
+  lastLoginAt           DateTime?
+  /// First-time introduction: when it was finished or skipped (null = not yet). Shown once.
+  onboardingCompletedAt DateTime?
+  /// True when the introduction was skipped rather than finished (aggregate measurement only).
+  onboardingSkipped     Boolean    @default(false)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
   sessions               UserSession[]
   preference             UserPreference?

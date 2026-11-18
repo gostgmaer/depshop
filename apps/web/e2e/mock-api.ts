@@ -36,8 +36,23 @@ const USER = {
   name: "Asha Rao",
   role: "USER",
   emailVerified: true,
+  onboardingCompleted: true,
   createdAt: "2026-11-01T00:00:00.000Z",
 };
+/**
+ * First-time users: a login e-mail "new-<id>@…" gets its own session, so parallel
+ * tests never share onboarding state. Ids that closed the introduction:
+ */
+const onboarded = new Set<string>();
+const newcomerId = (req: IncomingMessage) =>
+  /dm_session=e2e-new-([a-z0-9]+)/.exec(req.headers.cookie ?? "")?.[1];
+const newcomer = (id: string) => ({
+  ...USER,
+  id: "60000000-0000-7000-8000-000000000010",
+  email: `new-${id}@example.com`,
+  name: "Neha New",
+  onboardingCompleted: onboarded.has(id),
+});
 /** Signs in when the login email starts with "admin@". */
 const ADMIN = {
   ...USER,
@@ -117,7 +132,7 @@ function send(
 }
 
 const signedIn = (req: IncomingMessage) =>
-  /dm_session=e2e-(session|admin)/.test(req.headers.cookie ?? "");
+  /dm_session=e2e-(session|admin|new-[a-z0-9]+)/.test(req.headers.cookie ?? "");
 const isAdmin = (req: IncomingMessage) =>
   (req.headers.cookie ?? "").includes("dm_session=e2e-admin");
 const readBody = (req: IncomingMessage) =>
@@ -141,6 +156,11 @@ const server = createServer((req, res) => {
     });
   if (path === "/auth/login" && method === "POST") {
     void readBody(req).then((b) => {
+      const newId = /"email"\s*:\s*"new-([a-z0-9]+)@/.exec(b)?.[1];
+      if (newId)
+        return send(res, 200, ok({ user: newcomer(newId) }), {
+          "set-cookie": `dm_session=e2e-new-${newId}; Path=/; HttpOnly; SameSite=Lax`,
+        });
       const admin = /"email"\s*:\s*"admin@/.test(b);
       send(res, 200, ok({ user: admin ? ADMIN : USER }), {
         "set-cookie": `dm_session=${admin ? "e2e-admin" : "e2e-session"}; Path=/; HttpOnly; SameSite=Lax`,
@@ -150,10 +170,19 @@ const server = createServer((req, res) => {
   }
   if (path === "/auth/logout")
     return send(res, 200, ok({}), { "set-cookie": "dm_session=; Path=/; Max-Age=0" });
-  if (path === "/auth/me")
+  if (path === "/auth/me") {
+    const nid = newcomerId(req);
+    if (nid) return send(res, 200, ok({ user: newcomer(nid) }));
     return signedIn(req)
       ? send(res, 200, ok({ user: isAdmin(req) ? ADMIN : USER }))
       : send(res, 401, err("UNAUTHENTICATED", "Sign in"));
+  }
+  if (path === "/users/me/onboarding" && method === "POST") {
+    const nid = newcomerId(req);
+    if (!signedIn(req)) return send(res, 401, err("UNAUTHENTICATED", "Sign in"));
+    if (nid) onboarded.add(nid);
+    return send(res, 200, ok({ user: nid ? newcomer(nid) : USER }));
+  }
 
   // ── public catalog ──
   if (path === "/categories/tree")

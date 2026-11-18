@@ -1,5 +1,6 @@
 import {
   meResponse,
+  onboardingInput,
   sessionsResponse,
   preferencesSchema,
   updatePreferencesInput,
@@ -148,6 +149,22 @@ export const userRoutes: FastifyPluginAsyncZod<UserRoutesOptions> = async (
       },
     },
     async (req) => ({ user: await users.updateProfile(getAuth(req), req.body) }),
+  );
+
+  app.post(
+    "/me/onboarding",
+    {
+      schema: {
+        tags: ["users"],
+        summary: "Close your first-time introduction (finished or skipped); idempotent",
+        security,
+        body: onboardingInput,
+        response: { 200: ok(meResponse) },
+      },
+    },
+    async (req) => ({
+      user: await users.completeOnboarding(getAuth(req).userId, req.body.outcome),
+    }),
   );
 
   app.get(

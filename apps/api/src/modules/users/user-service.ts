@@ -37,6 +37,19 @@ export class UserService {
     return toPublicUser(user);
   }
 
+  /**
+   * Records that the first-time introduction was finished or skipped. The first
+   * outcome wins and later calls change nothing (one conditional UPDATE, so two
+   * tabs closing it at once can't overwrite each other).
+   */
+  async completeOnboarding(userId: string, outcome: "completed" | "skipped"): Promise<PublicUser> {
+    await this.prisma.user.updateMany({
+      where: { id: userId, onboardingCompletedAt: null },
+      data: { onboardingCompletedAt: new Date(), onboardingSkipped: outcome === "skipped" },
+    });
+    return this.getMe(userId);
+  }
+
   /** The IAM is the source of truth for names: update it first, then the mirror. */
   async updateProfile(auth: AuthContext, input: UpdateProfileInput): Promise<PublicUser> {
     const accessToken = await this.sessions.getIamAccessToken(auth.sessionId);

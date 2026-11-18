@@ -123,9 +123,15 @@ export const publicUser = z.object({
   name: z.string(),
   role: UserRole,
   emailVerified: z.boolean(),
+  /** The first-time introduction was finished or skipped; it is not shown again. */
+  onboardingCompleted: z.boolean(),
   createdAt: z.string(),
 });
 export type PublicUser = z.infer<typeof publicUser>;
+
+/** Closing the first-time introduction: "completed" (went through it) or "skipped". */
+export const onboardingInput = z.object({ outcome: z.enum(["completed", "skipped"]) }).strict();
+export type OnboardingInput = z.infer<typeof onboardingInput>;
 
 export const meResponse = z.object({ user: publicUser });
 export type MeResponse = z.infer<typeof meResponse>;

@@ -625,3 +625,4 @@ Not launched, so no growth baseline exists and no targets are set. See [growth-s
 - **Landing page:** removed unsupported claims ("One search, every store", "shows you the lowest real price"); new value proposition and an accessible feature list.
 - **Fixed doc drift:** NOTIFICATIONS.md said billing notifications weren't built; they are (and tested).
 - **Designed, not built (each waits on real users, real catalog data or legal review):** discovery pages, onboarding, referrals, marketing e-mail, editorial guides, growth events and dashboard, experiments.
+- **Round 2 (onboarding, Stage 4):** a five-step skippable introduction below the dashboard search box. State on the user (`onboardingCompletedAt`, `onboardingSkipped`; migration `20261126100000_onboarding`); `POST /users/me/onboarding`, where the first outcome wins; reopen from Settings. Tests: API 5, web unit 6, Playwright 8 (desktop + mobile, axe); full regression green.
