@@ -10,12 +10,14 @@ import type { CookieSerializeOptions } from "@fastify/cookie";
 export interface CookieNames {
   session: string;
   csrf: string;
+  /** Guest search identity (signed; see modules/auth/guest-service.ts). */
+  guest: string;
 }
 
 export function cookieNames(secure: boolean): CookieNames {
   return secure
-    ? { session: "__Host-dm_session", csrf: "__Host-dm_csrf" }
-    : { session: "dm_session", csrf: "dm_csrf" };
+    ? { session: "__Host-dm_session", csrf: "__Host-dm_csrf", guest: "__Host-dm_guest" }
+    : { session: "dm_session", csrf: "dm_csrf", guest: "dm_guest" };
 }
 
 /** Session cookie: HttpOnly so scripts can never read it. */

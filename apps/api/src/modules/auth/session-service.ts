@@ -33,6 +33,8 @@ export interface AuthContext {
   userId: string;
   role: UserRole;
   emailVerified: boolean;
+  /** A visitor without an account (guest cookie). Only search routes accept guests. */
+  guest?: boolean;
 }
 
 export interface SessionOptions {

@@ -35,13 +35,16 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app,
   { search, redis, redisPrefix },
 ) => {
-  app.addHook("preHandler", app.requireAuth);
+  // Guest search: no account needed. Submitting creates a guest identity (signed cookie)
+  // when there is neither a session nor a guest; reading needs one or the other, and a
+  // guest only ever sees its own searches (every query is scoped by userId).
 
   app.post(
     "/",
     {
       // Searches are expensive downstream: stricter per-IP limit on submission.
       config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      preHandler: app.ensureGuest,
       schema: {
         tags: ["search"],
         summary: "Submit a shopping search (asynchronous; returns PENDING)",
@@ -57,6 +60,7 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app.get(
     "/",
     {
+      preHandler: app.allowGuest,
       schema: {
         tags: ["search"],
         summary: "Your recent searches",
@@ -65,12 +69,14 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
         response: { 200: page(searchView) },
       },
     },
-    async (req) => search.list(getAuth(req).userId, req.query),
+    async (req) =>
+      req.auth ? search.list(req.auth.userId, req.query) : search.emptyList(req.query),
   );
 
   app.get(
     "/:id",
     {
+      preHandler: app.requireAuthOrGuest,
       schema: {
         tags: ["search"],
         summary: "Search status and per-source progress",
@@ -85,6 +91,7 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app.get(
     "/:id/results",
     {
+      preHandler: app.requireAuthOrGuest,
       schema: {
         tags: ["search"],
         summary: "Ranked results (final or partial); sort re-orders without re-ranking",
@@ -100,6 +107,7 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app.get(
     "/:id/sources",
     {
+      preHandler: app.requireAuthOrGuest,
       schema: {
         tags: ["search"],
         summary: "Source-level execution status",
@@ -114,6 +122,7 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app.post(
     "/:id/cancel",
     {
+      preHandler: app.requireAuthOrGuest,
       schema: {
         tags: ["search"],
         summary: "Cancel a pending or running search (no effect once finished)",
@@ -133,6 +142,7 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app.get(
     "/:id/events",
     {
+      preHandler: app.requireAuthOrGuest,
       schema: {
         tags: ["search"],
         summary: "Live progress (text/event-stream)",

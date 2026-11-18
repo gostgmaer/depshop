@@ -169,6 +169,103 @@ export class CatalogService {
     );
   }
 
+  /**
+   * Public deals from offers already stored (never contacts a marketplace). One card
+   * per variant: its cheapest delivered offer among current, in-stock, still-listed
+   * offers from ACTIVE sources priced below their stated MRP. Deepest discount first.
+   */
+  async deals(q: { page: number; pageSize: number; category?: string }) {
+    const cutoff = this.freshCutoff();
+    const category = q.category ?? null;
+    const offset = (q.page - 1) * q.pageSize;
+    const rows = await this.prisma.$queryRaw<
+      {
+        productId: string;
+        variantId: string;
+        name: string;
+        brand: string;
+        imageUrl: string | null;
+        attributes: Prisma.JsonValue;
+        categorySlug: string | null;
+        categoryName: string | null;
+        sourceSlug: string;
+        sourceName: string;
+        isSample: boolean;
+        sellingPricePaise: bigint;
+        mrpPaise: bigint;
+        shippingPaise: bigint | null;
+        discountBp: number;
+        observedAt: Date;
+        offerCount: bigint;
+        total: bigint;
+      }[]
+    >`
+      WITH live AS (
+        SELECT o."productId", o."variantId", o."sellingPricePaise", o."mrpPaise", o."shippingPaise",
+               o."observedAt", s."slug" AS "sourceSlug", s."name" AS "sourceName", s."isSample",
+               ((o."mrpPaise" - o."sellingPricePaise") * 10000 / o."mrpPaise")::int AS "discountBp",
+               o."sellingPricePaise" + COALESCE(o."shippingPaise", 0) AS delivered
+        FROM "ProductOffer" o
+        JOIN "ShoppingSource" s ON s."id" = o."sourceId"
+        JOIN "Product" p ON p."id" = o."productId"
+        LEFT JOIN "Category" c ON c."id" = p."categoryId"
+        WHERE s."status" = 'ACTIVE'
+          AND p."isActive"
+          AND o."variantId" IS NOT NULL
+          AND o."observedAt" >= ${cutoff}
+          AND o."missingSince" IS NULL
+          AND o."trackingState" <> 'EXPIRED'
+          AND o."stockStatus" IN ('IN_STOCK', 'LIMITED')
+          AND o."sellingPricePaise" > 0
+          AND o."mrpPaise" IS NOT NULL
+          AND o."mrpPaise" > o."sellingPricePaise"
+          AND (${category}::text IS NULL OR c."slug" = ${category}::text)
+      ),
+      best AS (
+        SELECT DISTINCT ON ("variantId") *, COUNT(*) OVER (PARTITION BY "variantId") AS "offerCount"
+        FROM live
+        ORDER BY "variantId", delivered ASC, "discountBp" DESC
+      )
+      SELECT b."productId", b."variantId", p."name", p."brand", p."imageUrl", v."attributes",
+             c."slug" AS "categorySlug", c."name" AS "categoryName",
+             b."sourceSlug", b."sourceName", b."isSample", b."sellingPricePaise", b."mrpPaise",
+             b."shippingPaise", b."discountBp", b."observedAt", b."offerCount",
+             COUNT(*) OVER () AS total
+      FROM best b
+      JOIN "Product" p ON p."id" = b."productId"
+      JOIN "ProductVariant" v ON v."id" = b."variantId"
+      LEFT JOIN "Category" c ON c."id" = p."categoryId"
+      WHERE b."discountBp" >= 1
+      ORDER BY b."discountBp" DESC, b.delivered ASC, b."variantId"
+      LIMIT ${q.pageSize} OFFSET ${offset}`;
+    const total = rows[0] ? Number(rows[0].total) : 0;
+    return {
+      items: rows.map((r) => ({
+        productId: r.productId,
+        variantId: r.variantId,
+        name: r.name,
+        brand: r.brand,
+        imageUrl: r.imageUrl,
+        category: r.categorySlug
+          ? { slug: r.categorySlug, name: r.categoryName ?? r.categorySlug }
+          : null,
+        attributes: (r.attributes ?? {}) as Record<string, unknown>,
+        offer: {
+          sourceSlug: r.sourceSlug,
+          sourceName: r.sourceName,
+          isSample: r.isSample,
+          sellingPricePaise: Number(r.sellingPricePaise),
+          mrpPaise: Number(r.mrpPaise),
+          shippingPaise: r.shippingPaise === null ? null : Number(r.shippingPaise),
+          discountBp: r.discountBp,
+          observedAt: r.observedAt.toISOString(),
+        },
+        offerCount: Number(r.offerCount),
+      })),
+      total,
+    };
+  }
+
   private isStale(observedAt: string | Date): boolean {
     return this.now().getTime() - new Date(observedAt).getTime() > this.options.offerStaleAfterMs;
   }

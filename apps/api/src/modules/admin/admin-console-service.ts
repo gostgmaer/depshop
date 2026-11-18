@@ -138,11 +138,12 @@ export class AdminConsoleService {
       queues,
       sources,
     ] = await Promise.all([
-      p.user.count(),
-      p.user.count({ where: { lastLoginAt: { gte: d30 } } }),
-      p.user.count({ where: { createdAt: { gte: d7 } } }),
-      p.user.count({ where: { createdAt: { gte: d30 } } }),
-      p.user.count({ where: { status: "SUSPENDED" } }),
+      // Accounts only: guests (search without an account) are not users here.
+      p.user.count({ where: { isGuest: false } }),
+      p.user.count({ where: { isGuest: false, lastLoginAt: { gte: d30 } } }),
+      p.user.count({ where: { isGuest: false, createdAt: { gte: d7 } } }),
+      p.user.count({ where: { isGuest: false, createdAt: { gte: d30 } } }),
+      p.user.count({ where: { isGuest: false, status: "SUSPENDED" } }),
       p.search.count(),
       p.search.groupBy({ by: ["status"], _count: { _all: true } }),
       p.search.count({ where: { createdAt: { gte: d30 } } }),
@@ -479,7 +480,7 @@ export class AdminConsoleService {
     const now = this.now();
     const d30 = new Date(now.getTime() - 30 * DAY);
     const [users, subs, mrr, audits, webhooks] = await Promise.all([
-      p.user.count(),
+      p.user.count({ where: { isGuest: false } }),
       p.subscription.findMany({
         select: {
           planCode: true,

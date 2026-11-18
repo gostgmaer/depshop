@@ -45,16 +45,20 @@ export const adminUserRoutes: FastifyPluginAsyncZod<AdminUserRoutesOptions> = as
     async (req) => {
       const { limit, cursor, q } = req.query;
       const rows = await prisma.user.findMany({
-        where: q
-          ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q)
-            ? { id: q }
-            : {
-                OR: [
-                  { email: { contains: q, mode: "insensitive" } },
-                  { name: { contains: q, mode: "insensitive" } },
-                ],
-              }
-          : undefined,
+        // Accounts only (guests are anonymous search identities, not users to manage).
+        where: {
+          isGuest: false,
+          ...(q
+            ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q)
+              ? { id: q }
+              : {
+                  OR: [
+                    { email: { contains: q, mode: "insensitive" as const } },
+                    { name: { contains: q, mode: "insensitive" as const } },
+                  ],
+                }
+            : {}),
+        },
         orderBy: { id: "asc" },
         take: limit + 1,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

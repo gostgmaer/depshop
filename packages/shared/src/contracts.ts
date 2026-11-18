@@ -157,6 +157,46 @@ export const productListQuery = pageQuery
   });
 export type ProductListQuery = z.infer<typeof productListQuery>;
 
+/**
+ * Public Deals page: products already in the catalog (no marketplace is contacted)
+ * whose best current offer is a live, verified deal. A deal "closes", and the item is
+ * hidden, when no offer is current (seen within the freshness window), in stock and
+ * still listed, or when its selling price is no longer below the stated MRP.
+ */
+export const dealsQuery = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(48).default(24),
+    category: z.string().trim().min(1).max(100).optional(),
+  })
+  .strict();
+export const dealView = z.object({
+  productId: uuid,
+  variantId: uuid,
+  name: z.string(),
+  brand: z.string(),
+  imageUrl: z.string().nullable(),
+  category: z.object({ slug: z.string(), name: z.string() }).nullable(),
+  /** Variant attributes as stated (RAM, storage, colour, …). */
+  attributes: z.record(z.unknown()),
+  offer: z.object({
+    sourceSlug: z.string(),
+    sourceName: z.string(),
+    /** Fictional development data (mock marketplace). */
+    isSample: z.boolean(),
+    sellingPricePaise: paise,
+    mrpPaise: paise,
+    /** Null when the marketplace didn't state shipping. */
+    shippingPaise: paise.nullable(),
+    /** Direct discount from the stated MRP, in basis points (rounded down). */
+    discountBp: z.number().int(),
+    observedAt: iso,
+  }),
+  /** Current deal offers for this variant across marketplaces. */
+  offerCount: z.number().int(),
+});
+export type DealView = z.infer<typeof dealView>;
+
 export const productSummary = z.object({
   id: uuid,
   name: z.string(),

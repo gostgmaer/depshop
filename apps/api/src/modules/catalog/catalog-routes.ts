@@ -3,6 +3,9 @@
  *   /categories, /products, /sources
  */
 import {
+  dealView,
+  dealsQuery,
+  paginationOf,
   AppError,
   ErrorCode,
   compareQuery,
@@ -29,7 +32,7 @@ import { type PricingService, compareOffers, recommend } from "@dealmind/intelli
 import type { EntitlementService } from "@dealmind/billing";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { ok, page } from "../../utils/http.js";
+import { ok, page, paginated } from "../../utils/http.js";
 import type { CatalogService } from "./catalog-service.js";
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -232,6 +235,29 @@ async function historyLimit(
   if (auth) return (await entitlements.context(auth.userId)).plan.limits.historyDays;
   return (await entitlements.plans()).get("FREE")!.limits.historyDays;
 }
+
+/** Public deals from already-stored offers (no marketplace is contacted). */
+export const dealRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
+  app,
+  { catalog },
+) => {
+  app.get(
+    "/",
+    {
+      schema: {
+        tags: ["catalog"],
+        summary:
+          "Current verified deals from products already in the catalog (closed deals are hidden)",
+        querystring: dealsQuery,
+        response: { 200: page(dealView) },
+      },
+    },
+    async (req) => {
+      const { items, total } = await catalog.deals(req.query);
+      return paginated(items, paginationOf(req.query, total));
+    },
+  );
+};
 
 export const sourceRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
   app,

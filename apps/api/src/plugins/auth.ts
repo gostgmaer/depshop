@@ -20,6 +20,7 @@ import type {
 } from "fastify";
 import fp from "fastify-plugin";
 import { type CookieNames, sessionCookieOptions } from "../lib/cookies.js";
+import { GUEST_COOKIE_DAYS, type GuestService } from "../modules/auth/guest-service.js";
 import type {
   AuthContext,
   ClientInfo,
@@ -36,6 +37,15 @@ declare module "fastify" {
     requireAuth: preHandlerAsyncHookHandler;
     requireRole: (role: UserRole) => preHandlerAsyncHookHandler;
     requireAdmin: preHandlerAsyncHookHandler;
+    /**
+     * Guest search (opt-in per route; requireAuth NEVER accepts a guest):
+     *  - allowGuest: a signed-in user, else the guest cookie's identity, else nothing (no throw);
+     *  - requireAuthOrGuest: as allowGuest, but 401 when neither exists;
+     *  - ensureGuest: as allowGuest, creating a guest (and its cookie) when neither exists.
+     */
+    allowGuest: preHandlerAsyncHookHandler;
+    requireAuthOrGuest: preHandlerAsyncHookHandler;
+    ensureGuest: preHandlerAsyncHookHandler;
     /** Resolves the session cookie if present (does not throw). */
     optionalAuth: (request: FastifyRequest) => Promise<AuthContext | null>;
     setSessionCookie: (reply: FastifyReply, session: IssuedSession) => void;
@@ -56,12 +66,13 @@ export function clientInfo(request: FastifyRequest): ClientInfo {
 
 export interface AuthPluginOptions {
   sessions: SessionService;
+  guests: GuestService;
   cookies: CookieNames;
   secureCookies: boolean;
 }
 
 export const authPlugin = fp<AuthPluginOptions>(
-  (app: FastifyInstance, { sessions, cookies, secureCookies }, done) => {
+  (app: FastifyInstance, { sessions, guests, cookies, secureCookies }, done) => {
     app.decorateRequest("auth", undefined);
 
     const optionalAuth = async (request: FastifyRequest): Promise<AuthContext | null> => {
@@ -86,6 +97,32 @@ export const authPlugin = fp<AuthPluginOptions>(
         if (request.auth?.role !== role) throw AppError.forbidden();
       };
 
+    const resolveGuest = async (request: FastifyRequest): Promise<AuthContext | null> => {
+      const auth =
+        (await optionalAuth(request)) ?? (await guests.resolve(request.cookies[cookies.guest]));
+      if (auth) request.auth = auth;
+      return auth;
+    };
+    const allowGuest: preHandlerAsyncHookHandler = async function (request) {
+      await resolveGuest(request);
+    };
+    const requireAuthOrGuest: preHandlerAsyncHookHandler = async function (request) {
+      if (!(await resolveGuest(request))) throw AppError.unauthenticated();
+    };
+    const ensureGuest: preHandlerAsyncHookHandler = async function (request, reply) {
+      if (await resolveGuest(request)) return;
+      const { auth, token } = await guests.create();
+      request.auth = auth;
+      reply.setCookie(
+        cookies.guest,
+        token,
+        sessionCookieOptions(secureCookies, GUEST_COOKIE_DAYS * 86_400),
+      );
+    };
+
+    app.decorate("allowGuest", allowGuest);
+    app.decorate("requireAuthOrGuest", requireAuthOrGuest);
+    app.decorate("ensureGuest", ensureGuest);
     app.decorate("optionalAuth", optionalAuth);
     app.decorate("requireAuth", requireAuth);
     app.decorate("requireRole", requireRole);

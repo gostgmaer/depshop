@@ -39,6 +39,8 @@ export interface CleanupDeps {
   notificationRetentionDays?: number;
   /** Days a finished search (and its results/runs) is kept. */
   searchRetentionDays?: number;
+  /** Days an idle guest (search without an account) is kept after its last search. */
+  guestRetentionDays?: number;
   batchSize?: number;
   now?: () => Date;
 }
@@ -52,7 +54,13 @@ export interface CleanupResult {
   /** Affiliate clicks whose identifiers were cleared / that were deleted (retention). */
   affiliateClicks: { anonymized: number; deleted: number };
   /** Personal-data retention (rows deleted). */
-  retention: { sessions: number; deliveries: number; notifications: number; searches: number };
+  retention: {
+    sessions: number;
+    deliveries: number;
+    notifications: number;
+    searches: number;
+    guests: number;
+  };
 }
 
 const DAY = 86_400_000;
@@ -65,6 +73,8 @@ const RETENTION_RULES = {
   NotificationDelivery: `"status" IN ('SENT', 'FAILED', 'SKIPPED') AND "createdAt" < $1`,
   Notification: `"createdAt" < $1`,
   Search: `"status" NOT IN ('PENDING', 'RUNNING') AND "createdAt" < $1`,
+  // Guests with no search since the cut-off (deleting the user cascades to its searches).
+  User: `"isGuest" = true AND "createdAt" < $1 AND NOT EXISTS (SELECT 1 FROM "Search" s WHERE s."userId" = "User"."id" AND s."createdAt" >= $1)`,
 } as const;
 
 async function deleteInBatches(
@@ -147,6 +157,12 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupResult> {
       deps.prisma,
       "Search",
       cutoff(deps.searchRetentionDays ?? 365),
+      batch,
+    ),
+    guests: await deleteInBatches(
+      deps.prisma,
+      "User",
+      cutoff(deps.guestRetentionDays ?? 30),
       batch,
     ),
   };

@@ -225,6 +225,11 @@ export class SearchService {
     return toSearchView(search);
   }
 
+  /** A visitor with no account or guest identity yet has no searches. */
+  emptyList(q: PageQuery) {
+    return paginated([], paginationOf(q, 0));
+  }
+
   async list(userId: string, q: PageQuery) {
     const where = { userId };
     const [rows, total] = await Promise.all([

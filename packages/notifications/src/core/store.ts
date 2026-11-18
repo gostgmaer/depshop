@@ -34,6 +34,7 @@ export async function planChannels(
       where: { id: draft.userId },
       select: {
         email: true,
+        isGuest: true,
         preference: {
           select: {
             notifyInApp: true,
@@ -56,8 +57,10 @@ export async function planChannels(
     critical: draft.critical,
     prefs: user?.preference ?? null,
     ...(opts.alertChannels ? { alertChannels: opts.alertChannels } : {}),
-    hasEmail: Boolean(user?.email),
-    activePushSubscriptions: pushCount,
+    // A guest (search without an account) has an undeliverable placeholder address and
+    // can't subscribe to push: in-app only.
+    hasEmail: Boolean(user?.email) && !user?.isGuest,
+    activePushSubscriptions: user?.isGuest ? 0 : pushCount,
     now: opts.now,
   });
 }

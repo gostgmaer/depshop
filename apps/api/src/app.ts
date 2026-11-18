@@ -38,6 +38,7 @@ import {
   compareRoutes,
   productRoutes,
   sourceRoutes,
+  dealRoutes,
 } from "./modules/catalog/catalog-routes.js";
 import { CatalogService } from "./modules/catalog/catalog-service.js";
 import {
@@ -119,6 +120,7 @@ import { NotificationGateway } from "./modules/platform/notification-gateway.js"
 import { type HealthCheck, healthRoutes } from "./modules/health/health-routes.js";
 import { userRoutes } from "./modules/users/user-routes.js";
 import { UserService } from "./modules/users/user-service.js";
+import { GuestService } from "./modules/auth/guest-service.js";
 import { authPlugin } from "./plugins/auth.js";
 import { csrfPlugin } from "./plugins/csrf.js";
 
@@ -506,7 +508,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   );
   const alerts = new AlertService(prisma, entitlements);
 
-  await app.register(authPlugin, { sessions, cookies, secureCookies: env.COOKIE_SECURE });
+  const guests = new GuestService(prisma, env.SESSION_SECRET);
+  await app.register(authPlugin, { sessions, guests, cookies, secureCookies: env.COOKIE_SECURE });
   await app.register(healthRoutes, {
     // Critical: the API cannot serve users without these.
     checks: {
@@ -588,6 +591,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         entitlements,
       });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
+      await v1.register(dealRoutes, { prefix: "/deals", catalog });
       await v1.register(searchRoutes, {
         prefix: "/search",
         search,

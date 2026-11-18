@@ -65,6 +65,9 @@ model User {
   onboardingCompletedAt DateTime?
   /// True when the introduction was skipped rather than finished (aggregate measurement only).
   onboardingSkipped     Boolean    @default(false)
+  /// A visitor searching without an account (signed guest cookie, no IAM identity, no e-mail).
+  /// Guests can search; every account feature still requires a real account.
+  isGuest               Boolean    @default(false)
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
@@ -91,6 +94,7 @@ model User {
 
   @@index([role])
   @@index([createdAt])
+  @@index([isGuest, createdAt])
 }
 
 /// Server-side browser session. The opaque token lives only in an HttpOnly
