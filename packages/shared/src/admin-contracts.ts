@@ -115,7 +115,23 @@ export const adminSourceView = z.object({
   statusReason: z.string().nullable(),
   isSample: z.boolean(),
   /** Connector credentials present in the server environment (names only, never values). */
-  credentials: z.object({ configured: z.boolean(), missing: z.array(z.string()) }),
+  /**
+   * Connector readiness (Prompt 22): `configured` is true ONLY when the connector
+   * reports READY. PENDING_APPROVAL (no authorized integration) and NOT_SUPPORTED
+   * are never "configured", whatever credentials exist.
+   */
+  credentials: z.object({
+    state: z.enum([
+      "READY",
+      "PENDING_CREDENTIALS",
+      "PENDING_APPROVAL",
+      "NOT_SUPPORTED",
+      "NOT_REGISTERED",
+    ]),
+    configured: z.boolean(),
+    missing: z.array(z.string()),
+    reason: z.string().nullable(),
+  }),
   connectorRegistered: z.boolean(),
   health: z.string(),
   lastHealthCheckAt: iso.nullable(),

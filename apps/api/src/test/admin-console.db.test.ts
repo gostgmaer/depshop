@@ -253,6 +253,26 @@ describe("7–8. connectors and secret redaction", () => {
       reason: "partner limit",
     });
     expect(JSON.stringify(entry.metadata)).not.toContain(SECRET_VALUE);
+    // Prompt 22 regression: a partner source with NO authorized integration is never
+    // reported as configured, and can't be enabled even after being DISABLED first.
+    const croma = sources.find((x) => x.slug === "croma") as unknown as {
+      id: string;
+      credentials: { state: string; configured: boolean; reason: string | null };
+    };
+    expect(croma.credentials).toMatchObject({ state: "PENDING_APPROVAL", configured: false });
+    const disable = await admin.agent.patch(`/api/v1/admin/sources/${croma.id}`, {
+      status: "DISABLED",
+      reason: "prep",
+    });
+    expect(disable.statusCode).toBe(200);
+    const sneak = await admin.agent.patch(`/api/v1/admin/sources/${croma.id}`, {
+      status: "ACTIVE",
+      reason: "try enabling without an integration",
+    });
+    expect(sneak.statusCode).toBe(409);
+    expect(sneak.body).toContain("PENDING_APPROVAL");
+    const stored = await ctx.prisma.shoppingSource.findUniqueOrThrow({ where: { id: croma.id } });
+    expect(stored.status).toBe("DISABLED");
     const hc = await admin.agent.post("/api/v1/admin/sources/health-check", {
       reason: "after config change",
     });

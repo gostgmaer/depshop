@@ -201,7 +201,12 @@ describe("7–8. connectors", () => {
     status: "PENDING_CREDENTIALS",
     statusReason: null,
     isSample: false,
-    credentials: { configured: false, missing: ["AMAZON_CREATORS_CREDENTIAL_ID"] },
+    credentials: {
+      state: "PENDING_CREDENTIALS",
+      configured: false,
+      missing: ["AMAZON_CREATORS_CREDENTIAL_ID"],
+      reason: null,
+    },
     connectorRegistered: true,
     health: "UNKNOWN",
     lastHealthCheckAt: null,
@@ -238,7 +243,10 @@ describe("7–8. connectors", () => {
 
   it("disables an active source with a reason", async () => {
     const Page = SourcesPage;
-    const s = source({ status: "ACTIVE", credentials: { configured: true, missing: [] } });
+    const s = source({
+      status: "ACTIVE",
+      credentials: { state: "READY", configured: true, missing: [], reason: null },
+    });
     m.sources.mockResolvedValue([s]);
     m.updateSource.mockResolvedValue(s);
     renderWithQuery(<Page />);

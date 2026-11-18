@@ -34,6 +34,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 -x scripts/*/
 ```sh
 pnpm --filter @dealmind/api test:load      # k6: signed-in read mix + catalog/search mix
 pnpm --filter @dealmind/worker test:load   # BullMQ: price refresh + alert evaluation throughput
+pnpm --filter @dealmind/worker build && pnpm --filter @dealmind/api test:journey   # full-stack journey (real API + worker + agent processes)
 ```
 
 ## Continuous deployment: `release.yml` and `deploy-env.yml`

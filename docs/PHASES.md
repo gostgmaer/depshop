@@ -591,3 +591,11 @@ See [production-deployment.md](production-deployment.md), [ci-cd.md](ci-cd.md), 
 
 - Verified in a local rehearsal (production images and compose, project `dealmind-rehearsal`): deploy, automatic and manual rollback, schema guard, backup, restore test, disaster-recovery drill, graceful shutdown, network isolation, monitoring targets and rules, k6 and BullMQ load tests.
 - Not deployed to any server; CI/CD not yet run on GitHub; no external provider approvals.
+
+## Prompt 22 — End-to-end integration audit and launch readiness
+
+See [launch-readiness-report.md](launch-readiness-report.md). **Decision: READY FOR STAGING ONLY.**
+
+- New full-stack journey (`pnpm --filter @dealmind/api test:journey`): real API, worker and agent processes; 8/8 steps.
+- Fixed: P22-1 Redis crash loop (rename-command vs AOF replay, now ACLs); P22-2 connectors without an authorized integration reported as configured and enable-able. Unused dependencies removed.
+- Staging simulation (local, production images): deploy, smoke tests, Redis ACL, backup and restore test, second release, rollback.

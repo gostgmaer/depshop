@@ -53,14 +53,16 @@ services:
   redis:
     <<: *restart
     image: redis:7.4.2-alpine
-    command:
-      - redis-server
-      - /usr/local/etc/redis/redis.conf
-      - --requirepass
-      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    # Password + command restrictions as an ACL include written at start
+    # (see infrastructure/docker/redis/redis.conf): never on redis-server's argv.
+    entrypoint:
+      - sh
+      - -c
+      - umask 077 && printf 'user default on >%s ~* &* +@all -flushall -flushdb -config -module -debug\n' "$$REDIS_PASSWORD" > /tmp/acl.conf
+        && exec redis-server /usr/local/etc/redis/redis.conf --include /tmp/acl.conf
     environment:
-      # Read by the health check via REDISCLI_AUTH (keeps the password off argv).
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Also read by the health check via REDISCLI_AUTH.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:

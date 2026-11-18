@@ -186,11 +186,11 @@ export default function AdminSourcesPage() {
                 ) : null}
                 <div className="flex items-start gap-2 text-sm">
                   <KeyRound aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                  {!s.connectorRegistered ? (
+                  {s.credentials.state === "NOT_REGISTERED" ? (
                     <span>No connector registered for this source.</span>
-                  ) : s.credentials.configured ? (
-                    <span>Credentials configured.</span>
-                  ) : (
+                  ) : s.credentials.state === "READY" ? (
+                    <span>Connector ready (credentials configured).</span>
+                  ) : s.credentials.state === "PENDING_CREDENTIALS" ? (
                     <span>
                       Missing credentials:{" "}
                       {s.credentials.missing.map((name) => (
@@ -198,6 +198,13 @@ export default function AdminSourcesPage() {
                           {name}
                         </code>
                       ))}
+                    </span>
+                  ) : (
+                    <span>
+                      {s.credentials.state === "PENDING_APPROVAL"
+                        ? "Awaiting partner approval: no authorized integration yet."
+                        : "Not supported."}
+                      {s.credentials.reason ? ` ${s.credentials.reason}` : ""}
                     </span>
                   )}
                 </div>

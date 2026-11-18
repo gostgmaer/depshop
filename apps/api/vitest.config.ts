@@ -8,6 +8,7 @@ export default defineConfig({
       "src/**/*.db.test.ts",
       "src/**/*.contract.test.ts",
       "src/**/*.load.test.ts",
+      "src/**/*.journey.test.ts",
       "node_modules",
       "dist",
     ],

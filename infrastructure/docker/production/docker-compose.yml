@@ -192,13 +192,13 @@ services:
   redis:
     <<: [*restart, *logging]
     image: redis:7.4.2-alpine
-    # The password goes into a config include written at start, so it is not on
-    # redis-server's command line (visible in `ps`/inspect).
+    # Password + command restrictions (no FLUSH*/CONFIG/MODULE/DEBUG for clients) as an
+    # ACL include written at start: not on redis-server's command line (`ps`/inspect).
     entrypoint:
       - sh
       - -c
-      - umask 077 && printf 'requirepass "%s"\n' "$$REDIS_PASSWORD" > /tmp/auth.conf
-        && exec redis-server /usr/local/etc/redis/redis.conf --include /tmp/auth.conf
+      - umask 077 && printf 'user default on >%s ~* &* +@all -flushall -flushdb -config -module -debug\n' "$$REDIS_PASSWORD" > /tmp/acl.conf
+        && exec redis-server /usr/local/etc/redis/redis.conf --include /tmp/acl.conf
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD}
     volumes:

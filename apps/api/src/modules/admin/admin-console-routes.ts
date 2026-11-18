@@ -229,8 +229,14 @@ export const adminConsoleRoutes: FastifyPluginAsyncZod<AdminConsoleOptions> = as
         if (!s.isSample) {
           if (!c.registered)
             throw new AppError(ErrorCode.CONFLICT, "No connector is registered for this source.");
-          if (!c.configured)
+          // Only a READY connector may go live (PENDING_APPROVAL = no authorized integration).
+          if (c.state === "PENDING_CREDENTIALS")
             throw new AppError(ErrorCode.CONFLICT, `Missing credentials: ${c.missing.join(", ")}`);
+          if (c.state !== "READY")
+            throw new AppError(
+              ErrorCode.CONFLICT,
+              `This connector is ${c.state}${c.reason ? `: ${c.reason}` : ""}. It can't be enabled until the integration is authorized.`,
+            );
         }
         if (s.status === "PENDING_APPROVAL" || s.status === "PENDING_CREDENTIALS")
           throw new AppError(

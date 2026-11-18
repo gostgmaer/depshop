@@ -98,7 +98,7 @@ export const adminSources = (): AdminSourceView[] => [
     status: "ACTIVE",
     statusReason: null,
     isSample: true,
-    credentials: { configured: true, missing: [] },
+    credentials: { state: "READY", configured: true, missing: [], reason: null },
     connectorRegistered: true,
     health: "HEALTHY",
     lastHealthCheckAt: NOW,

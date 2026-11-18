@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
     "test:load": "dotenv -e ../../.env -- vitest run -c vitest.load.config.ts",
+    "test:journey": "dotenv -e ../../.env -- vitest run -c vitest.journey.config.ts",
     "test:contract": "dotenv -e ../../.env -- vitest run -c vitest.contract.config.ts",
     "billing:sync-plans": "tsx --env-file=../../.env src/scripts/billing-sync-plans.ts"
   },

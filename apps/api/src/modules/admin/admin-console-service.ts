@@ -280,14 +280,31 @@ export class AdminConsoleService {
 
   // ── Sources ──
 
-  readiness(slug: string): { registered: boolean; configured: boolean; missing: string[] } {
+  /** Readiness as the connector reports it; "configured" means READY and nothing else. */
+  readiness(slug: string): {
+    registered: boolean;
+    state:
+      "READY" | "PENDING_CREDENTIALS" | "PENDING_APPROVAL" | "NOT_SUPPORTED" | "NOT_REGISTERED";
+    configured: boolean;
+    missing: string[];
+    reason: string | null;
+  } {
     const c = this.d.registry?.get(slug);
-    if (!c) return { registered: false, configured: false, missing: [] };
+    if (!c)
+      return {
+        registered: false,
+        state: "NOT_REGISTERED",
+        configured: false,
+        missing: [],
+        reason: null,
+      };
     const r = c.getReadiness();
     return {
       registered: true,
-      configured: r.state !== "PENDING_CREDENTIALS",
+      state: r.state,
+      configured: r.state === "READY",
       missing: r.state === "PENDING_CREDENTIALS" ? r.missing : [],
+      reason: r.state === "PENDING_APPROVAL" || r.state === "NOT_SUPPORTED" ? r.reason : null,
     };
   }
 
@@ -319,7 +336,12 @@ export class AdminConsoleService {
           status: s.status,
           statusReason: s.statusReason,
           isSample: s.isSample,
-          credentials: { configured: ready.configured, missing: ready.missing },
+          credentials: {
+            state: ready.state,
+            configured: ready.configured,
+            missing: ready.missing,
+            reason: ready.reason,
+          },
           connectorRegistered: ready.registered,
           health: s.health,
           lastHealthCheckAt: s.lastHealthCheckAt?.toISOString() ?? null,

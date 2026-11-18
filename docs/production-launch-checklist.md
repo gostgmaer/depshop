@@ -1,5 +1,7 @@
 # Production launch checklist
 
+> Latest end-to-end evidence and release decision: [launch-readiness-report.md](launch-readiness-report.md) (Prompt 22).
+
 **Status as of 2026-11-17.** DealMind AI has **not** been deployed to a real server, and no external provider has approved it.
 
 **Status key:**

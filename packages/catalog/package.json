@@ -21,8 +21,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@dealmind/db": "workspace:*",
-    "@dealmind/shared": "workspace:*",
     "zod": "^3.25.0"
   },
   "devDependencies": {
