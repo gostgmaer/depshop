@@ -2,3 +2,7 @@ pnpm-lock.yaml
 **/dist
 **/.next
 **/migrations/**/*.sql
+**/test-results
+**/playwright-report
+load/results
+**/.venv

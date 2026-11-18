@@ -1,6 +1,9 @@
 {
   "name": "@dealmind/worker",
   "version": "0.1.0",
+  "files": [
+    "dist"
+  ],
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts"
+    "test:db": "dotenv -e ../../.env -- vitest run -c vitest.db.config.ts",
+    "test:load": "dotenv -e ../../.env -- vitest run -c vitest.load.config.ts"
   },
   "dependencies": {
     "@dealmind/affiliate": "workspace:*",

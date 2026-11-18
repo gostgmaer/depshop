@@ -212,8 +212,12 @@ describe("web push", () => {
     await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/ok");
     const r = await record(alertEvent(u.id));
     const p = await delivery(r.notificationId, "PUSH");
-    push.failures.set("https://fcm.googleapis.com/fcm/send/gone", [new DeliveryError("410", true, true)]);
-    push.failures.set("https://fcm.googleapis.com/fcm/send/flaky", [new DeliveryError("503", false)]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/gone", [
+      new DeliveryError("410", true, true),
+    ]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/flaky", [
+      new DeliveryError("503", false),
+    ]);
 
     expect(await processNotificationDelivery(deps(), { deliveryId: p.id }, ctx1)).toMatchObject({
       action: "retry",
@@ -244,7 +248,9 @@ describe("web push", () => {
     const u = await user();
     await subscribe(u.id, "https://fcm.googleapis.com/fcm/send/only");
     const r2 = await record(alertEvent(u.id));
-    push.failures.set("https://fcm.googleapis.com/fcm/send/only", [new DeliveryError("404", true, true)]);
+    push.failures.set("https://fcm.googleapis.com/fcm/send/only", [
+      new DeliveryError("404", true, true),
+    ]);
     const p = await delivery(r2.notificationId, "PUSH");
     expect(await processNotificationDelivery(deps(), { deliveryId: p.id }, ctx1)).toEqual({
       action: "done",

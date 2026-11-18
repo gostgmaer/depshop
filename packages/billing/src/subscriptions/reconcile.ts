@@ -25,7 +25,11 @@ export async function reconcileSubscriptions(
     where: {
       planCode: { not: "FREE" },
       status: { in: ["ACTIVE", "TRIALING", "PAST_DUE", "PAUSED"] },
-      OR: [{ currentPeriodEnd: { lte: now } }, { lastSyncedAt: null }, { lastSyncedAt: { lt: stale } }],
+      OR: [
+        { currentPeriodEnd: { lte: now } },
+        { lastSyncedAt: null },
+        { lastSyncedAt: { lt: stale } },
+      ],
     },
     select: { userId: true },
     orderBy: { lastSyncedAt: { sort: "asc", nulls: "first" } },

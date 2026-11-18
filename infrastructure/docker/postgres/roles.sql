@@ -46,3 +46,8 @@ GRANT SELECT ON TABLE public."AgentRun", public."Search" TO dealmind_agent;
 
 -- Agent: its own checkpoint schema (LangGraph creates and migrates its tables there).
 CREATE SCHEMA IF NOT EXISTS agent_checkpoints AUTHORIZATION dealmind_agent;
+-- Re-assert ownership on every run: a restore from a --no-owner backup leaves the
+-- schema and its tables owned by the restoring role (the agent then can't start).
+ALTER SCHEMA agent_checkpoints OWNER TO dealmind_agent;
+SELECT format('ALTER TABLE agent_checkpoints.%I OWNER TO dealmind_agent', tablename)
+FROM pg_tables WHERE schemaname = 'agent_checkpoints' \gexec

@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 
 from app.api.routes.agent import router as agent_router
 from app.checkpointing.checkpointer import open_checkpointer
@@ -97,6 +97,14 @@ def create_app(
     )
     app.state.settings = cfg
     app.include_router(agent_router)
+
+    @app.get("/ready")
+    async def ready(response: Response) -> dict[str, Any]:
+        """Ready once start-up finished (checkpointer, internal API client, LLM provider)."""
+        ok = getattr(app.state, "executions", None) is not None
+        if not ok:
+            response.status_code = 503
+        return {"status": "ok" if ok else "starting"}
 
     @app.get("/health")
     async def health() -> dict[str, Any]:

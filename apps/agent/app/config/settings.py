@@ -13,7 +13,10 @@ LlmProviderName = Literal["google", "openai", "rules"]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=None, extra="ignore", populate_by_name=True)
+    # env_ignore_empty: an empty variable (e.g. LLM_FALLBACK_PROVIDER= from compose) means "unset".
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", populate_by_name=True, env_ignore_empty=True
+    )
 
     environment: Literal["development", "test", "production"] = Field(
         "development", validation_alias=AliasChoices("NODE_ENV", "ENVIRONMENT")

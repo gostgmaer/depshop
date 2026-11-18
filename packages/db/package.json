@@ -1,6 +1,10 @@
 {
   "name": "@dealmind/db",
   "version": "0.1.0",
+  "files": [
+    "dist",
+    "prisma"
+  ],
   "private": true,
   "type": "module",
   "main": "./dist/index.js",

@@ -116,7 +116,7 @@ function unwrap(body: unknown): unknown {
     "data" in b &&
     Object.keys(b).every((k) => ENVELOPE_KEYS.has(k))
   )
-    b = (b).data;
+    b = b.data;
   return b;
 }
 const listOf = (body: unknown): unknown[] => {

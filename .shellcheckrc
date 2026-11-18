@@ -1,0 +1,6 @@
+# ShellCheck configuration for scripts/ (CI: .github/workflows/ci.yml).
+# Resolve `source` paths relative to each script.
+source-path=SCRIPTDIR
+# SC2016: single-quoted $VARS in these scripts are meant to expand INSIDE the
+# container's shell (docker compose exec ... sh -c '...'), never on the host.
+disable=SC2016

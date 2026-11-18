@@ -126,9 +126,7 @@ describe("EasyDev payment service adapter", () => {
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const make = (handler: (url: string, init: RequestInit) => Response) => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
-      handler(url, init!),
-    );
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => handler(url, init!));
     const p = new EasyDevPaymentsProvider({
       baseUrl: "http://pay.local/api/v1/",
       apiKey: "svc-key",

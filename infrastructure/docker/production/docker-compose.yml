@@ -1,0 +1,388 @@
+# DealMind AI — PRODUCTION / STAGING stack (single host, Docker Compose).
+# Guide: docs/production-deployment.md. Never used for local development
+# (that is the root docker-compose.yml).
+#
+# Run from the deployment directory (e.g. /opt/dealmind) with:
+#   docker compose -f infrastructure/docker/production/docker-compose.yml \
+#     --env-file .env.production --project-directory . <command>
+# (scripts/deploy/compose.sh wraps exactly this.)
+#
+# Networks:
+#   edge     Traefik ↔ web, api                (the only path from the internet)
+#   backend  internal: api, worker, agent, postgres, redis (no internet access)
+#   egress   api, worker, agent → IAM, payments, notifications, marketplaces, LLM, web push
+#   socket   Traefik ↔ docker-socket-proxy     (read-only container listing)
+# Published ports: 80/443 on Traefik only. PostgreSQL, Redis, the agent,
+# /internal, /metrics and /docs are never reachable from the internet.
+#
+# Single platform, multi-user: one database, one Redis, no tenant routing.
+
+name: dealmind
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-app-hardening: &app-hardening
+  read_only: true
+  tmpfs: ["/tmp:size=64m"]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+
+x-redis-url: &redis-url redis://:${REDIS_PASSWORD:?REDIS_PASSWORD}@redis:6379
+x-app-db-url: &app-db-url postgresql://dealmind_app:${DEALMIND_APP_DB_PASSWORD:?DEALMIND_APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public&connection_limit=${DB_POOL_SIZE:-10}
+
+# Shared by api and worker.
+x-common-env: &common-env
+  NODE_ENV: production
+  DEPLOY_ENV: ${DEPLOY_ENV:?DEPLOY_ENV (staging|production)}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: *app-db-url
+  REDIS_URL: *redis-url
+  REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-dm}
+  APP_URL: https://${APP_DOMAIN:?APP_DOMAIN}
+  AGENT_SERVICE_URL: http://agent:8100
+  AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:?AGENT_SERVICE_TOKEN}
+  AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET:?AGENT_USER_CONTEXT_SECRET}
+  CONNECTORS_ENABLE_MOCKS: "false"
+  # Marketplace credentials: leave empty until the program is approved; the
+  # connector then reports PENDING_CREDENTIALS and is never shown as searched.
+  FLIPKART_AFFILIATE_ID: ${FLIPKART_AFFILIATE_ID:-}
+  FLIPKART_AFFILIATE_TOKEN: ${FLIPKART_AFFILIATE_TOKEN:-}
+  AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}
+  AMAZON_CREATORS_CREDENTIAL_SECRET: ${AMAZON_CREATORS_CREDENTIAL_SECRET:-}
+  AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
+  NOTIFICATION_SERVICE_URL: ${NOTIFICATION_SERVICE_URL:-}
+  NOTIFICATION_API_KEY: ${NOTIFICATION_API_KEY:-}
+  NOTIFICATION_TENANT_ID: ${NOTIFICATION_TENANT_ID:-dealmind}
+  NOTIFICATION_TOKEN_SECRET: ${NOTIFICATION_TOKEN_SECRET:-}
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+  BILLING_PROVIDER: ${BILLING_PROVIDER:-none}
+  PAYMENT_SERVICE_URL: ${PAYMENT_SERVICE_URL:-}
+  PAYMENT_SERVICE_API_KEY: ${PAYMENT_SERVICE_API_KEY:-}
+  PAYMENT_TENANT_ID: ${PAYMENT_TENANT_ID:-easydev}
+  PAYMENT_APPLICATION_ID: ${PAYMENT_APPLICATION_ID:-dealmind}
+  BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+
+services:
+  # ── Edge ──────────────────────────────────────────────────────────────────
+  socket-proxy:
+    <<: [*restart, *logging]
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    environment:
+      # Read-only container discovery for Traefik; everything else denied.
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket]
+    read_only: true
+    tmpfs: ["/run", "/tmp"]
+    security_opt: ["no-new-privileges:true"]
+
+  traefik:
+    <<: [*restart, *logging]
+    image: traefik:v3.6.25
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=dealmind-edge
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.http.tls.certresolver=le
+      # SSE (search progress, notifications) needs long-lived responses.
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=60s
+      - --entrypoints.websecure.transport.respondingtimeouts.writetimeout=0s
+      - --entrypoints.websecure.transport.respondingtimeouts.idletimeout=180s
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --api.dashboard=false
+      - --ping=true
+      - --ping.entrypoint=traefik
+      - --entrypoints.traefik.address=127.0.0.1:8081
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --entrypoints.metrics.address=:8082
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      # Never write cookies, auth headers or query strings to access logs.
+      - --accesslog.fields.headers.defaultmode=drop
+      - --accesslog.fields.names.RequestPath=drop
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/letsencrypt
+      - ./infrastructure/traefik/dynamic:/etc/traefik/dynamic:ro
+    networks: [edge, socket]
+    depends_on: [socket-proxy]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "traefik",
+          "healthcheck",
+          "--ping",
+          "--ping.entrypoint=traefik",
+          "--entrypoints.traefik.address=127.0.0.1:8081",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  # ── Data ──────────────────────────────────────────────────────────────────
+  postgres:
+    <<: [*restart, *logging]
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dealmind}
+      POSTGRES_USER: ${POSTGRES_USER:-dealmind_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C.UTF-8
+      TZ: UTC
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-512MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - log_min_duration_statement=${PG_SLOW_QUERY_MS:-500}
+      - -c
+      - log_connections=off
+      - -c
+      - password_encryption=scram-sha-256
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./infrastructure/docker/postgres/roles.sql:/opt/dealmind/roles.sql:ro
+    networks: [backend]
+    shm_size: 256mb
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -h 127.0.0.1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "${PG_CPUS:-2.0}", memory: "${PG_MEMORY:-2G}" }
+
+  redis:
+    <<: [*restart, *logging]
+    image: redis:7.4.2-alpine
+    # The password goes into a config include written at start, so it is not on
+    # redis-server's command line (visible in `ps`/inspect).
+    entrypoint:
+      - sh
+      - -c
+      - umask 077 && printf 'requirepass "%s"\n' "$$REDIS_PASSWORD" > /tmp/auth.conf
+        && exec redis-server /usr/local/etc/redis/redis.conf --include /tmp/auth.conf
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+      - ./infrastructure/docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [backend]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+
+  # ── Release job (not started by `up`; run by scripts/deploy/deploy.sh) ────
+  migrate:
+    <<: [*logging, *app-hardening]
+    profiles: [release]
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY}/dealmind-migrate:${IMAGE_TAG:?IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      # The OWNER role: migrations are the only DDL, and only here.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind_owner}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # ── Applications ──────────────────────────────────────────────────────────
+  api:
+    <<: [*restart, *logging, *app-hardening]
+    image: ${IMAGE_REGISTRY}/dealmind-api:${IMAGE_TAG}
+    environment:
+      <<: *common-env
+      PORT: 4000
+      HOST: 0.0.0.0
+      # Only Traefik (on the fixed edge subnet) may set X-Forwarded-For.
+      TRUST_PROXY: ${EDGE_SUBNET:-172.30.10.0/24}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY}
+      COOKIE_SECURE: "true"
+      API_DOCS_ENABLED: "false"
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      IAM_BASE_URL: ${IAM_BASE_URL:?IAM_BASE_URL}
+      IAM_TENANT: ${IAM_TENANT:-easydev}
+      IAM_JWT_ISSUER: ${IAM_JWT_ISSUER:-iam-service}
+      IAM_JWT_AUDIENCE: ${IAM_JWT_AUDIENCE:-easydev}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      FILE_SERVICE_URL: ${FILE_SERVICE_URL:-}
+      FILE_SERVICE_HMAC_SECRET: ${FILE_SERVICE_HMAC_SECRET:-}
+      FILE_SERVICE_TENANT_ID: ${FILE_SERVICE_TENANT_ID:-dealmind}
+    networks: [edge, backend, egress]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    stop_grace_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dealmind-edge
+      - traefik.http.services.api.loadbalancer.server.port=4000
+      # Browser traffic: same origin as the site (first-party cookies, CSRF origin).
+      - traefik.http.routers.app-api.rule=Host(`${APP_DOMAIN}`) && PathPrefix(`/api/`)
+      - traefik.http.routers.app-api.priority=100
+      - traefik.http.routers.app-api.entrypoints=websecure
+      - traefik.http.routers.app-api.tls.certresolver=le
+      - traefik.http.routers.app-api.service=api
+      - traefik.http.routers.app-api.middlewares=secure-headers@file,edge-ratelimit@file,compress@file
+      # API host: public API and liveness only (never /internal, /metrics, /docs, /ready).
+      - traefik.http.routers.api.rule=Host(`${API_DOMAIN:?API_DOMAIN}`) && (PathPrefix(`/api/`) || Path(`/health/live`))
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=le
+      - traefik.http.routers.api.service=api
+      - traefik.http.routers.api.middlewares=secure-headers@file,edge-ratelimit@file,compress@file
+      # Signed payment-service webhook (HMAC-verified by the API).
+      - traefik.http.routers.api-webhook.rule=Host(`${API_DOMAIN}`) && Path(`/webhooks/easydev-payments`)
+      - traefik.http.routers.api-webhook.entrypoints=websecure
+      - traefik.http.routers.api-webhook.tls.certresolver=le
+      - traefik.http.routers.api-webhook.service=api
+      - traefik.http.routers.api-webhook.middlewares=secure-headers@file,webhook-ratelimit@file,webhook-body-limit@file
+    deploy:
+      resources:
+        limits: { cpus: "${API_CPUS:-1.5}", memory: "${API_MEMORY:-1G}" }
+
+  worker:
+    <<: [*restart, *logging, *app-hardening]
+    image: ${IMAGE_REGISTRY}/dealmind-worker:${IMAGE_TAG}
+    environment:
+      <<: *common-env
+      AGENT_TIMEOUT_SECONDS: ${AGENT_TIMEOUT_SECONDS:-180}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      NOTIFICATION_CONCURRENCY: ${NOTIFICATION_CONCURRENCY:-5}
+      TRACKING_ENABLED: ${TRACKING_ENABLED:-true}
+      TRACKING_SOURCE_SHARE: ${TRACKING_SOURCE_SHARE:-0.5}
+      TRACKING_MAX_QUEUED: ${TRACKING_MAX_QUEUED:-2000}
+      PRICE_TRACKING_CONCURRENCY: ${PRICE_TRACKING_CONCURRENCY:-8}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+    networks: [backend, egress]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      agent: { condition: service_healthy }
+    # BullMQ workers finish their active jobs before exiting; give them time.
+    stop_grace_period: ${WORKER_STOP_GRACE:-120s}
+    deploy:
+      resources:
+        limits: { cpus: "${WORKER_CPUS:-1.5}", memory: "${WORKER_MEMORY:-1G}" }
+
+  agent:
+    <<: [*restart, *logging, *app-hardening]
+    image: ${IMAGE_REGISTRY}/dealmind-agent:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      DEPLOY_ENV: ${DEPLOY_ENV}
+      # Least-privilege agent role: two read models + its checkpoint schema.
+      DATABASE_URL: postgresql://dealmind_agent:${DEALMIND_AGENT_DB_PASSWORD:?DEALMIND_AGENT_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}
+      CHECKPOINTER: postgres
+      INTERNAL_API_URL: http://api:4000/internal/v1
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN}
+      AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET}
+      AGENT_MAX_CONNECTIONS: ${AGENT_MAX_CONNECTIONS:-64}
+      LLM_PROVIDER: ${LLM_PROVIDER:-google}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
+      LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks: [backend, egress]
+    depends_on:
+      postgres: { condition: service_healthy }
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits: { cpus: "${AGENT_CPUS:-1.0}", memory: "${AGENT_MEMORY:-1G}" }
+
+  web:
+    <<: [*restart, *logging, *app-hardening]
+    image: ${IMAGE_REGISTRY}/dealmind-web:${IMAGE_TAG}
+    tmpfs: ["/tmp:size=64m", "/app/apps/web/.next/cache:size=128m,uid=1000,gid=1000"]
+    environment:
+      API_INTERNAL_URL: http://api:4000
+      # Traefik is the one proxy in front of Next.js.
+      TRUSTED_PROXY_COUNT: "1"
+      PRIVACY_OPERATOR_NAME: ${PRIVACY_OPERATOR_NAME:-}
+      PRIVACY_CONTACT_EMAIL: ${PRIVACY_CONTACT_EMAIL:-}
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+    stop_grace_period: 20s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dealmind-edge
+      - traefik.http.routers.web.rule=Host(`${APP_DOMAIN}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls.certresolver=le
+      - traefik.http.routers.web.middlewares=secure-headers@file,edge-ratelimit@file,compress@file
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    deploy:
+      resources:
+        limits: { cpus: "${WEB_CPUS:-1.0}", memory: "${WEB_MEMORY:-768M}" }
+
+networks:
+  edge:
+    name: dealmind-edge
+    ipam:
+      config: [{ subnet: "${EDGE_SUBNET:-172.30.10.0/24}" }]
+  backend:
+    name: dealmind-backend
+    internal: true
+  egress:
+    name: dealmind-egress
+  socket:
+    name: dealmind-socket
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+  letsencrypt:

@@ -13,6 +13,7 @@
     "test": "turbo run test",
     "check": "turbo run typecheck lint test build",
     "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @dealmind/db generate",
     "db:migrate": "pnpm --filter @dealmind/db migrate:deploy",
     "db:seed": "pnpm --filter @dealmind/db seed",

@@ -34,6 +34,7 @@ import {
 } from "@dealmind/queue";
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
+import { writeFile } from "node:fs/promises";
 import { pino } from "pino";
 import { z } from "zod";
 import { AgentClient } from "./agent-client.js";
@@ -102,7 +103,10 @@ const env = z
     VAPID_PRIVATE_KEY: z.string().optional(),
     VAPID_SUBJECT: z.string().optional(),
   })
-  .parse(process.env);
+  // Empty variables mean unset (compose passes optional settings as "").
+  .parse(
+    Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined && v !== "")),
+  );
 
 const allowMocks = env.CONNECTORS_ENABLE_MOCKS
   ? env.CONNECTORS_ENABLE_MOCKS === "true"
@@ -112,7 +116,8 @@ if (allowMocks && env.NODE_ENV === "production")
 
 const log = pino({
   level: env.LOG_LEVEL,
-  base: { service: "dealmind-worker" },
+  base: { service: "dealmind-worker", env: process.env.DEPLOY_ENV ?? env.NODE_ENV },
+  timestamp: pino.stdTimeFunctions.isoTime,
   // Credentials and signed contexts are never logged, even by accident.
   redact: [
     "*.token",
@@ -384,8 +389,20 @@ log.info(
   "worker started",
 );
 
+// Container health: a heartbeat file touched while the process (event loop,
+// Redis connection) is healthy. The Docker HEALTHCHECK fails when it goes stale.
+const HEARTBEAT_FILE = process.env.WORKER_HEARTBEAT_FILE ?? "/tmp/dealmind-worker.heartbeat";
+const heartbeat = setInterval(() => {
+  redis
+    .ping()
+    .then(() => writeFile(HEARTBEAT_FILE, new Date().toISOString()))
+    .catch((err: unknown) => log.warn({ err: (err as Error).message }, "heartbeat skipped"));
+}, 15_000);
+heartbeat.unref();
+
 async function shutdown(signal: string): Promise<void> {
   log.info({ signal }, "shutting down");
+  clearInterval(heartbeat);
   // Workers finish their active jobs before closing (BullMQ graceful close).
   await Promise.all([
     searchWorker.close(),

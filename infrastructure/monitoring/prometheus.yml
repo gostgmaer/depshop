@@ -1,0 +1,54 @@
+# DealMind AI — Prometheus scrape configuration (single host).
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    service: dealmind
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs: [{ targets: ["alertmanager:9093"] }]
+
+scrape_configs:
+  # API: HTTP rate/latency by route, queue depth/workers, search, agent, LLM,
+  # notification, price-check, payment-webhook and connector metrics.
+  - job_name: api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/metrics_token
+    static_configs: [{ targets: ["api:4000"] }]
+
+  # Traefik: edge request rates, status codes, TLS.
+  - job_name: traefik
+    static_configs: [{ targets: ["traefik:8082"] }]
+
+  # Host: disk, memory, CPU; plus backup/restore-test freshness (textfile collector).
+  - job_name: node
+    static_configs: [{ targets: ["node-exporter:9100"] }]
+
+  # Readiness of internal services (database + Redis via the API, agent).
+  - job_name: internal-ready
+    metrics_path: /probe
+    params: { module: [http_2xx] }
+    static_configs:
+      - targets: ["http://api:4000/ready", "http://agent:8100/ready"]
+    relabel_configs:
+      - { source_labels: [__address__], target_label: __param_target }
+      - { source_labels: [__param_target], target_label: instance }
+      - { target_label: __address__, replacement: "blackbox:9115" }
+
+  # Public availability and certificate expiry, from outside the edge network.
+  - job_name: public
+    metrics_path: /probe
+    params: { module: [https_2xx] }
+    # Prometheus does not expand environment variables: the entrypoint writes the
+    # target (https://APP_DOMAIN/healthz and https://API_DOMAIN/health/live) here.
+    file_sd_configs: [{ files: [/tmp/public-targets.json] }]
+    relabel_configs:
+      - { source_labels: [__address__], target_label: __param_target }
+      - { source_labels: [__param_target], target_label: instance }
+      - { target_label: __address__, replacement: "blackbox:9115" }

@@ -41,7 +41,14 @@ async def open_checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointS
     url = libpq_url(settings.database_url)
     schema = settings.checkpoint_schema
     async with await AsyncConnection.connect(url, autocommit=True) as conn:
-        await conn.execute(SQL("CREATE SCHEMA IF NOT EXISTS {}").format(Identifier(schema)))
+        # In production the schema is pre-created for the least-privilege agent role
+        # (infrastructure/docker/postgres/roles.sql). CREATE SCHEMA needs database-level
+        # CREATE even with IF NOT EXISTS, so only attempt it when the schema is missing.
+        exists = await (
+            await conn.execute("SELECT 1 FROM pg_namespace WHERE nspname = %s", (schema,))
+        ).fetchone()
+        if exists is None:
+            await conn.execute(SQL("CREATE SCHEMA IF NOT EXISTS {}").format(Identifier(schema)))
     pool = AsyncConnectionPool(
         url,
         min_size=1,

@@ -12,11 +12,7 @@ import {
 import { type NotificationEvent, notificationEvent } from "../events/events.js";
 
 export type NotificationSourceValue =
-  | "ALERT_EVALUATION"
-  | "ALERT_EXPIRY"
-  | "SEARCH"
-  | "ACCOUNT"
-  | "BILLING";
+  "ALERT_EVALUATION" | "ALERT_EXPIRY" | "SEARCH" | "ACCOUNT" | "BILLING";
 
 export interface NotificationDraft {
   userId: string;

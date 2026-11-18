@@ -1,0 +1,215 @@
+# DealMind AI — continuous integration.
+# Runs on every pull request and on pushes to main. Nothing here deploys.
+# Third-party actions are pinned to full commit SHAs (tag in the comment).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22.23.5"
+  PNPM_VERSION: "10.33.2"
+  TURBO_TELEMETRY_DISABLED: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # ── TypeScript: format, lint, typecheck, unit tests, builds ───────────────
+  node:
+    name: Node — format, lint, typecheck, unit tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with: { enable-cache: true, cache-dependency-glob: apps/agent/uv.lock }
+      - name: Install (frozen lockfiles)
+        run: |
+          pnpm install --frozen-lockfile
+          (cd apps/agent && uv sync --frozen)
+      - name: Formatting
+        run: pnpm format:check
+      - name: Prisma schema valid
+        run: pnpm --filter @dealmind/db exec prisma validate --schema prisma/schema.prisma
+        env: { DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci" }
+      # typecheck + lint + unit tests + production builds for every package,
+      # including the Python agent (ruff, ruff format --check, mypy, pytest via uv).
+      - name: pnpm check (typecheck, lint, test, build)
+        run: pnpm check
+
+  # ── Integration tests against real PostgreSQL + Redis ─────────────────────
+  integration:
+    name: Integration — DB/API/worker tests, migration drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env: { POSTGRES_USER: dealmind, POSTGRES_PASSWORD: ci-only-password, POSTGRES_DB: dealmind }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dealmind" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4.2-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      # CI-only throwaway credentials for the service containers above.
+      DATABASE_URL: postgresql://dealmind:ci-only-password@localhost:5432/dealmind?schema=public
+      SHADOW_DATABASE_URL: postgresql://dealmind:ci-only-password@localhost:5432/dealmind_shadow?schema=public
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Extensions (as in infrastructure/docker/postgres/init)
+        run: |
+          for db in template1 dealmind; do
+            PGPASSWORD=ci-only-password psql -h localhost -U dealmind -d "$db" -v ON_ERROR_STOP=1 \
+              -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm' -c 'CREATE EXTENSION IF NOT EXISTS vector'
+          done
+          PGPASSWORD=ci-only-password psql -h localhost -U dealmind -d postgres -c 'CREATE DATABASE dealmind_shadow'
+      - name: Build workspace packages
+        run: pnpm turbo run build --filter=@dealmind/api... --filter=@dealmind/worker...
+      - name: Migrations apply cleanly (prisma migrate deploy)
+        run: pnpm --filter @dealmind/db exec prisma migrate deploy --schema prisma/schema.prisma
+      - name: Migrations match schema.prisma (no drift)
+        run: |
+          pnpm --filter @dealmind/db exec prisma migrate diff \
+            --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
+      - name: Least-privilege roles script applies
+        run: |
+          PGPASSWORD=ci-only-password psql -h localhost -U dealmind -d dealmind -v ON_ERROR_STOP=1 \
+            -v app_password=ci-app-password -v agent_password=ci-agent-password \
+            -f infrastructure/docker/postgres/roles.sql
+      - name: DB package tests (schema, constraints, ownership)
+        run: pnpm --filter @dealmind/db test:db
+      - name: API integration tests (auth, authz, isolation, security, billing, …)
+        run: pnpm --filter @dealmind/api test:db
+      - name: Worker integration tests (queues, tracking, alerts, notifications, retention)
+        run: pnpm --filter @dealmind/worker test:db
+
+  # ── End-to-end (production build + mock API, Playwright, axe) ────────────
+  e2e:
+    name: E2E — Playwright (desktop + mobile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@dealmind/web...
+      - run: pnpm --filter @dealmind/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @dealmind/web exec playwright test
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: playwright-traces, path: apps/web/test-results, retention-days: 7 }
+
+  # ── Supply chain: dependency audits and secret scan ──────────────────────
+  security:
+    name: Security — dependency audit, secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: pnpm audit (fail on critical in production dependencies)
+        # Known open highs are tracked in docs/SECURITY_AUDIT.md (DM-19, DM-20).
+        run: |
+          pnpm audit --prod || true
+          pnpm audit --prod --audit-level critical
+      - name: Python dependency audit (pip-audit on the locked production set)
+        run: |
+          cd apps/agent
+          uv export --frozen --no-dev --format requirements-txt --no-hashes > /tmp/agent-req.txt
+          uvx pip-audit==2.10.1 -r /tmp/agent-req.txt --no-deps --disable-pip --strict
+      - name: Secret scan (gitleaks, full history)
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.0 \
+            detect --source /repo --redact --no-banner --exit-code 1
+
+  # ── Production images build (no push) + vulnerability scan ───────────────
+  images:
+    name: Images — build all production Dockerfiles, scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    needs: [node]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: api, file: infrastructure/docker/production/node.Dockerfile, target: api }
+          - { name: worker, file: infrastructure/docker/production/node.Dockerfile, target: worker }
+          - {
+              name: migrate,
+              file: infrastructure/docker/production/node.Dockerfile,
+              target: migrate,
+            }
+          - { name: web, file: infrastructure/docker/production/web.Dockerfile, target: web }
+          - { name: agent, file: infrastructure/docker/production/agent.Dockerfile, target: agent }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          tags: dealmind-${{ matrix.name }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Image runs as non-root
+        run: |
+          user="$(docker image inspect -f '{{.Config.User}}' dealmind-${{ matrix.name }}:ci)"
+          echo "user=$user"; test -n "$user" && test "$user" != "root" && test "$user" != "0"
+      - name: Trivy (fail on fixable CRITICAL)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image \
+            --quiet --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            dealmind-${{ matrix.name }}:ci
+
+  # ── Workflow and shell lint ───────────────────────────────────────────────
+  lint-ops:
+    name: Ops — actionlint, shellcheck, compose config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+      - name: shellcheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 -x scripts/*/*.sh
+      - name: Production compose renders with the template env
+        run: |
+          cp infrastructure/docker/production/.env.production.example /tmp/ci.env
+          sed -i -E 's/^(POSTGRES_PASSWORD|DEALMIND_APP_DB_PASSWORD|DEALMIND_AGENT_DB_PASSWORD|REDIS_PASSWORD|SESSION_SECRET|TOKEN_ENCRYPTION_KEY|INTERNAL_API_TOKEN|AGENT_SERVICE_TOKEN|AGENT_USER_CONTEXT_SECRET|LLM_MODEL|IMAGE_TAG)=.*/\1=ci-placeholder-value/' /tmp/ci.env
+          docker compose -f infrastructure/docker/production/docker-compose.yml --env-file /tmp/ci.env \
+            --project-directory . config --quiet

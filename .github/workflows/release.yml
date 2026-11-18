@@ -1,0 +1,144 @@
+# DealMind AI — controlled release: CI → images → staging → production.
+#
+# Triggers:
+#   - push of a tag v*            → CI, publish, staging, then production (needs approval)
+#   - manual (workflow_dispatch)  → CI, publish, then deploy the chosen ref to staging
+#                                    (and production only if the ref is a v* tag)
+# Pull requests never deploy. Production uses the GitHub "production"
+# environment: configure Required reviewers there (Settings → Environments)
+# so a person approves every production deployment.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git tag (v1.2.3) or commit SHA on main to release
+        required: true
+      production:
+        description: Also deploy to production (only allowed for v* tags)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve and validate the release
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      tag: ${{ steps.r.outputs.tag }}
+      image_tag: ${{ steps.r.outputs.image_tag }}
+      production: ${{ steps.r.outputs.production }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { fetch-depth: 0, ref: "${{ inputs.ref || github.ref }}" }
+      - id: r
+        env:
+          INPUT_PRODUCTION: ${{ inputs.production }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          tag="$(git describe --exact-match --tags "$sha" 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' || true)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$sha is not on main"; exit 1; }
+          production=false
+          if [[ "$EVENT" == "push" || "$INPUT_PRODUCTION" == "true" ]]; then
+            [[ -n "$tag" ]] || { echo "::error::production releases must be a v* tag"; exit 1; }
+            production=true
+          fi
+          {
+            echo "sha=$sha"
+            echo "tag=$tag"
+            echo "image_tag=sha-${sha:0:12}"
+            echo "production=$production"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $sha tag=${tag:-none} production=$production"
+
+  ci:
+    name: CI on the release commit
+    needs: resolve
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Build and push images
+    needs: [resolve, ci]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - { name: api, file: infrastructure/docker/production/node.Dockerfile, target: api }
+          - { name: worker, file: infrastructure/docker/production/node.Dockerfile, target: worker }
+          - {
+              name: migrate,
+              file: infrastructure/docker/production/node.Dockerfile,
+              target: migrate,
+            }
+          - { name: web, file: infrastructure/docker/production/web.Dockerfile, target: web }
+          - { name: agent, file: infrastructure/docker/production/agent.Dockerfile, target: agent }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { ref: "${{ needs.resolve.outputs.sha }}" }
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: names
+        env:
+          OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          repo="ghcr.io/${OWNER,,}/dealmind-${{ matrix.name }}"
+          tags="$repo:$IMAGE_TAG"
+          [[ -n "$RELEASE_TAG" ]] && tags="$tags,$repo:$RELEASE_TAG"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.names.outputs.tags }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  staging:
+    name: Deploy to staging
+    needs: [resolve, publish]
+    uses: ./.github/workflows/deploy-env.yml
+    with:
+      environment: staging
+      sha: ${{ needs.resolve.outputs.sha }}
+      image_tag: ${{ needs.resolve.outputs.image_tag }}
+    secrets: inherit
+
+  production:
+    name: Deploy to production (requires approval)
+    needs: [resolve, staging]
+    if: needs.resolve.outputs.production == 'true'
+    uses: ./.github/workflows/deploy-env.yml
+    with:
+      environment: production
+      sha: ${{ needs.resolve.outputs.sha }}
+      image_tag: ${{ needs.resolve.outputs.image_tag }}
+    secrets: inherit

@@ -1,0 +1,76 @@
+# Reusable: deploy one already-published image tag to one environment over SSH.
+# All deployment logic (env validation, backup, migrations, health gates, smoke
+# tests, automatic app rollback) lives in scripts/deploy/deploy.sh on the host,
+# so CI and a human operator run exactly the same steps.
+#
+# Per-environment configuration (Settings → Environments → staging|production):
+#   secrets: DEPLOY_SSH_HOST, DEPLOY_SSH_USER, DEPLOY_SSH_KEY (private key),
+#            DEPLOY_SSH_KNOWN_HOSTS (the host's pinned public key line)
+#   vars:    DEPLOY_DIR (default /opt/dealmind), APP_URL (for the summary link)
+# The server keeps its own /opt/dealmind/.env.production and its own read-only
+# registry login; no application secret passes through CI.
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      sha: { type: string, required: true }
+      image_tag: { type: string, required: true }
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { ref: "${{ inputs.sha }}" }
+      - name: SSH setup (pinned host key; never disables verification)
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "$KEY" && -n "$KNOWN_HOSTS" ]] || { echo "::error::DEPLOY_SSH_KEY / DEPLOY_SSH_KNOWN_HOSTS not configured for this environment"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+      - name: Ship deployment files (compose, Traefik, scripts, DB init) for this commit
+        env:
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DIR: ${{ vars.DEPLOY_DIR || '/opt/dealmind' }}
+        run: |
+          set -euo pipefail
+          tar -czf /tmp/deploy-bundle.tgz \
+            infrastructure/docker/production infrastructure/docker/postgres infrastructure/docker/redis \
+            infrastructure/traefik infrastructure/monitoring scripts
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes /tmp/deploy-bundle.tgz "$USER@$HOST:/tmp/dealmind-${{ inputs.sha }}.tgz"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "set -e; mkdir -p '$DIR'; tar -xzf '/tmp/dealmind-${{ inputs.sha }}.tgz' -C '$DIR'; rm -f '/tmp/dealmind-${{ inputs.sha }}.tgz'; chmod +x '$DIR'/scripts/*/*.sh"
+      - name: Deploy ${{ inputs.image_tag }} (backup → migrate → roll out → health → smoke)
+        env:
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DIR: ${{ vars.DEPLOY_DIR || '/opt/dealmind' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER@$HOST" \
+            "cd '$DIR' && DEPLOY_DIR='$DIR' RELEASE_SHA='${{ inputs.sha }}' scripts/deploy/deploy.sh '${{ inputs.image_tag }}'"
+      - name: Summary
+        if: always()
+        run: |
+          echo "### ${{ inputs.environment }}: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "image tag \`${{ inputs.image_tag }}\`, commit \`${{ inputs.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

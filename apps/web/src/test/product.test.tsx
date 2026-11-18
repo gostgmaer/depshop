@@ -48,7 +48,10 @@ vi.mock("@/services", () => ({
   notifications: { unreadCount: vi.fn(async () => ({ unread: 0 })) },
   billing: { usage: vi.fn() },
 }));
-type Mocked = Record<string, Record<string, ReturnType<typeof vi.fn<(...args: never[]) => unknown>>>>;
+type Mocked = Record<
+  string,
+  Record<string, ReturnType<typeof vi.fn<(...args: never[]) => unknown>>>
+>;
 const svc = services as unknown as Mocked;
 
 beforeEach(() => {

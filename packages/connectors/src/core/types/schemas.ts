@@ -74,7 +74,10 @@ export const promotionSchema = z
       .array(z.enum(["CREDIT_CARD", "DEBIT_CARD", "UPI", "NET_BANKING", "WALLET", "EMI", "COD"]))
       .max(10)
       .optional(),
-    cardTypes: z.array(z.enum(["CREDIT", "DEBIT"])).max(2).optional(),
+    cardTypes: z
+      .array(z.enum(["CREDIT", "DEBIT"]))
+      .max(2)
+      .optional(),
     /** Membership programme required, e.g. "Flipkart Plus". */
     membership: z.string().trim().min(1).max(100).optional(),
     validFrom: z.coerce.date().optional(),

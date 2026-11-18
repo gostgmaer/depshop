@@ -72,8 +72,12 @@ export function renderMetrics(
   }
   out.push("# HELP dealmind_queue_jobs BullMQ jobs by queue and state (read at scrape time).");
   out.push("# TYPE dealmind_queue_jobs gauge");
-  for (const q of queues)
+  for (const q of queues.filter((x) => x.state !== "__workers"))
     out.push(`dealmind_queue_jobs{queue="${esc(q.queue)}",state="${q.state}"} ${q.count}`);
+  out.push("# HELP dealmind_queue_workers Workers connected to each queue (-1 = unknown).");
+  out.push("# TYPE dealmind_queue_workers gauge");
+  for (const q of queues.filter((x) => x.state === "__workers"))
+    out.push(`dealmind_queue_workers{queue="${esc(q.queue)}"} ${q.count}`);
   const mem = process.memoryUsage();
   out.push("# TYPE dealmind_process_resident_memory_bytes gauge");
   out.push(`dealmind_process_resident_memory_bytes ${mem.rss}`);
@@ -90,8 +94,10 @@ export const metricsPlugin = fp<{
   token: string | undefined;
   jobs: JobQueues;
   queueNames: string[];
+  /** Extra exposition lines computed at scrape time (business metrics). */
+  collect?: () => Promise<string[]>;
 }>(
-  (app: FastifyInstance, { token, jobs, queueNames }, done) => {
+  (app: FastifyInstance, { token, jobs, queueNames, collect }, done) => {
     const metrics = new HttpMetrics();
     app.addHook("onResponse", async (request, reply) => {
       // Route template only (unmatched routes collapse into one label).
@@ -106,12 +112,10 @@ export const metricsPlugin = fp<{
         async (req, reply) => {
           const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? "");
           if (!m || !timingSafeEqual(digest(m[1]!), digest(token)))
-            return reply
-              .status(401)
-              .send({
-                success: false,
-                error: { code: "UNAUTHENTICATED", message: "Metrics token required" },
-              });
+            return reply.status(401).send({
+              success: false,
+              error: { code: "UNAUTHENTICATED", message: "Metrics token required" },
+            });
           const queues = (
             await Promise.all(
               queueNames.map(async (name) => {
@@ -119,18 +123,33 @@ export const metricsPlugin = fp<{
                   .queue(name as never)
                   .getJobCounts("waiting", "active", "delayed", "failed", "prioritized")
                   .catch(() => ({}));
-                return Object.entries(counts).map(([state, count]) => ({
-                  queue: name,
-                  state,
-                  count,
-                }));
+                // Connected workers (0 = jobs pile up with nobody processing them).
+                const workers = await jobs
+                  .queue(name as never)
+                  .getWorkersCount()
+                  .catch(() => -1);
+                return [
+                  ...Object.entries(counts).map(([state, count]) => ({
+                    queue: name,
+                    state,
+                    count,
+                  })),
+                  { queue: name, state: "__workers", count: workers },
+                ];
               }),
             )
           ).flat();
+          // Business metrics never break the scrape: on failure, a comment line.
+          const extra = collect
+            ? await collect().catch((err: unknown) => {
+                req.log.warn({ err: (err as Error).message }, "business metrics failed");
+                return ["# business metrics unavailable"];
+              })
+            : [];
           return reply
             .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
             .header("cache-control", "no-store")
-            .send(renderMetrics(metrics, queues));
+            .send(renderMetrics(metrics, queues) + (extra.length ? `${extra.join("\n")}\n` : ""));
         },
       );
     }

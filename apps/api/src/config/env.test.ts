@@ -65,3 +65,24 @@ describe("loadEnv", () => {
     expect(env.NOTIFICATION_TENANT_ID).toBe("dealmind");
   });
 });
+
+describe("loadEnv: empty variables (Phase 21)", () => {
+  it("treats empty strings as unset (compose passes optional settings as '')", () => {
+    const env = loadEnv({
+      ...base,
+      PAYMENT_SERVICE_URL: "",
+      PAYMENT_WEBHOOK_SECRET: "",
+      NOTIFICATION_TOKEN_SECRET: "",
+      VAPID_PUBLIC_KEY: "",
+      FILE_SERVICE_URL: "",
+      METRICS_TOKEN: "",
+      CORS_ORIGINS: "",
+    });
+    expect(env.PAYMENT_SERVICE_URL).toBeUndefined();
+    expect(env.METRICS_TOKEN).toBeUndefined();
+  });
+
+  it("still rejects a required secret that is present but empty", () => {
+    expect(() => loadEnv({ ...base, SESSION_SECRET: "" })).toThrow(/SESSION_SECRET/);
+  });
+});

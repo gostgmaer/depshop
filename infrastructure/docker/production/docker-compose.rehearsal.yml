@@ -1,0 +1,31 @@
+# LOCAL REHEARSAL ONLY: run the production stack on a workstation to validate
+# images, compose, scripts and smoke tests before touching a server.
+#
+#   COMPOSE_PROJECT=dealmind-rehearsal \
+#   COMPOSE_OVERRIDE=infrastructure/docker/production/docker-compose.rehearsal.yml \
+#   DEPLOY_DIR=$PWD ENV_FILE=<rehearsal env> SKIP_PULL=1 SMOKE_INSECURE=1 ALLOW_RULES_LLM=1 \
+#   APP_URL=https://app.localhost:8443 API_URL=https://api.localhost:8443 \
+#   scripts/deploy/deploy.sh <local-tag>
+#
+# Differences from production: Traefik on 8080/8443 (no root ports); *.localhost
+# cannot get Let's Encrypt certificates, so REHEARSAL_TRAEFIK_DIR holds a copy of
+# the production middlewares.yml plus a self-signed certificate (smoke tests run
+# with SMOKE_INSECURE=1 and SMOKE_RUNNER=edge); the shared IAM is not running
+# (SMOKE_IGNORE_CHECKS=iam,iamJwks).
+# Use a different COMPOSE_PROJECT than any local development stack.
+services:
+  traefik:
+    ports: !override
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
+    # Production middlewares.yml + a self-signed certificate for the rehearsal hosts
+    # (sniStrict refuses mismatched certificates, as it should in production).
+    volumes: !override
+      - letsencrypt:/letsencrypt
+      - ${REHEARSAL_TRAEFIK_DIR:?REHEARSAL_TRAEFIK_DIR}:/etc/traefik/dynamic:ro
+  # No LLM credentials in a rehearsal: the agent runs its rule-based extractor,
+  # which it only permits outside NODE_ENV=production. Production never does this
+  # (scripts/deploy/check-env.sh rejects LLM_PROVIDER=rules unless ALLOW_RULES_LLM=1).
+  agent:
+    environment:
+      NODE_ENV: development

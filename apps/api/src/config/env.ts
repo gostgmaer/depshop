@@ -200,8 +200,17 @@ const envSchema = z
 
 export type Env = z.infer<typeof envSchema>;
 
+/**
+ * An empty variable means "unset": container orchestration (compose `${X:-}`)
+ * passes optional settings as empty strings, which must neither fail
+ * validation nor override defaults.
+ */
+export function withoutEmpty(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(source).filter(([, v]) => v !== undefined && v !== ""));
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = envSchema.safeParse(source);
+  const parsed = envSchema.safeParse(withoutEmpty(source));
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid environment configuration:\n${issues}`);

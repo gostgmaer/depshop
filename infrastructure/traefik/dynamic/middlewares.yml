@@ -1,0 +1,67 @@
+# DealMind AI — Traefik dynamic configuration (file provider), production.
+# Middlewares referenced by the router labels in
+# infrastructure/docker/production/docker-compose.yml as `<name>@file`.
+
+http:
+  middlewares:
+    # Transport headers for every HTTPS response. The web app sets its own
+    # per-request nonce CSP and frame/referrer headers; the API sets helmet's.
+    # HSTS lives here because TLS terminates at Traefik. Start with a short
+    # max-age on a new domain (see docs/production-deployment.md), then raise.
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: false
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        referrerPolicy: strict-origin-when-cross-origin
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+
+    # Coarse per-client shield at the edge (the API also rate-limits per route
+    # in Redis). Keyed by the client IP Traefik observed (depth 0 = the TCP peer:
+    # Traefik is the first hop, so X-Forwarded-For from clients is not trusted).
+    edge-ratelimit:
+      rateLimit:
+        average: 50
+        period: 1s
+        burst: 100
+        sourceCriterion:
+          ipStrategy:
+            depth: 0
+
+    # Stricter limit for the public payment-webhook route.
+    webhook-ratelimit:
+      rateLimit:
+        average: 5
+        period: 1s
+        burst: 20
+
+    # Request-size cap at the edge for routes that never stream (the webhook).
+    # The API (Fastify bodyLimit) and the web proxy enforce 1 MiB everywhere else;
+    # buffering is NOT used on /api because it would break SSE streaming.
+    webhook-body-limit:
+      buffering:
+        maxRequestBodyBytes: 262144
+        memRequestBodyBytes: 262144
+
+    # gzip/br for HTML/JSON; text/event-stream is excluded so SSE is never buffered.
+    compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305

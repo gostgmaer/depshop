@@ -146,10 +146,7 @@ export const admin = {
       status: string;
       agent?: { status?: string; provider?: string; model?: string };
       error?: string;
-    }>(
-      "POST",
-      `${A}/ai-models/health`,
-    ),
+    }>("POST", `${A}/ai-models/health`),
   analytics: (days: number) =>
     api<SearchAnalyticsView>("GET", `${A}/analytics${queryString({ days })}`),
   subscriptions: () => api<SubscriptionAnalyticsView>("GET", `${A}/subscriptions`),

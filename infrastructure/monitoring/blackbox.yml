@@ -1,0 +1,17 @@
+modules:
+  # Internal readiness probes (http://api:4000/ready, http://agent:8100/ready).
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+  # Public HTTPS probes; also exports probe_ssl_earliest_cert_expiry.
+  https_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      follow_redirects: false

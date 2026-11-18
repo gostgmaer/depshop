@@ -1,5 +1,7 @@
 # Production readiness checklist
 
+> Superseded for launch tracking by [production-launch-checklist.md](production-launch-checklist.md) (Phase 21), which records what has been verified. This file keeps the Phase 7.1 security-oriented checklist.
+
 Status at 2026-11-17 (Phase 7.1).
 
 **Legend:**

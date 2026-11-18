@@ -44,6 +44,19 @@ describe("metrics", () => {
     expect(res.body).toContain('route="/api/v1/search/:id"');
     expect(res.body).toContain("dealmind_http_request_duration_seconds_bucket");
     expect(res.body).toMatch(/dealmind_queue_jobs\{queue="[a-z-]+",state="waiting"\} \d+/);
+    // Business/pipeline metrics (Phase 21) are present and label-safe.
+    for (const name of [
+      "dealmind_searches_15m",
+      "dealmind_agent_run_duration_ms_15m",
+      "dealmind_llm_tokens_month",
+      "dealmind_notification_deliveries_15m",
+      "dealmind_price_checks_15m",
+      "dealmind_payment_webhooks_15m",
+      "dealmind_source_up",
+      "dealmind_queue_workers",
+    ])
+      expect(res.body, name).toContain(`# TYPE ${name} gauge`);
+    expect(res.body).not.toContain("business metrics unavailable");
     expect(res.body).not.toContain(id);
     expect(res.body).not.toContain("private");
     expect(res.body).not.toContain("@example.com");

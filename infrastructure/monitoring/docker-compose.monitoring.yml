@@ -1,0 +1,71 @@
+# DealMind AI — optional self-hosted monitoring overlay (Prometheus + Alertmanager
+# + blackbox + node-exporter). Add it to the production stack with:
+#   COMPOSE_OVERRIDE=infrastructure/monitoring/docker-compose.monitoring.yml scripts/deploy/compose.sh up -d
+# Nothing here is published publicly: Prometheus/Alertmanager bind to
+# 127.0.0.1 on the host (reach them over an SSH tunnel).
+# Guide and alert catalogue: docs/monitoring-and-alerting.md.
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    restart: unless-stopped
+    # The API metrics token is written to a file at start (never in the config).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - umask 077 && printf '%s' "$$METRICS_TOKEN" > /tmp/metrics_token
+        && printf '[{"targets":["https://%s/healthz","https://%s/health/live"]}]' "$$APP_DOMAIN" "$$API_DOMAIN" > /tmp/public-targets.json
+        && exec /bin/prometheus
+        --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d} --web.listen-address=0.0.0.0:9090
+    environment:
+      METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required for monitoring}
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    networks: [backend, edge]
+    deploy: { resources: { limits: { cpus: "1.0", memory: 1G } } }
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - umask 077 && printf '%s' "$$ALERTMANAGER_WEBHOOK_URL" > /tmp/webhook_url && exec /bin/alertmanager
+        --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager
+    environment:
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:?ALERTMANAGER_WEBHOOK_URL is required for alert delivery}
+    volumes:
+      - ./infrastructure/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports: ["127.0.0.1:9093:9093"]
+    networks: [backend, egress]
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.26.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./infrastructure/monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [backend, egress]
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/textfile
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+      # pg-backup.sh / restore-test.sh write *.prom files here (BACKUP_METRICS_DIR).
+      - ${BACKUP_METRICS_DIR:-/var/lib/node_exporter/textfile}:/textfile:ro
+    networks: [backend]
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

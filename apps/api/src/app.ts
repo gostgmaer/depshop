@@ -100,6 +100,7 @@ import { TokenCipher } from "./lib/token-cipher.js";
 import { adminCatalogRoutes } from "./modules/admin/admin-catalog-routes.js";
 import { AdminConsoleService } from "./modules/admin/admin-console-service.js";
 import { adminConsoleRoutes } from "./modules/admin/admin-console-routes.js";
+import { businessMetricsCollector } from "./plugins/business-metrics.js";
 import { metricsPlugin } from "./plugins/metrics.js";
 import { adminNotificationRoutes } from "./modules/admin/admin-notification-routes.js";
 import { adminTrackingRoutes } from "./modules/admin/admin-tracking-routes.js";
@@ -178,6 +179,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({
     logger: deps.logger ?? {
       level: env.LOG_LEVEL,
+      // Every line says which service and deployment (development/staging/production) it came from.
+      base: { service: "dealmind-api", env: process.env.DEPLOY_ENV ?? env.NODE_ENV },
+      timestamp: () => `,"time":"${new Date().toISOString()}"`,
       redact: {
         paths: [
           "req.headers.cookie",
@@ -243,6 +247,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     token: env.METRICS_TOKEN,
     jobs,
     queueNames: Object.values(QueueName),
+    collect: businessMetricsCollector(
+      prisma,
+      new RedisMetricsStore(redis, env.REDIS_KEY_PREFIX, () => undefined),
+    ),
   });
   // Shared across API instances via Redis. If Redis is down, requests are
   // allowed (skipOnError) rather than rejecting all traffic; /ready reports it.

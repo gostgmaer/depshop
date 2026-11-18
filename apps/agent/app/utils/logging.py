@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import MutableMapping
 from typing import Any
@@ -20,11 +21,18 @@ def redact(_logger: Any, _method: str, event: MutableMapping[str, Any]) -> Mutab
     return event
 
 
+def _service_fields(_logger: Any, _method: str, event: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    event.setdefault("service", "dealmind-agent")
+    event.setdefault("env", os.environ.get("DEPLOY_ENV", os.environ.get("NODE_ENV", "development")))
+    return event
+
+
 def configure_logging(level: str = "INFO") -> None:
     logging.basicConfig(level=level.upper(), format="%(message)s")
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            _service_fields,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             redact,
