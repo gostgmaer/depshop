@@ -348,6 +348,10 @@ services:
     tmpfs: ["/tmp:size=64m", "/app/apps/web/.next/cache:size=128m,uid=1000,gid=1000"]
     environment:
       API_INTERNAL_URL: http://api:4000
+      # SEO: public origin for canonical URLs and the sitemap. Indexing stays OFF
+      # (robots "Disallow: /", noindex) unless SEO_INDEXING=enabled; docs/seo-architecture.md.
+      SITE_URL: https://${APP_DOMAIN}
+      SEO_INDEXING: ${SEO_INDEXING:-disabled}
       # Traefik is the one proxy in front of Next.js.
       TRUSTED_PROXY_COUNT: "1"
       PRIVACY_OPERATOR_NAME: ${PRIVACY_OPERATOR_NAME:-}

@@ -48,6 +48,14 @@ dupes="$(
 
 [[ "$(env_get APP_DOMAIN)" != "$(env_get API_DOMAIN)" ]] || { log "APP_DOMAIN and API_DOMAIN must differ"; problems=$((problems + 1)); }
 
+# Search-engine indexing is opt-in and production-only (docs/seo-architecture.md).
+seo="$(env_get SEO_INDEXING)"
+case "${seo:-disabled}" in
+  disabled) ;;
+  enabled) [[ "$deploy_env" == "production" ]] || { log "SEO_INDEXING=enabled is only allowed with DEPLOY_ENV=production"; problems=$((problems + 1)); } ;;
+  *) log "SEO_INDEXING must be enabled or disabled"; problems=$((problems + 1)) ;;
+esac
+
 provider="$(env_get LLM_PROVIDER)"
 case "${provider:-google}" in
   google) need GOOGLE_API_KEY ;;

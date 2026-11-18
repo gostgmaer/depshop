@@ -54,7 +54,7 @@ NotificationDelivery × 3  — IN_APP: SENT|SKIPPED   EMAIL/PUSH: PENDING|SKIPPE
 | `NEW_SIGN_IN`                                                          | `ACCOUNT`      | `ACCOUNT` / session id                     | **Critical.** A device (user agent) not seen on the account in 90 days; not on an account's first sign-in. Shows "Chrome on Android", never the raw user agent |
 
 - **Account notices are not emailed by DealMind.** The IAM already emails password-changed and new-device alerts, so DealMind sending its own would duplicate them.
-- **Not built (no verified source yet):** subscription/billing events (billing is not live) and weekly digests.
+- **Billing events** (activated, renewed, payment failed, cancelled, ended, refund) are recorded by `packages/billing/src/subscriptions/sync.ts` from verified payment-service events (tested in `billing.db.test.ts`). **Not built:** weekly digests.
 
 ## Channel rules
 

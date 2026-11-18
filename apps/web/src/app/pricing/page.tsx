@@ -7,6 +7,7 @@ import { PricingView } from "./pricing-view";
 export const metadata: Metadata = {
   title: "Pricing",
   description: "DealMind AI plans: Free, Pro and Business.",
+  alternates: { canonical: "/pricing" },
 };
 
 export default async function PricingPage() {

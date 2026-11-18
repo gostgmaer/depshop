@@ -616,3 +616,12 @@ No production exists, so optimization was limited to what can be measured withou
 - **Measured, unchanged:** product matching (precision 1.00, recall 0.77 on 46 labelled pairs).
 - **Docs:** product-analytics, search-quality-evaluation, product-matching-evaluation, deal-ranking-evaluation, ai-cost-optimization, marketplace-reliability, category-intelligence, data-quality-governance, post-launch-roadmap.
 - **Round 2 (budget direction):** production grounding now also checks a budget's _direction_ against the user's words, including negation ("not more than ₹25,000" is a maximum). 10 fresh holdout cases written before the fix: 9/10 → 10/10. The evaluation caught a regression in the first version ("Nothing phone under 40k" and "except Samsung under 30000" flipped), which was fixed and is now tested.
+
+## Prompt 25 — Growth engine (first increment: technical SEO)
+
+Not launched, so no growth baseline exists and no targets are set. See [growth-strategy.md](growth-strategy.md).
+
+- **Technical SEO (implemented and verified):** `robots.txt`, `sitemap.xml`, canonical URLs, Open Graph, WebSite/Organization JSON-LD. Indexing is **off by default** (`SEO_INDEXING`), and `check-env.sh` refuses to enable it outside production. Private areas send `X-Robots-Tag: noindex` regardless. Verified by unit tests (13), the built app over HTTP in both modes, and Playwright (3 new tests × 2 viewports).
+- **Landing page:** removed unsupported claims ("One search, every store", "shows you the lowest real price"); new value proposition and an accessible feature list.
+- **Fixed doc drift:** NOTIFICATIONS.md said billing notifications weren't built; they are (and tested).
+- **Designed, not built (each waits on real users, real catalog data or legal review):** discovery pages, onboarding, referrals, marketing e-mail, editorial guides, growth events and dashboard, experiments.

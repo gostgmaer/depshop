@@ -94,7 +94,8 @@ CI had never passed on GitHub. That's how these were found:
 
    To pause expansion: stop inviting and announcing. To restrict exposure, disable new sign-ups at the IAM, or take the site down with `compose.sh stop web` (API kept for maintenance). **Do not claim canary capability that doesn't exist.**
 
-7. **Launch watch.** Use [production-operations-handbook.md](production-operations-handbook.md) §Launch window: check the monitored signals hourly for the first 24 h. SEV-1 or SEV-2 pauses expansion and starts [incident-response.md](incident-response.md).
+7. **Search indexing.** At stage 3 (limited availability), set `SEO_INDEXING=enabled` in the production `.env.production` and redeploy web. `check-env.sh` refuses it on any other environment. Then submit the sitemap in Search Console ([seo-architecture.md](seo-architecture.md)). Before that, robots.txt disallows everything.
+8. **Launch watch.** Use [production-operations-handbook.md](production-operations-handbook.md) §Launch window: check the monitored signals hourly for the first 24 h. SEV-1 or SEV-2 pauses expansion and starts [incident-response.md](incident-response.md).
 
 ## 5. Integrations: activation gates (independent of the launch)
 

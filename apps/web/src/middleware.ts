@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { contentSecurityPolicy } from "@/lib/csp";
+import { isPrivatePath } from "@/lib/seo";
 
 /**
  * Runs for every page request:
@@ -18,6 +19,9 @@ export function middleware(request: NextRequest) {
   headers.set("content-security-policy", csp);
   const response = NextResponse.next({ request: { headers } });
   response.headers.set("content-security-policy", csp);
+  // Private areas are never indexed, independent of page metadata (docs/seo-architecture.md).
+  if (isPrivatePath(request.nextUrl.pathname))
+    response.headers.set("x-robots-tag", "noindex, nofollow");
   return response;
 }
 

@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-export const metadata: Metadata = { title: "Privacy notice" };
+export const metadata: Metadata = {
+  title: "Privacy notice",
+  description:
+    "What DealMind AI stores about you, why, for how long, and how to export or delete it.",
+  alternates: { canonical: "/privacy" },
+};
 
 /**
  * Privacy notice (Phase 7.1). Describes only what the code does. The
