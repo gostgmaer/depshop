@@ -1,5 +1,6 @@
 "use client";
 
+import { SignInToTrack, useIsGuest } from "@/lib/viewer";
 import { Check, Plus, Star } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,7 @@ import { useWatchlistMutations, useWatchlists } from "@/hooks/queries";
 import { errorMessage } from "@/lib/auth-hooks";
 
 /** Adds a variant to one of the user's watchlists (creating "My watchlist" if none exists). */
-export function WatchlistButton({
+function WatchlistButtonInner({
   variantId,
   size = "sm",
 }: {
@@ -72,4 +73,10 @@ export function WatchlistButton({
       </span>
     </div>
   );
+}
+
+/** Guests (no account) see a sign-in link instead: tracking notifies you, which needs an account. */
+export function WatchlistButton(props: Parameters<typeof WatchlistButtonInner>[0]) {
+  if (useIsGuest()) return <SignInToTrack size={props.size ?? "sm"} label="Sign in to save" />;
+  return <WatchlistButtonInner {...props} />;
 }

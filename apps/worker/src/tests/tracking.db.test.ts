@@ -1074,8 +1074,38 @@ describe("personal-data retention (Phase 7.1)", () => {
     const oldRunning = await search("RUNNING", daysAgo(400));
     const recent = await search("COMPLETED", daysAgo(10));
 
+    // Guests (search without an account): removed 30 days after their last search.
+    const guest = (createdAt: Date) =>
+      prisma.user.create({
+        data: {
+          iamUserId: randomUUID(),
+          email: `guest-${randomUUID()}@guest.dealmind.invalid`,
+          name: "Guest",
+          isGuest: true,
+          createdAt,
+        },
+      });
+    const idleGuest = await guest(daysAgo(40));
+    const activeGuest = await guest(daysAgo(40));
+    const newGuest = await guest(daysAgo(2));
+    const guestSearch = await prisma.search.create({
+      data: { userId: activeGuest.id, query: "q", status: "COMPLETED", createdAt: daysAgo(5) },
+    });
+
     const r = await runCleanup({ prisma, enqueueDelivery: async () => undefined, now: () => now });
-    expect(r.retention).toEqual({ sessions: 2, deliveries: 1, notifications: 1, searches: 1 });
+    expect(r.retention).toEqual({
+      sessions: 2,
+      deliveries: 1,
+      notifications: 1,
+      searches: 1,
+      guests: 1,
+    });
+    expect(await prisma.user.count({ where: { id: idleGuest.id } })).toBe(0);
+    expect(await prisma.user.count({ where: { id: { in: [activeGuest.id, newGuest.id] } } })).toBe(
+      2,
+    );
+    expect(await prisma.search.count({ where: { id: guestSearch.id } })).toBe(1);
+    expect(await prisma.user.count({ where: { id: u.id } })).toBe(1); // accounts are never touched
     expect((await prisma.userSession.findMany({ select: { id: true } })).map((s) => s.id)).toEqual([
       live,
     ]);

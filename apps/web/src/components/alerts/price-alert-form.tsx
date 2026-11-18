@@ -1,5 +1,6 @@
 "use client";
 
+import { SignInToTrack, useIsGuest } from "@/lib/viewer";
 /**
  * Create or edit a price alert. Only the fields of the chosen condition are
  * shown and sent; money is parsed from rupee text into integer paise. The
@@ -415,7 +416,7 @@ export function PriceAlertForm({
   );
 }
 
-export function PriceAlertDialog(
+function PriceAlertDialogInner(
   props: Parameters<typeof PriceAlertForm>[0] & { size?: "sm" | "default" },
 ) {
   const [open, setOpen] = useState(false);
@@ -463,4 +464,11 @@ export function AlertEditDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Guests (no account) see a sign-in link instead: tracking notifies you, which needs an account. */
+export function PriceAlertDialog(props: Parameters<typeof PriceAlertDialogInner>[0]) {
+  if (useIsGuest())
+    return <SignInToTrack size={props.size ?? "sm"} label="Sign in for price alerts" />;
+  return <PriceAlertDialogInner {...props} />;
 }

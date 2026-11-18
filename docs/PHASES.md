@@ -641,3 +641,10 @@ See [pwa-architecture.md](pwa-architecture.md).
 ## Free launch offer
 
 `LAUNCH_FREE_PLAN=PRO`: every account gets Pro free during the launch; checkout is refused; pricing and billing pages say so; limit messages don't suggest upgrading. Switch it off by unsetting the variable. See [BILLING.md](BILLING.md). Tests: API DB 191 (4 new), worker DB 43, web unit 150 (4 new), billing unit 10.
+
+## Guest search and public deals
+
+- **No account needed** to search, follow results, view products, categories and comparisons, and browse deals. Guests are signed-cookie identities accepted only by the search routes; account features still need sign-in. Same plan limits as accounts (free launch). In-app notifications only; idle guests are removed after 30 days. See AUTH.md "Guest search".
+- **Deals page** (`/deals`): products already in the catalog (no marketplace calls), one card per variant, hidden when the deal closes (not current, out of stock, removed, or no longer below MRP). See CATALOG.md "Deals".
+- Web: public pages moved to the `(shop)` route group (fixes a prefetch-redirect bug found by the browser tests); guest shell and tab bar; "Sign in to …" in place of tracking controls.
+- Tests: API DB 210 (19 new), worker DB 43 (guest retention), web unit 152, Playwright 73 (8 new guest tests).

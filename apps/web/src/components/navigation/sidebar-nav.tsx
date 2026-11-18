@@ -5,10 +5,10 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { NAV_SECTIONS, isActive } from "./nav-items";
 
-export function Logo({ className }: { className?: string }) {
+export function Logo({ className, href = "/dashboard" }: { className?: string; href?: string }) {
   return (
     <Link
-      href="/dashboard"
+      href={href}
       className={cn(
         "flex items-center gap-2 rounded-lg font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         className,

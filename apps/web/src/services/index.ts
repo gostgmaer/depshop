@@ -13,6 +13,7 @@ import { type RequestOptions, api, apiPage, queryString } from "@/lib/api";
 export type HistoryDays = number | "all";
 
 import type {
+  Deal,
   AlertEvaluation,
   CreateAlertRequest,
   UpdateAlertRequest,
@@ -75,6 +76,9 @@ export const catalog = {
       undefined,
       opts,
     ),
+  /** Current verified deals from products already in the catalog (no marketplace is contacted). */
+  deals: (q: { page?: number; pageSize?: number; category?: string } = {}) =>
+    apiPage<Deal>(`/deals${queryString(q)}`),
   products: (q: ProductQuery = {}, opts?: RequestOptions) =>
     apiPage<ProductSummary>(
       `/products${queryString({ ...q, inStock: q.inStock === undefined ? undefined : String(q.inStock) })}`,

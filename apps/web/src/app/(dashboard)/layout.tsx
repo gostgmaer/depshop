@@ -9,9 +9,10 @@ import { getServerUser } from "@/lib/server-session";
 export const metadata: Metadata = { robots: { index: false } };
 
 /**
- * Protected area: the session cookie is verified with the API on every
- * request (never trusted by mere presence). Signed-out visitors go to
- * /login?next=<path>.
+ * Account area (dashboard, watchlists, alerts, notifications, history, billing,
+ * settings): the session cookie is verified with the API on every request (never
+ * trusted by mere presence). Signed-out visitors go to /login?next=<path>.
+ * The public shopping pages are in (shop).
  */
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const user = await getServerUser();

@@ -98,6 +98,18 @@ categories return `404 NOT_FOUND`.
 - When they are shown, they are flagged and labeled as last-known, never as live.
 - Offers from non-ACTIVE sources are never exposed.
 
+## Deals (`GET /api/v1/deals`, public)
+
+Products DealMind has **already fetched**, shown without contacting any marketplace. One card per variant: its cheapest delivered offer among offers that are:
+
+- from an `ACTIVE` source;
+- **current** (observed within the offer freshness window, `CATALOG_OFFER_STALE_HOURS`, default 24 h);
+- in stock (`IN_STOCK` or `LIMITED`);
+- still listed (`missingSince` null, tracking state not `EXPIRED`);
+- priced **below the stated MRP** (direct discount ≥ 0.01 %).
+
+When none qualifies, the deal is **closed** and the product disappears from the page; it reappears if a fresh discounted offer is seen. Price history is never deleted. Sorted by discount, deepest first; filter by `category` slug; paginated (24 per page, max 48). Sample (mock) sources are labelled. Tests: `deals.db.test.ts` (5), `e2e/guest.spec.ts`. Web: `/deals` (public; not indexed until the catalog holds real data).
+
 ## Caching (Redis, shared `…:cache:v1:catalog:*` keys)
 
 | Data                           | TTL env (default)                   | Invalidation                              |

@@ -26,6 +26,7 @@ import {
 export const keys = {
   categories: ["categories"] as const,
   products: (q: ProductQuery) => ["products", q] as const,
+  deals: (q: { page: number; category?: string }) => ["deals", q] as const,
   product: (id: string) => ["product", id] as const,
   pricing: (id: string, variantId?: string, includeStale = false) =>
     ["product", id, "pricing", variantId ?? "all", includeStale ? "stale" : "fresh"] as const,
@@ -58,6 +59,12 @@ export const keys = {
 // ── Catalog ──
 export const useCategories = () =>
   useQuery({ queryKey: keys.categories, queryFn: catalog.categoryTree, staleTime: 10 * 60_000 });
+export const useDeals = (q: { page: number; category?: string }) =>
+  useQuery({
+    queryKey: keys.deals(q),
+    queryFn: () => catalog.deals({ ...q, pageSize: 24 }),
+    placeholderData: keepPreviousData,
+  });
 export const useProducts = (q: ProductQuery, enabled = true) =>
   useQuery({
     queryKey: keys.products(q),

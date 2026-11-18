@@ -1,5 +1,6 @@
 "use client";
 
+import { SignInToTrack, useIsGuest } from "@/lib/viewer";
 /**
  * Price tracking for one variant: watch it, create an alert with a target
  * price and an optional preferred marketplace, and see your own tracking
@@ -17,7 +18,7 @@ import { useVariantTracking } from "@/hooks/queries";
 import { ALERT_STATUS_LABEL, TRACKING_EXPLAINER, describeAlert } from "@/lib/alerts";
 import { formatDate } from "@/lib/format";
 
-export function TrackingPanel({
+function TrackingPanelInner({
   variantId,
   variantLabel,
   currentPricePaise,
@@ -103,4 +104,13 @@ export function TrackingPanel({
       </section>
     </Card>
   );
+}
+
+/** Guests (no account) see a sign-in link instead: tracking notifies you, which needs an account. */
+export function TrackingPanel(props: Parameters<typeof TrackingPanelInner>[0]) {
+  if (useIsGuest())
+    return (
+      <SignInToTrack size="default" label="Sign in to track this product and get price alerts" />
+    );
+  return <TrackingPanelInner {...props} />;
 }

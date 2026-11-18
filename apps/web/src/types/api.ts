@@ -20,6 +20,7 @@ import type {
   priceHistory,
   productDetail,
   productSummary,
+  dealView,
   searchDetail,
   searchSourceRunView,
   searchView,
@@ -56,6 +57,7 @@ export type {
 export type Category = z.infer<typeof categoryView>;
 export type CategoryDetail = z.infer<typeof categoryDetail>;
 export type ProductSummary = z.infer<typeof productSummary>;
+export type Deal = z.infer<typeof dealView>;
 export type ProductDetail = z.infer<typeof productDetail>;
 export type Variant = z.infer<typeof variantView>;
 export type Offer = z.infer<typeof offerView>;

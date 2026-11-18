@@ -96,6 +96,26 @@ for DealMind authorization.
 | `GET/PATCH /users/me/preferences`                          | session | DealMind (shopping preferences)                 |
 | `GET /admin/users`, `PATCH /admin/users/:id/{status,role}` | ADMIN   | DealMind (audit-logged)                         |
 
+## Guest search (no account)
+
+Visitors can search, follow their results, and view products, categories, comparisons and deals without an account.
+
+|                     | How                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity            | A `User` row with `isGuest = true`, a random IAM-unlinked id and an undeliverable `guest-<id>@guest.dealmind.invalid` address, so every ownership rule, plan limit, cascade and retention rule applies unchanged                                                                                                                                                |
+| Credential          | Its own HttpOnly cookie `dm_guest` (`__Host-dm_guest` over HTTPS) = `<userId>.<HMAC-SHA256(SESSION_SECRET)>`, 30 days. Verified in constant time; the user must still exist, be a guest and be active                                                                                                                                                           |
+| Where it's accepted | **Only** routes that opt in: `POST /search` (`ensureGuest`: creates the guest on the first search), the search reads (`requireAuthOrGuest`) and the search list (`allowGuest`: empty without an identity). `requireAuth`, so every account feature (watchlists, alerts, notifications, push, billing, settings, admin, `/auth/me`), never accepts a guest (401) |
+| Isolation           | A guest only sees its own searches (queries are scoped by user id); a forged or mismatched cookie is ignored                                                                                                                                                                                                                                                    |
+| Limits              | The same plan limits as an account (currently the free-launch plan), plus the per-IP submission limit (30/min) and the monthly LLM token cap                                                                                                                                                                                                                    |
+| Notifications       | In-app only: guests have no deliverable e-mail and can't subscribe to push                                                                                                                                                                                                                                                                                      |
+| Admin               | Guests aren't counted or listed as users                                                                                                                                                                                                                                                                                                                        |
+| Retention           | The cleanup job deletes guests with no search in 30 days (cascading to their searches)                                                                                                                                                                                                                                                                          |
+| Signing in          | A session takes precedence; the guest's earlier searches stay with the guest cookie and aren't merged into the account                                                                                                                                                                                                                                          |
+
+Web: the public pages live in the `(shop)` route group (`GuestShell` for visitors, `AppShell` for accounts); account pages stay in `(dashboard)`, which redirects to sign-in. Watchlist, price-alert and tracking controls show "Sign in to …" for guests and make no account API calls. Tests: `guest-search.db.test.ts` (14), `guest.test.tsx`, `e2e/guest.spec.ts`.
+
+**Known risk (accepted):** someone who clears cookies becomes a new guest with a fresh daily allowance. The per-IP submission limit and the LLM token cap bound the cost.
+
 ## Configuration
 
 API (`.env`):

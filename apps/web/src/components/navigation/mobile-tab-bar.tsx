@@ -1,6 +1,16 @@
 "use client";
 
-import { BellRing, LayoutDashboard, Sparkles, Star, UserRound } from "lucide-react";
+import {
+  BellRing,
+  GitCompareArrows,
+  Home,
+  LayoutDashboard,
+  LogIn,
+  Sparkles,
+  Star,
+  Tag,
+  UserRound,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -24,7 +34,18 @@ export const TAB_ITEMS: NavItem[] = [
   },
 ];
 
-export function MobileTabBar() {
+/** Visitors without an account (public shopping pages). */
+export const GUEST_TAB_ITEMS: NavItem[] = [
+  { href: "/", label: "Home", icon: Home },
+  { href: "/search", label: "Search", icon: Sparkles },
+  { href: "/deals", label: "Deals", icon: Tag },
+  { href: "/compare", label: "Compare", icon: GitCompareArrows },
+  { href: "/login", label: "Sign in", icon: LogIn },
+];
+
+// A string variant (not the item list) so server components can render it: icons are functions.
+export function MobileTabBar({ variant = "account" }: { variant?: "account" | "guest" }) {
+  const items = variant === "guest" ? GUEST_TAB_ITEMS : TAB_ITEMS;
   const pathname = usePathname();
   return (
     <nav
@@ -32,7 +53,7 @@ export function MobileTabBar() {
       className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
     >
       <ul className="mx-auto grid max-w-lg grid-cols-5">
-        {TAB_ITEMS.map((item) => {
+        {items.map((item) => {
           const active = isActive(pathname, item);
           const Icon = item.icon;
           return (

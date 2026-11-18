@@ -7,7 +7,7 @@ import { createSearchInput } from "@dealmind/shared";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SearchView } from "@/app/(dashboard)/search/[id]/search-view";
+import { SearchView } from "@/app/(shop)/search/[id]/search-view";
 import { compareRelations, parseCompareItems } from "@/components/compare/multi-compare";
 import { AiSearchBar, buildSuggestions } from "@/components/search/ai-search-bar";
 import { marketplaceRows } from "@/components/search/search-progress";

@@ -66,6 +66,9 @@ export default async function HomePage() {
         </span>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" asChild>
+            <Link href="/deals">Deals</Link>
+          </Button>
+          <Button size="sm" variant="ghost" asChild>
             <Link href="/pricing">Pricing</Link>
           </Button>
           {user ? (
@@ -98,9 +101,12 @@ export default async function HomePage() {
         </p>
         <div className="flex flex-wrap gap-3">
           <Button size="lg" variant="ai" asChild>
-            <Link href={user ? "/search" : "/register"}>Search products</Link>
+            <Link href="/search">Search products</Link>
           </Button>
           <Button size="lg" variant="outline" asChild>
+            <Link href="/deals">Explore deals</Link>
+          </Button>
+          <Button size="lg" variant="ghost" asChild>
             <a href="#features">How it works</a>
           </Button>
         </div>

@@ -6,7 +6,7 @@ import { describeStats, seriesStats } from "@dealmind/shared";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProductView } from "@/app/(dashboard)/products/[id]/product-view";
+import { ProductView } from "@/app/(shop)/products/[id]/product-view";
 import {
   buildSeries,
   chartRows,

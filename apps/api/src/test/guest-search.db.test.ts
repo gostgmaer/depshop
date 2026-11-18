@@ -111,7 +111,10 @@ describe("guest search", () => {
     // A valid body, so the request reaches the auth check (validation runs first).
     const body =
       url === "/api/v1/push/subscribe"
-        ? { endpoint: "https://fcm.googleapis.com/fcm/send/guest-test", keys: { p256dh: "BNcR", auth: "tBHI" } }
+        ? {
+            endpoint: "https://fcm.googleapis.com/fcm/send/guest-test",
+            keys: { p256dh: "BNcR", auth: "tBHI" },
+          }
         : { name: "x" };
     const res = await agent.request(method, url, method === "GET" ? undefined : body);
     expect(res.statusCode).toBe(401);

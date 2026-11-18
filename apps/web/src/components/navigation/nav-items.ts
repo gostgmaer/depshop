@@ -10,6 +10,7 @@ import {
   Settings,
   Sparkles,
   Star,
+  Tag,
 } from "lucide-react";
 
 export interface NavItem {
@@ -26,6 +27,7 @@ export const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/search", label: "AI Search", icon: Sparkles },
+      { href: "/deals", label: "Deals", icon: Tag },
       { href: "/categories", label: "Categories", icon: LayoutGrid, match: ["/products"] },
       { href: "/compare", label: "Compare", icon: GitCompareArrows },
     ],

@@ -23,6 +23,8 @@ export const PRIVATE_PATH_PREFIXES = [
   "/products",
   "/categories",
   "/compare",
+  // Public, but not indexed until the catalog holds real (non-sample) data (docs/programmatic-seo.md).
+  "/deals",
   "/watchlists",
   "/alerts",
   "/notifications",
