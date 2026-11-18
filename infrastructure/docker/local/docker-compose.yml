@@ -1,0 +1,131 @@
+# Local backend from the production images, run in DEVELOPMENT mode, for use
+# with the Next.js dev server on the host (`pnpm --filter @dealmind/web dev`).
+#
+#   docker compose -f infrastructure/docker/local/docker-compose.yml --project-directory . -p dealmind-local up -d
+#
+# - Self-contained data: its own PostgreSQL (pgvector) and Redis, in their own
+#   volumes. Your dev containers (dealmind-postgres-1, dealmind-redis-1) are untouched.
+# - Secrets come from the repository-root .env (interpolated; nothing new is stored).
+# - Uses the shared IAM running on the host (IAM_BASE_URL port 3304) via host.docker.internal.
+# - NODE_ENV=development: mock marketplaces (fictional, labelled), sandbox billing and the
+#   rules extractor are allowed; cookies are not Secure (plain http://localhost).
+# - Only the API is published (127.0.0.1:4000), plus PostgreSQL on 127.0.0.1:25432 for inspection.
+
+x-host: &host
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-app-env: &app-env
+  NODE_ENV: development
+  DEPLOY_ENV: local-docker
+  LOG_LEVEL: info
+  DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
+  REDIS_URL: redis://:${REDIS_PASSWORD:?set in .env}@redis:6379
+  APP_URL: ${APP_URL:-http://localhost:3100}
+  INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set in .env}
+  AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:?set in .env}
+  AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET:?set in .env}
+  AGENT_SERVICE_URL: http://agent:8100
+  NOTIFICATION_SERVICE_URL: http://host.docker.internal:4004
+  NOTIFICATION_API_KEY: ${NOTIFICATION_API_KEY:-}
+  NOTIFICATION_TENANT_ID: ${NOTIFICATION_TENANT_ID:-}
+  CONNECTORS_ENABLE_MOCKS: "true"
+  BILLING_PROVIDER: sandbox
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dealmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dealmind}
+    ports: ["127.0.0.1:25432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4.2-alpine
+    # Same hardening as the dev and production stacks: password in a private ACL file, not argv.
+    entrypoint:
+      - sh
+      - -c
+      - umask 077 && printf 'user default on >%s ~* &* +@all -flushall -flushdb -config -module -debug\n' "$$REDIS_PASSWORD" > /tmp/acl.conf
+        && exec redis-server --appendonly yes --include /tmp/acl.conf
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set in .env}
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 3s
+      retries: 30
+
+  migrate:
+    image: local/dealmind-migrate:local
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: local/dealmind-api:local
+    <<: *host
+    ports: ["127.0.0.1:4000:4000"]
+    environment:
+      <<: *app-env
+      HOST: 0.0.0.0
+      PORT: "4000"
+      TRUST_PROXY: loopback
+      SESSION_SECRET: ${SESSION_SECRET:?set in .env}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set in .env}
+      COOKIE_SECURE: "false"
+      API_DOCS_ENABLED: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      IAM_BASE_URL: http://host.docker.internal:3304/api/v1/iam
+      IAM_TENANT: ${IAM_TENANT:-}
+      IAM_JWT_ISSUER: ${IAM_JWT_ISSUER:-}
+      IAM_JWT_AUDIENCE: ${IAM_JWT_AUDIENCE:-}
+      IAM_TIMEOUT_MS: ${IAM_TIMEOUT_MS:-8000}
+      FILE_SERVICE_URL: ${FILE_SERVICE_URL:-}
+      FILE_SERVICE_HMAC_SECRET: ${FILE_SERVICE_HMAC_SECRET:-}
+      FILE_SERVICE_TENANT_ID: ${FILE_SERVICE_TENANT_ID:-}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    image: local/dealmind-worker:local
+    <<: *host
+    environment:
+      <<: *app-env
+      SEARCH_NOTIFY_MIN_SECONDS: "30"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  agent:
+    image: local/dealmind-agent:local
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      # psycopg URL (no Prisma ?schema= parameter) for the LangGraph checkpointer.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dealmind}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dealmind}
+      CHECKPOINTER: postgres
+      INTERNAL_API_URL: http://api:4000/internal/v1
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN}
+      AGENT_USER_CONTEXT_SECRET: ${AGENT_USER_CONTEXT_SECRET}
+      LLM_PROVIDER: ${LLM_PROVIDER:-rules}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
