@@ -13,7 +13,7 @@ import re
 from typing import Any, get_args
 
 from app.nodes.deps import AgentDeps
-from app.providers.rules import CATEGORY_WORDS, MARKETPLACES
+from app.providers.rules import MARKETPLACES, category_from_text
 from app.schemas.intent import ExtractedIntent, ShoppingFilters, SortMode, Validation
 from app.schemas.internal import CategoryRef
 from app.state.state import ShoppingSearchState
@@ -35,9 +35,10 @@ def match_category(intent: ExtractedIntent, categories: list[CategoryRef]) -> st
         for c in categories:
             if norm in (c.slug, c.slug.rstrip("s")) or text == c.name.lower():
                 return c.slug
-        for slug, words in CATEGORY_WORDS.items():
-            if slug in by_slug and any(w.strip() in f" {text} " or w.strip() == text for w in words):
-                return slug
+        # Whole words only: substring matching sent "headphones" to smartphones.
+        slug = category_from_text(text)
+        if slug in by_slug:
+            return slug
     return None
 
 

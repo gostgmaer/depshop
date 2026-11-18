@@ -19,13 +19,13 @@ from app.utils.money import parse_budget
 T = TypeVar("T", bound=BaseModel)
 
 CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
-    "smartphones": ("smartphone", "smart phone", "mobile phone", "mobile", "phone"),
+    "smartphones": ("smartphone", "smart phone", "mobile phone", "mobile", "phone", "iphone"),
     "laptops": ("laptop", "notebook", "macbook"),
     "tablets": ("tablet", "ipad"),
     "televisions": ("television", "smart tv", "tv"),
-    "audio": ("headphone", "earbud", "earphone", "speaker", "soundbar"),
+    "audio": ("headphone", "earbud", "earphone", "speaker", "soundbar", "neckband", "airpods"),
     "wearables": ("smartwatch", "smart watch", "fitness band"),
-    "air-conditioners": ("air conditioner", "inverter ac", "split ac", "window ac", " ac"),
+    "air-conditioners": ("air conditioner", "inverter ac", "split ac", "window ac", "ac"),
     "washing-machines": ("washing machine", "washer"),
     "refrigerators": ("refrigerator", "fridge"),
     "kitchen-appliances": ("mixer grinder", "microwave", "air fryer", "kettle"),
@@ -33,6 +33,42 @@ CATEGORY_WORDS: dict[str, tuple[str, ...]] = {
     "mens-clothing": ("men's shirt", "mens shirt", "men's jeans", "mens jeans"),
     "womens-clothing": ("kurti", "saree", "women's dress", "womens dress"),
     "books": ("book", "novel"),
+}
+
+_CATEGORY_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
+    (slug, word, re.compile(rf"\b{re.escape(word)}(?:e?s)?\b"))
+    for slug, words in CATEGORY_WORDS.items()
+    for word in words
+]
+
+
+def category_from_text(text: str) -> str | None:
+    """The catalog slug for the product a phrase names, matched on WHOLE words.
+
+    Substring matching mapped "headphones" to smartphones ("phone") and
+    "backpacks"/"across" to air conditioners ("ac"). When several categories
+    are named ("soundbar for TV"), the one named first is the product; a tie
+    at the same position goes to the longer word ("smart tv" over "tv").
+    """
+    t = " ".join(text.lower().split())
+    best: tuple[int, int, str] | None = None
+    for slug, word, pattern in _CATEGORY_PATTERNS:
+        if m := pattern.search(t):
+            key = (m.start(), -len(word), slug)
+            if best is None or key < best:
+                best = key
+    return best[2] if best else None
+
+
+# Product lines that belong to exactly one brand ("iPhone" names Apple). Lines
+# shared across brands or reused for other products are deliberately absent.
+LINE_BRANDS: dict[str, str] = {
+    "iphone": "apple",
+    "ipad": "apple",
+    "macbook": "apple",
+    "airpods": "apple",
+    "galaxy": "samsung",
+    "pixel": "google",
 }
 
 KNOWN_BRANDS = (
@@ -100,7 +136,30 @@ def _find_specs(t: str) -> list[SpecRequirement]:
         specs.append(SpecRequirement(name="capacity", value=f"{m.group(1)} kg"))
     if m := re.search(r"(\d+(?:\.\d+)?)\s*(?:l|litre|liter)s?\b", t):
         specs.append(SpecRequirement(name="capacity", value=f"{m.group(1)} L"))
+    if not any(s.name == "storage" for s in specs):
+        # A bare size with no "RAM" after it ("iPhone with 256GB") is storage when it can only be storage.
+        for m in re.finditer(r"\b(\d{1,4})\s*(gb|tb)\b(?!\s*(?:of\s*)?(?:ram|memory))", t):
+            if m.group(2) == "tb" or int(m.group(1)) >= 32:
+                specs.append(SpecRequirement(name="storage", value=f"{m.group(1)}{m.group(2).upper()}"))
+                break
+    if m := re.search(r"\b(\d{2,3}(?:\.\d)?)\s*-?\s*(?:inch(?:es)?|\"|”)", t):
+        specs.append(SpecRequirement(name="screen_size", value=f"{m.group(1)} inch"))
+    if m := re.search(r"\b([1-5])\s*-?\s*star\b", t):
+        specs.append(SpecRequirement(name="energy_rating", value=f"{m.group(1)} star"))
+    if m := re.search(r"\b(\d{3,5})\s*mah\b", t):
+        specs.append(SpecRequirement(name="battery", value=f"{m.group(1)} mAh"))
+    if m := re.search(r"\b(i[3579]|ryzen\s*[3579]|core\s*ultra\s*[579])\b", t):
+        specs.append(SpecRequirement(name="processor", value=m.group(1)))
+    if m := re.search(r"\b(rtx|gtx|rx)\s*(\d{4})\b", t):
+        specs.append(SpecRequirement(name="gpu", value=f"{m.group(1).upper()} {m.group(2)}"))
     return specs
+
+
+def clean_keywords(text: str) -> str:
+    """Marketplace keywords: no budget amounts, no stray punctuation."""
+    k = re.sub(r"(₹|rs\.?)\s*[\d,]+(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s*(k|lakhs?|lac|thousand)\b", " ", text)
+    k = re.sub(r"[,;:!?()]+|\.(?=\s|$)", " ", k)
+    return " ".join(t for t in k.split() if re.search(r"\w", t))
 
 
 # Eligibility words (only what the user states about themselves).
@@ -114,18 +173,22 @@ MEMBERSHIPS = {
 
 def extract_intent_by_rules(query: str) -> ExtractedIntent:
     t = f" {' '.join(query.lower().split())} "
-    category = next((slug for slug, words in CATEGORY_WORDS.items() if any(w in t for w in words)), None)
+    category = category_from_text(t)
     excluded = {
         b for b in KNOWN_BRANDS if re.search(rf"(?:not|except|no|without|other than)\s+{re.escape(b)}\b", t)
     }
     brands = [b for b in KNOWN_BRANDS if re.search(rf"\b{re.escape(b)}\b", t) and b not in excluded]
+    for line, brand in LINE_BRANDS.items():
+        if re.search(rf"\b{line}", t) and brand not in brands and brand not in excluded:
+            brands.append(brand)
     min_rupees, max_rupees = parse_budget(query)
     sort = "best_value"
     if re.search(r"cheapest|lowest price|least expensive", t):
         sort = "lowest_price"
     elif re.search(r"(highest|biggest|best|maximum|significant)\s+(genuine\s+)?discount", t):
         sort = "highest_discount"
-    elif re.search(r"newest|latest launch", t):
+    elif re.search(r"(newest|latest)( launches)? first|sort(ed)? by (newest|latest|launch)", t):
+        # Ordering by launch date only when asked; "newest X" is a launch filter (below).
         sort = "recently_launched"
     elif re.search(r"price drops?|dropped in price", t):
         sort = "price_drop"
@@ -136,8 +199,7 @@ def extract_intent_by_rules(query: str) -> ExtractedIntent:
         " ",
         query.lower(),
     )
-    keywords = re.sub(r"(₹|rs\.?)\s*[\d,]+|\d[\d,]*\s*(k|lakhs?|thousand)\b", " ", keywords)
-    keywords = " ".join(keywords.split()) or query
+    keywords = clean_keywords(keywords) or query
     return ExtractedIntent(
         category=category,
         brands=brands,
@@ -146,7 +208,7 @@ def extract_intent_by_rules(query: str) -> ExtractedIntent:
         max_price_rupees=max_rupees,
         required_specifications=_find_specs(t),
         launch_preference="recently_launched"
-        if re.search(r"newly launched|recently launched|new launch|latest|just launched", t)
+        if re.search(r"newly launched|recently launched|new launch|latest|newest|just launched", t)
         else "any",
         genuine_discount_only=bool(re.search(r"genuine|real discount|significant discount", t)),
         min_discount_percent=int(m.group(1))

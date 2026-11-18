@@ -1,0 +1,60 @@
+{"id": "q01", "split": "dev", "query": "Best smartphone under ₹30,000", "expect": {"category": "smartphones", "max_price_rupees": 30000}}
+{"id": "q02", "split": "dev", "query": "Newly launched laptop with 16GB RAM under ₹70,000", "expect": {"category": "laptops", "max_price_rupees": 70000, "specs": {"ram": "16gb"}, "launch_preference": "recently_launched"}}
+{"id": "q03", "split": "dev", "query": "Highest genuine discount on a 1.5-ton inverter AC", "expect": {"category": "air-conditioners", "specs": {"capacity": "1.5ton"}, "genuine_discount_only": true, "sort_mode": "highest_discount"}}
+{"id": "q04", "split": "dev", "query": "Best value refrigerator with at least a 300L capacity", "expect": {"category": "refrigerators", "specs": {"capacity": "300l"}}}
+{"id": "q05", "split": "dev", "query": "Compare this product across all available marketplaces", "expect": {"compare_same_product": true}}
+{"id": "q06", "split": "dev", "query": "Find products with a price drop during the last 30 days", "expect": {"sort_mode": "price_drop"}}
+{"id": "q07", "split": "dev", "query": "Find a newly launched smartphone under ₹35,000 with 8GB RAM, 256GB storage and the highest genuine discount.", "expect": {"category": "smartphones", "max_price_rupees": 35000, "specs": {"ram": "8gb", "storage": "256gb"}, "launch_preference": "recently_launched", "genuine_discount_only": true, "sort_mode": "highest_discount"}}
+{"id": "q08", "split": "dev", "query": "cheapest samsung phone with 128gb storage", "expect": {"category": "smartphones", "brands": ["samsung"], "specs": {"storage": "128gb"}, "sort_mode": "lowest_price"}}
+{"id": "q09", "split": "dev", "query": "OnePlus or Nothing phone under 40k", "expect": {"category": "smartphones", "brands": ["oneplus", "nothing"], "max_price_rupees": 40000}}
+{"id": "q10", "split": "dev", "query": "phone under 20k but not redmi", "expect": {"category": "smartphones", "excluded_brands": ["redmi"], "max_price_rupees": 20000}}
+{"id": "q11", "split": "dev", "query": "laptop between 50000 and 80000 with 512GB SSD", "expect": {"category": "laptops", "min_price_rupees": 50000, "max_price_rupees": 80000, "specs": {"storage": "512gb"}}}
+{"id": "q12", "split": "dev", "query": "Dell laptop with 16 GB RAM below Rs. 65,000", "expect": {"category": "laptops", "brands": ["dell"], "max_price_rupees": 65000, "specs": {"ram": "16gb"}}}
+{"id": "q13", "split": "dev", "query": "55 inch smart TV under 1 lakh", "expect": {"category": "televisions", "max_price_rupees": 100000, "specs": {"screen_size": "55inch"}}}
+{"id": "q14", "split": "dev", "query": "LG 43 inch 4K TV", "expect": {"category": "televisions", "brands": ["lg"], "specs": {"screen_size": "43inch"}}}
+{"id": "q15", "split": "dev", "query": "front load washing machine 8 kg under 35000", "expect": {"category": "washing-machines", "max_price_rupees": 35000, "specs": {"capacity": "8kg"}}}
+{"id": "q16", "split": "dev", "query": "Voltas 1.5 ton 5 star split AC", "expect": {"category": "air-conditioners", "brands": ["voltas"], "specs": {"capacity": "1.5ton", "energy_rating": "5star"}}}
+{"id": "q17", "split": "dev", "query": "double door fridge above 250 litres under ₹30,000", "expect": {"category": "refrigerators", "max_price_rupees": 30000, "specs": {"capacity": "250l"}}}
+{"id": "q18", "split": "dev", "query": "boAt earbuds under ₹2,000", "expect": {"category": "audio", "brands": ["boat"], "max_price_rupees": 2000}}
+{"id": "q19", "split": "dev", "query": "Sony noise cancelling headphones with at least 20% discount", "expect": {"category": "audio", "brands": ["sony"], "min_discount_percent": 20}}
+{"id": "q20", "split": "dev", "query": "iPad on Amazon or Flipkart", "expect": {"category": "tablets", "brands": ["apple"], "marketplaces": ["amazon_in", "flipkart"]}}
+{"id": "q21", "split": "dev", "query": "smartwatch under 5000 rupees", "expect": {"category": "wearables", "max_price_rupees": 5000}}
+{"id": "q22", "split": "dev", "query": "Nike running shoes", "expect": {"category": "footwear", "brands": ["nike"]}}
+{"id": "q23", "split": "dev", "query": "air fryer under 6k with the biggest discount", "expect": {"category": "kitchen-appliances", "max_price_rupees": 6000, "sort_mode": "highest_discount"}}
+{"id": "q24", "split": "dev", "query": "I have an HDFC credit card, best phone under 25000", "expect": {"category": "smartphones", "max_price_rupees": 25000, "payment_banks": ["HDFC"], "card_types": ["CREDIT"]}}
+{"id": "q25", "split": "dev", "query": "latest iPhone with 256GB", "expect": {"category": "smartphones", "brands": ["apple"], "specs": {"storage": "256gb"}, "launch_preference": "recently_launched"}}
+{"id": "q26", "split": "dev", "query": "gaming laptop with RTX 4060 under 1.2 lakh", "expect": {"category": "laptops", "max_price_rupees": 120000, "specs": {"gpu": "rtx4060"}}}
+{"id": "q27", "split": "dev", "query": "mixer grinder from Prestige or Bajaj", "expect": {"category": "kitchen-appliances", "brands": ["prestige", "bajaj"]}}
+{"id": "q28", "split": "dev", "query": "phone with 5000mAh battery under ₹15,000", "expect": {"category": "smartphones", "max_price_rupees": 15000, "specs": {"battery": "5000mah"}}}
+{"id": "q29", "split": "dev", "query": "show me 6GB RAM phones sorted by lowest price", "expect": {"category": "smartphones", "specs": {"ram": "6gb"}, "sort_mode": "lowest_price"}}
+{"id": "q30", "split": "dev", "query": "Samsung 7 kg top load washing machine with 25% off", "expect": {"category": "washing-machines", "brands": ["samsung"], "specs": {"capacity": "7kg"}, "min_discount_percent": 25}}
+{"id": "q31", "split": "dev", "query": "realme phone under 12000 on flipkart", "expect": {"category": "smartphones", "brands": ["realme"], "max_price_rupees": 12000, "marketplaces": ["flipkart"]}}
+{"id": "q32", "split": "dev", "query": "newest MacBook", "expect": {"category": "laptops", "brands": ["apple"], "launch_preference": "recently_launched"}}
+{"id": "q33", "split": "dev", "query": "mobile under 10000 with 4GB RAM and 64GB storage", "expect": {"category": "smartphones", "max_price_rupees": 10000, "specs": {"ram": "4gb", "storage": "64gb"}}}
+{"id": "q34", "split": "dev", "query": "soundbar for TV under 8000", "expect": {"category": "audio", "max_price_rupees": 8000}}
+{"id": "q35", "split": "dev", "query": "Whirlpool refrigerator 3 star 265L", "expect": {"category": "refrigerators", "brands": ["whirlpool"], "specs": {"capacity": "265l", "energy_rating": "3star"}}}
+{"id": "q36", "split": "dev", "query": "phone 20k ke andar with 8gb ram", "expect": {"category": "smartphones", "max_price_rupees": 20000, "specs": {"ram": "8gb"}}}
+{"id": "q37", "split": "dev", "query": "laptop with i5 processor and 8GB RAM under 55k", "expect": {"category": "laptops", "max_price_rupees": 55000, "specs": {"ram": "8gb", "processor": "i5"}}}
+{"id": "q38", "split": "dev", "query": "Amazon Prime member: best earphones under 1500", "expect": {"category": "audio", "max_price_rupees": 1500, "marketplaces": ["amazon_in"], "memberships": ["Amazon Prime"]}}
+{"id": "q39", "split": "dev", "query": "Daikin inverter AC price drop", "expect": {"category": "air-conditioners", "brands": ["daikin"], "sort_mode": "price_drop"}}
+{"id": "q40", "split": "dev", "query": "compare Pixel 8 prices on Croma and Reliance Digital", "expect": {"category": "smartphones", "brands": ["google"], "marketplaces": ["croma", "reliance_digital"], "compare_same_product": true}}
+{"id": "h01", "split": "holdout", "query": "Best 5G phone under ₹25,000 with 8GB RAM", "expect": {"category": "smartphones", "max_price_rupees": 25000, "specs": {"ram": "8gb"}}}
+{"id": "h02", "split": "holdout", "query": "Lenovo laptop under 60k with 512 GB storage", "expect": {"category": "laptops", "brands": ["lenovo"], "max_price_rupees": 60000, "specs": {"storage": "512gb"}}}
+{"id": "h03", "split": "holdout", "query": "2 ton split AC with the highest genuine discount", "expect": {"category": "air-conditioners", "specs": {"capacity": "2ton"}, "genuine_discount_only": true, "sort_mode": "highest_discount"}}
+{"id": "h04", "split": "holdout", "query": "cheapest 32 inch TV", "expect": {"category": "televisions", "specs": {"screen_size": "32inch"}, "sort_mode": "lowest_price"}}
+{"id": "h05", "split": "holdout", "query": "Haier fridge 190 litre single door", "expect": {"category": "refrigerators", "brands": ["haier"], "specs": {"capacity": "190l"}}}
+{"id": "h06", "split": "holdout", "query": "JBL bluetooth speaker under Rs 3000", "expect": {"category": "audio", "brands": ["jbl"], "max_price_rupees": 3000}}
+{"id": "h07", "split": "holdout", "query": "recently launched tablet under ₹20,000", "expect": {"category": "tablets", "max_price_rupees": 20000, "launch_preference": "recently_launched"}}
+{"id": "h08", "split": "holdout", "query": "phones from Motorola except anything above 18000", "expect": {"category": "smartphones", "brands": ["motorola"], "max_price_rupees": 18000}}
+{"id": "h09", "split": "holdout", "query": "washing machine 6.5 kg fully automatic", "expect": {"category": "washing-machines", "specs": {"capacity": "6.5kg"}}}
+{"id": "h10", "split": "holdout", "query": "Asus laptop with 16GB RAM and 1TB SSD between 70000 and 90000", "expect": {"category": "laptops", "brands": ["asus"], "min_price_rupees": 70000, "max_price_rupees": 90000, "specs": {"ram": "16gb", "storage": "1tb"}}}
+{"id": "h11", "split": "holdout", "query": "any phone except Samsung under 30000 with 12GB RAM", "expect": {"category": "smartphones", "excluded_brands": ["samsung"], "max_price_rupees": 30000, "specs": {"ram": "12gb"}}}
+{"id": "h12", "split": "holdout", "query": "Philips air fryer at least 30% off", "expect": {"category": "kitchen-appliances", "brands": ["philips"], "min_discount_percent": 30}}
+{"id": "h13", "split": "holdout", "query": "ICICI debit card offers on a laptop under 45000", "expect": {"category": "laptops", "max_price_rupees": 45000, "payment_banks": ["ICICI"], "card_types": ["DEBIT"]}}
+{"id": "h14", "split": "holdout", "query": "Puma sneakers on Tata CLiQ", "expect": {"category": "footwear", "brands": ["puma"], "marketplaces": ["tata_cliq"]}}
+{"id": "h15", "split": "holdout", "query": "65 inch TV between ₹50,000 and ₹80,000", "expect": {"category": "televisions", "min_price_rupees": 50000, "max_price_rupees": 80000, "specs": {"screen_size": "65inch"}}}
+{"id": "h16", "split": "holdout", "query": "latest Samsung Galaxy tablet", "expect": {"category": "tablets", "brands": ["samsung"], "launch_preference": "recently_launched"}}
+{"id": "h17", "split": "holdout", "query": "earbuds with ANC under 3k sorted by lowest price", "expect": {"category": "audio", "max_price_rupees": 3000, "sort_mode": "lowest_price"}}
+{"id": "h18", "split": "holdout", "query": "Godrej 1 ton window AC", "expect": {"category": "air-conditioners", "brands": ["godrej"], "specs": {"capacity": "1ton"}}}
+{"id": "h19", "split": "holdout", "query": "phones that dropped in price this month", "expect": {"category": "smartphones", "sort_mode": "price_drop"}}
+{"id": "h20", "split": "holdout", "query": "iQOO phone with 256GB storage under 35k", "expect": {"category": "smartphones", "brands": ["iqoo"], "max_price_rupees": 35000, "specs": {"storage": "256gb"}}}

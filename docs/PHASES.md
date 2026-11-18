@@ -606,3 +606,12 @@ See [launch-readiness-report.md](launch-readiness-report.md). **Decision: READY 
 
 - CI failures fixed: the production env template was never committed (gitignored, P1); Compose read comments as values for empty template variables; pages scrolled sideways under Linux fonts (`sr-only` labels escaping scroll wrappers); a TS2742 portability error in the API test harness; gitleaks false positives.
 - New: [release-manifest.md](release-manifest.md), [rollback-runbook.md](rollback-runbook.md), [production-smoke-tests.md](production-smoke-tests.md), [production-operations-handbook.md](production-operations-handbook.md), [disaster-recovery.md](disaster-recovery.md), [production-cost-estimate.md](production-cost-estimate.md). [incident-response.md](incident-response.md) now uses SEV-1 to SEV-4.
+
+## Prompt 24 — Post-launch optimization (first increment, pre-launch)
+
+No production exists, so optimization was limited to what can be measured without it. See [post-launch-roadmap.md](post-launch-roadmap.md).
+
+- **Search-understanding evaluation:** 60 labelled queries (`apps/agent/evals/search_queries.jsonl`), evaluator `app.evals.intent_eval` scoring the production validator path, quality gate in the agent tests. Holdout exact match 85 % → 95 %.
+- **Fixed:** category words matched as substrings (P1, production: "headphones" filtered to smartphones; "backpacks" to air conditioners); Hinglish budgets ("40000 tak") discarded by grounding; rules-parser gaps (screen size, energy rating, battery, processor, GPU, bare storage, product-line brands, keyword punctuation).
+- **Measured, unchanged:** product matching (precision 1.00, recall 0.77 on 46 labelled pairs).
+- **Docs:** product-analytics, search-quality-evaluation, product-matching-evaluation, deal-ranking-evaluation, ai-cost-optimization, marketplace-reliability, category-intelligence, data-quality-governance, post-launch-roadmap.

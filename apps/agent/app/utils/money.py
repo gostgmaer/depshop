@@ -24,6 +24,11 @@ _PRICE_WORDS = (
     r"|above|over|more than|at least|min(?:imum)?|from|between|and|to|-)"
 )
 
+# Hindi/Hinglish direction words that FOLLOW an amount ("20k ke andar", "15000 tak").
+_HINGLISH_MAX = r"\s*(?:ke\s+andar|tak|se\s+kam|ke\s+(?:niche|neeche))\b"
+_HINGLISH_MIN = r"\s*se\s+(?:zyada|jyada|upar|adhik)\b"
+_HINGLISH_AFTER = re.compile(f"(?:{_HINGLISH_MAX})|(?:{_HINGLISH_MIN})")
+
 _AMOUNT = re.compile(
     r"(?P<cur>₹|rs\.?|inr|rupees?)?\s*(?P<num>\d{1,3}(?:,\d{2,3})+|\d+(?:\.\d+)?)\s*(?P<mult>k|thousand|lakhs?|lac|l|crores?|cr)?\b(?P<cur2>\s*(?:rupees?|rs\.?|inr|/-))?",
     re.IGNORECASE,
@@ -57,7 +62,8 @@ def extract_rupee_amounts(text: str) -> list[Amount]:
         except InvalidOperation:
             continue
         before = text[max(0, m.start() - 16) : m.start()].lower()
-        priced = re.search(_PRICE_WORDS + r"\s*$", before) is not None
+        follows = _HINGLISH_AFTER.match(text[m.end() : m.end() + 16].lower()) is not None
+        priced = re.search(_PRICE_WORDS + r"\s*$", before) is not None or follows
         if not (has_currency or mult or (priced and value >= 100)):
             continue
         rupees = int(value * _MULT.get(mult, 1))
@@ -88,4 +94,10 @@ def parse_budget(text: str) -> tuple[int | None, int | None]:
         r"(under|below|less than|upto|up to|within|budget(?: of)?|max(?:imum)?|cheaper than)\s*$", before
     ):
         return None, first.rupees
+    # Hindi/Hinglish puts the direction AFTER the amount: "20k ke andar", "15000 tak", "10k se zyada".
+    after = t[first.end : first.end + 16]
+    if re.match(_HINGLISH_MAX, after):
+        return None, first.rupees
+    if re.match(_HINGLISH_MIN, after):
+        return first.rupees, None
     return None, None
