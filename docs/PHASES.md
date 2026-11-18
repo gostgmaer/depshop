@@ -626,3 +626,13 @@ Not launched, so no growth baseline exists and no targets are set. See [growth-s
 - **Fixed doc drift:** NOTIFICATIONS.md said billing notifications weren't built; they are (and tested).
 - **Designed, not built (each waits on real users, real catalog data or legal review):** discovery pages, onboarding, referrals, marketing e-mail, editorial guides, growth events and dashboard, experiments.
 - **Round 2 (onboarding, Stage 4):** a five-step skippable introduction below the dashboard search box. State on the user (`onboardingCompletedAt`, `onboardingSkipped`; migration `20261126100000_onboarding`); `POST /users/me/onboarding`, where the first outcome wins; reopen from Settings. Tests: API 5, web unit 6, Playwright 8 (desktop + mobile, axe); full regression green.
+
+## Prompt 26 — Mobile-first PWA
+
+See [pwa-architecture.md](pwa-architecture.md).
+
+- **Privacy fix:** signing out now turns off web push on that browser, before the session ends. Previously, a shared phone kept showing the previous user's price alerts after sign-out.
+- **PWA:** manifest (standalone, shortcuts), PNG and maskable icons rendered from the existing SVG with Playwright (no new dependency), theme-colour and Apple tags, `viewport-fit=cover`.
+- **Service worker:** caches only immutable static assets plus an offline page; never pages or API responses. Offline fallback page, sign-out cache cleanup.
+- **Mobile:** bottom tab bar (Home, Search, Watchlists, Alerts, Account) with safe-area padding; install card in Settings (Chromium prompt, iOS manual steps).
+- **Tests:** Playwright PWA suite 14 (70/70 over 5 repeats), unit 5; full regression (Playwright 62, web unit 146) green. Lab LCP on a first visit 604 ms (mobile profile, throttled). Real devices and installation are not verified (no deployed HTTPS origin).

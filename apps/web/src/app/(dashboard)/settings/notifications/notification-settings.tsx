@@ -194,6 +194,10 @@ function PushCard({ prefs }: { prefs: NotificationPreferences }) {
             : "No browser is subscribed yet."
         }
       />
+      <p className="mb-3 text-xs text-muted-foreground">
+        Signing out turns browser notifications off on that browser, so a shared device stops
+        showing your alerts. Price alerts still reach you by e-mail and in the app.
+      </p>
       {error ? <Alert tone="error">{error}</Alert> : null}
       {state === null ? (
         <p className="text-sm text-muted-foreground">Checking this browser…</p>

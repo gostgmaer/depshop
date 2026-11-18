@@ -4,6 +4,8 @@ import type { MeResponse, PublicUser } from "@dealmind/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { ApiError, api } from "./api";
+import { notifySignedOut } from "./pwa";
+import { disablePush } from "./push";
 
 export const ME_KEY = ["me"] as const;
 const CHANNEL = "dealmind-auth";
@@ -45,8 +47,14 @@ export function useLogout() {
   const queryClient = useQueryClient();
   const router = useRouter();
   return useMutation({
-    mutationFn: () => api<void>("POST", "/auth/logout"),
+    mutationFn: async () => {
+      // Signing out turns off push on this browser, so a shared phone stops showing this
+      // user's alerts. Must run before the session ends (the server call needs it).
+      await disablePush().catch(() => undefined);
+      await api<void>("POST", "/auth/logout");
+    },
     onSettled: () => {
+      notifySignedOut();
       queryClient.setQueryData(ME_KEY, null);
       queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
       broadcastAuthChange();

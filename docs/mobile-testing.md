@@ -1,0 +1,31 @@
+# Mobile testing
+
+## Automated (runs in CI)
+
+| Suite                                                    | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Result 2026-11-18                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `e2e/pwa.spec.ts` (desktop + Android profile)            | Manifest validity and icon sizes (PNG dimensions read from the files); theme-colour and Apple tags; service worker controls the page; **cache contents contain no private data** after browsing private pages; offline fallback with axe; after sign-out, offline never shows the previous page; private pages `no-store`; bottom tabs (five tabs, active state, back button, ≥ 44 px targets, no content hidden behind the bar; hidden on desktop); install card shows no automatic dialog | 14/14; 70/70 over 5 repeats. One desktop offline failure on the very first run didn't reproduce in 86 later runs |
+| `src/test/pwa.test.tsx`                                  | Sign-out turns push off **before** ending the session; sign-out still works if that fails; iOS Safari detection; every main area maps to exactly one tab                                                                                                                                                                                                                                                                                                                                    | 5/5                                                                                                              |
+| Whole Playwright suite (both profiles, axe on key pages) | Regression: every existing flow with the service worker active                                                                                                                                                                                                                                                                                                                                                                                                                              | 62/62                                                                                                            |
+| Web unit suite                                           | Regression                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 146/146                                                                                                          |
+
+## Lab performance (mobile profile, Chromium, 4× CPU slowdown, ~9 Mbit/s and 150 ms RTT; local build, mock API)
+
+| Page                                      | LCP    | CLS | TTFB   | JS transferred |
+| ----------------------------------------- | ------ | --- | ------ | -------------- |
+| Home, first visit (no service worker yet) | 604 ms | 0   | 155 ms | 193 KB         |
+
+Repeat visits were also measured, but **excluded**: once the service worker is active, DevTools network throttling doesn't seem to apply to its requests (a 15 ms TTFB under a 150 ms RTT setting is impossible), so those numbers aren't trustworthy. These are single lab runs on one laptop, not field data. There was no measurement before this phase, so no improvement is claimed. Field Core Web Vitals need real users (BLOCKED).
+
+## Manual checks (need real devices and a deployed HTTPS origin)
+
+Record device, OS and browser versions, and the result, for each:
+
+1. **Android Chrome:** Settings → Profile shows "Install DealMind". Install it, and check that the home-screen icon is the maskable icon (no white box) and that it opens standalone at the dashboard. Long-press the icon: three shortcuts.
+2. **iPhone Safari:** the card shows the three Add to Home Screen steps. Add it; it opens full-screen with the teal status bar. Then Settings → Notifications → turn on push → receive a test alert.
+3. **Android Firefox:** install from the browser menu; push works.
+4. **Desktop Chrome/Edge:** install button; app window; offline (DevTools offline) shows the offline page.
+5. **Desktop Firefox and Safari:** the site works in a tab; the install card shows the fallback text.
+6. **Shared-device check:** user A turns on push, signs out; trigger an alert for A; **nothing appears** on that device. User B signs in and turns on push; only B's alerts appear.
+7. **Notch and home indicator (iPhone, gesture Android):** the tab bar sits above the home indicator, and the last item on long pages is fully visible.
+8. **Offline:** airplane mode, then open the installed app: offline page, no prices; reconnect → Try again.

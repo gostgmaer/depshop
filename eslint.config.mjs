@@ -13,6 +13,8 @@ export default tseslint.config(
       "**/next-env.d.ts",
       // Static browser files served as-is (e.g. the web-push service worker).
       "apps/web/public/**",
+      // One-off dev tooling (renders the PWA icons with Playwright), not shipped.
+      "apps/web/scripts/**",
       "**/*.config.{js,mjs,cjs,ts}",
     ],
   },

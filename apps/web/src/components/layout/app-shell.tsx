@@ -6,6 +6,7 @@ import { Bell, LogOut, Menu, Settings, ShieldCheck, Sparkles, UserRound } from "
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
+import { MobileTabBar } from "@/components/navigation/mobile-tab-bar";
 import { Logo, SidebarNav } from "@/components/navigation/sidebar-nav";
 import { Button } from "@/components/ui/button";
 import {
@@ -146,10 +147,11 @@ export function AppShell({ user, children }: { user: PublicUser; children: React
         </header>
         <main
           id="main"
-          className="mx-auto flex w-full max-w-7xl min-w-0 flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8"
+          className="mx-auto flex w-full max-w-7xl min-w-0 flex-col gap-6 px-4 pt-6 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:px-6 lg:py-8"
         >
           {children}
         </main>
+        <MobileTabBar />
       </div>
     </div>
   );

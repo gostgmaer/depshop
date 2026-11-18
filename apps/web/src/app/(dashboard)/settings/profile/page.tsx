@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { InstallAppCard } from "@/components/pwa/install-app-card";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmailCard, PreferencesCard, ProfileCard } from "./profile-forms";
 
@@ -11,6 +12,7 @@ export default function ProfilePage() {
       <ProfileCard />
       <EmailCard />
       <PreferencesCard />
+      <InstallAppCard />
       <Card>
         <CardHeader
           title="Introduction"

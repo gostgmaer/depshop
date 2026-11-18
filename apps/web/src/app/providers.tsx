@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { TooltipProvider } from "@/components/ui/primitives";
 import { ApiError, onSessionExpired } from "@/lib/api";
 import { ME_KEY } from "@/lib/auth-hooks";
+import { registerServiceWorker } from "@/lib/pwa";
 
 /** Retries transient failures (network, 5xx, 429) but never client errors. */
 export function shouldRetry(failureCount: number, error: unknown): boolean {
@@ -25,6 +26,8 @@ export function Providers({ children }: { children: ReactNode }) {
   );
   // Session expired or revoked mid-use: refresh the auth state; the app shell redirects.
   useEffect(() => onSessionExpired(() => client.setQueryData(ME_KEY, null)), [client]);
+  // Static-asset cache + offline page (docs/service-worker-strategy.md). Asks no permission.
+  useEffect(() => registerServiceWorker(), []);
   return (
     <QueryClientProvider client={client}>
       <TooltipProvider>{children}</TooltipProvider>
