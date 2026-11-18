@@ -286,7 +286,7 @@ export function ProductView({ id }: { id: string }) {
                   <div key={w.days} className="rounded-lg bg-muted px-3 py-2">
                     <dt className="text-xs text-muted-foreground">{w.days}-day low</dt>
                     <dd className="font-medium tabular">{rupees(w.lowestPaise)}</dd>
-                    <dd className="text-[11px] text-muted-foreground">
+                    <dd className="text-xs text-muted-foreground">
                       {Math.floor(w.coverageBp / 100)}% of period observed
                     </dd>
                   </div>

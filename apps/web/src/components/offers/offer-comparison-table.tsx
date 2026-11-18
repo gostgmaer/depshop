@@ -262,7 +262,7 @@ function MarketplaceLink({
       target="_blank"
       rel="noopener nofollow sponsored"
       aria-describedby={DISCLOSURE_ID}
-      className="inline-flex items-center gap-1 text-sm font-medium whitespace-nowrap text-accent hover:underline"
+      className="inline-flex min-h-11 items-center gap-1 text-sm font-medium whitespace-nowrap text-accent hover:underline"
     >
       Buy on {row.offer.source.name} <ExternalLink aria-hidden className="size-3.5" />
       <span className="sr-only">(opens the marketplace in a new tab)</span>

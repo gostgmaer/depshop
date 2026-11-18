@@ -25,8 +25,9 @@ export function CardHeader({
   as?: "h2" | "h3";
 }) {
   return (
-    <header className="mb-4 flex items-start justify-between gap-3">
-      <div className="min-w-0">
+    // The action wraps below the title when there is no room beside it (small phones).
+    <header className="mb-4 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+      <div className="min-w-0 flex-1 basis-60">
         <Heading className="text-base font-semibold tracking-tight">{title}</Heading>
         {description ? <p className="mt-1 text-sm text-muted-foreground">{description}</p> : null}
       </div>

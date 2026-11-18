@@ -42,7 +42,9 @@ export function Checkbox({ className, ...props }: ComponentProps<typeof Checkbox
   return (
     <CheckboxPrimitive.Root
       className={cn(
-        "peer grid size-4 shrink-0 place-items-center rounded border border-border bg-surface outline-none",
+        "peer relative grid size-4 shrink-0 place-items-center rounded border border-border bg-surface outline-none",
+        // Invisible 28×28 hit area around the 16px box (touch target, WCAG 2.2 SC 2.5.8).
+        "after:absolute after:-inset-1.5 after:content-['']",
         "focus-visible:ring-2 focus-visible:ring-primary/40",
         "data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
         className,

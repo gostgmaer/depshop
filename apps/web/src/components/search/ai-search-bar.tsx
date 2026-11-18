@@ -11,7 +11,15 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type KeyboardEvent, useCallback, useId, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -83,7 +91,18 @@ export function AiSearchBar({
 }) {
   const router = useRouter();
   const create = useCreateSearch();
-  const [showFilters, setShowFilters] = useState(initialFilters);
+  // null = "default": open from the sm breakpoint up, closed on phones (CSS, so no flash after
+  // hydration). An explicit toggle sets true/false and then applies to every screen size.
+  const [showFilters, setShowFilters] = useState<boolean | null>(initialFilters ? null : false);
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    setWide(mq.matches);
+    const on = (e: MediaQueryListEvent) => setWide(e.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const filtersVisible = showFilters ?? wide;
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const submitting = useRef(false);
@@ -228,12 +247,12 @@ export function AiSearchBar({
           size="icon"
           className="relative"
           aria-label={
-            showFilters
+            filtersVisible
               ? "Hide filters"
               : `Show filters${filterCount ? ` (${filterCount} set)` : ""}`
           }
-          aria-pressed={showFilters}
-          onClick={() => setShowFilters((s) => !s)}
+          aria-pressed={filtersVisible}
+          onClick={() => setShowFilters(!filtersVisible)}
         >
           <SlidersHorizontal aria-hidden className="size-4" />
           {filterCount ? (
@@ -245,10 +264,15 @@ export function AiSearchBar({
             </span>
           ) : null}
         </Button>
-        <Button type="submit" variant="ai" size={compact ? "default" : "lg"} disabled={busy}>
-          <span className={cn(compact && "sr-only sm:not-sr-only")}>
-            {busy ? "Starting…" : submitLabel}
-          </span>
+        <Button
+          type="submit"
+          variant="ai"
+          size={compact ? "default" : "lg"}
+          disabled={busy}
+          // Icon-only on phones so the input keeps its width; the label stays for screen readers.
+          className="max-sm:px-3"
+        >
+          <span className="sr-only sm:not-sr-only">{busy ? "Starting…" : submitLabel}</span>
           <ArrowRight aria-hidden className="size-4" />
         </Button>
         <ul
@@ -301,7 +325,11 @@ export function AiSearchBar({
       {form.formState.errors.root ? (
         <Alert tone="error">{form.formState.errors.root.message}</Alert>
       ) : null}
-      {showFilters ? <SearchFilters form={form} /> : null}
+      {showFilters !== false ? (
+        <div className={showFilters === null ? "hidden sm:block" : undefined}>
+          <SearchFilters form={form} />
+        </div>
+      ) : null}
     </form>
   );
 }

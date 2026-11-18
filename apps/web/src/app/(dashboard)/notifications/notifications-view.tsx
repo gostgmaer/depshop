@@ -60,7 +60,7 @@ export function NotificationList({
               {n.link && onOpen ? (
                 <Link
                   href={n.link}
-                  className="hover:underline"
+                  className="-my-1.5 inline-block py-1.5 hover:underline"
                   onClick={(e) => {
                     e.preventDefault();
                     onOpen(n);

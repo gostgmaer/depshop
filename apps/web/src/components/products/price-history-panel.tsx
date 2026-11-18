@@ -246,7 +246,7 @@ function StatsPanel({
           <div key={label} className="rounded-lg bg-muted px-3 py-2">
             <dt className="text-xs text-muted-foreground">{label}</dt>
             <dd className="font-medium tabular">{value}</dd>
-            {hint ? <dd className="text-[11px] text-muted-foreground">{hint}</dd> : null}
+            {hint ? <dd className="text-xs text-muted-foreground">{hint}</dd> : null}
           </div>
         ))}
       </dl>
@@ -284,7 +284,7 @@ function StatsPanel({
           </ul>
         </details>
       ) : null}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         {stats.gaps
           ? `${stats.gaps} gap${stats.gaps === 1 ? "" : "s"} of more than 48 hours without an observation in this period. `
           : ""}

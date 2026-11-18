@@ -253,7 +253,7 @@ export function PriceHistoryChart({
               scale="time"
               domain={[from, endT]}
               tickFormatter={(t: number) => formatDate(new Date(t).toISOString())}
-              tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+              tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }}
               stroke="var(--color-border)"
               minTickGap={32}
             />
@@ -261,7 +261,7 @@ export function PriceHistoryChart({
               domain={niceDomain(lo - pad, hi + pad)}
               ticks={niceTicks(lo - pad, hi + pad)}
               tickFormatter={(v: number) => rupees(Math.round(v))}
-              tick={{ fill: "var(--color-muted-foreground)", fontSize: 11 }}
+              tick={{ fill: "var(--color-muted-foreground)", fontSize: 12 }}
               stroke="var(--color-border)"
               width={76}
               allowDecimals={false}
@@ -275,7 +275,7 @@ export function PriceHistoryChart({
                   label={{
                     value: `Low ${rupees(reference.lowestPaise)}`,
                     position: "insideBottomLeft",
-                    fontSize: 10,
+                    fontSize: 12,
                     fill: "var(--color-muted-foreground)",
                   }}
                 />
@@ -286,7 +286,7 @@ export function PriceHistoryChart({
                   label={{
                     value: `High ${rupees(reference.highestPaise)}`,
                     position: "insideTopLeft",
-                    fontSize: 10,
+                    fontSize: 12,
                     fill: "var(--color-muted-foreground)",
                   }}
                 />
@@ -298,7 +298,7 @@ export function PriceHistoryChart({
                   label={{
                     value: `Avg ${rupees(reference.averagePaise)}`,
                     position: "insideTopRight",
-                    fontSize: 10,
+                    fontSize: 12,
                     fill: "var(--color-muted-foreground)",
                   }}
                 />

@@ -68,6 +68,9 @@ test("4.2 category filters, live steps, sort, grid and comparison selection", as
   await signIn(page, "/search");
   await page.getByLabel("Describe what you want to buy").fill("Find a phone with 8GB RAM");
   // Category-specific filters come from the category's catalog data.
+  // On phones the filters start closed (Prompt 26); open them as a user would.
+  const showFilters = page.getByRole("button", { name: /show filters/i });
+  if (await showFilters.isVisible()) await showFilters.click();
   await page.getByLabel("Category", { exact: true }).selectOption("smartphones");
   await page.getByLabel("RAM", { exact: true }).selectOption("8 GB");
   await page.getByLabel("Minimum verified discount").selectOption("10");
