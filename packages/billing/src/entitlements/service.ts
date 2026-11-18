@@ -69,7 +69,14 @@ export interface PlanContext {
 export interface EntitlementOptions {
   graceDays?: number;
   now?: () => Date;
+  /**
+   * Free launch offer (LAUNCH_FREE_PLAN): every account gets this plan's limits and
+   * features at no cost. A higher paid plan still applies. Unset = normal billing.
+   */
+  launchPlan?: PlanCode | null;
 }
+
+const PLAN_RANK: Record<PlanCode, number> = { FREE: 0, PRO: 1, BUSINESS: 2 };
 
 export class EntitlementService {
   constructor(
@@ -79,6 +86,16 @@ export class EntitlementService {
 
   private now() {
     return (this.opts.now ?? (() => new Date()))();
+  }
+
+  /** Upgrade advice in limit messages; omitted during the free launch (nothing can be bought). */
+  private upgradeHint(text: string): string {
+    return this.launchPlan ? "" : text;
+  }
+
+  /** The plan everyone gets free during the launch, or null when billing is normal. */
+  get launchPlan(): PlanCode | null {
+    return this.opts.launchPlan ?? null;
   }
 
   async plans(db: Db = this.prisma): Promise<Map<PlanCode, Plan>> {
@@ -98,7 +115,11 @@ export class EntitlementService {
       }),
       this.plans(db),
     ]);
-    const effective = effectivePlan(sub, this.now(), this.opts.graceDays);
+    let effective = effectivePlan(sub, this.now(), this.opts.graceDays);
+    const launch = this.launchPlan;
+    if (launch && PLAN_RANK[launch] > PLAN_RANK[effective.plan]) {
+      effective = { plan: launch, graceUntil: null, reason: "free during launch" };
+    }
     return {
       subscribed: plans.get(sub?.planCode ?? "FREE")!,
       plan: plans.get(effective.plan)!,
@@ -115,7 +136,7 @@ export class EntitlementService {
     if (!(await this.checkEntitlement(userId, feature)))
       throw new AppError(
         ErrorCode.PLAN_UPGRADE_REQUIRED,
-        `${label} isn't included in your plan. Upgrade to use it.`,
+        `${label} isn't included in your plan.${this.upgradeHint(" Upgrade to use it.")}`,
         { feature },
       );
   }
@@ -138,8 +159,8 @@ export class EntitlementService {
       throw new AppError(
         ErrorCode.USAGE_LIMIT_EXCEEDED,
         limit === 0
-          ? `${m.label.replace(/ (today|this month)$/, "")} aren't included in your plan. Upgrade to use them.`
-          : `Your plan allows ${limit} ${m.label.toLowerCase()}. ${m.window === "day" ? "The limit resets at midnight IST" : "The limit resets on the 1st"}, or upgrade for more.`,
+          ? `${m.label.replace(/ (today|this month)$/, "")} aren't included in your plan.${this.upgradeHint(" Upgrade to use them.")}`
+          : `Your plan allows ${limit} ${m.label.toLowerCase()}. ${m.window === "day" ? "The limit resets at midnight IST" : "The limit resets on the 1st"}${this.upgradeHint(", or upgrade for more")}.`,
         { limit: m.limit, allowed: limit, resetsAt: windowEnd(m.window, this.now()).toISOString() },
       );
     return rows[0]!.quantity;
@@ -163,7 +184,7 @@ export class EntitlementService {
     if (used + adding > limit)
       throw new AppError(
         ErrorCode.USAGE_LIMIT_EXCEEDED,
-        `Your plan allows ${limit} ${GAUGES[key].label}. Upgrade to add more.`,
+        `Your plan allows ${limit} ${GAUGES[key].label}.${this.upgradeHint(" Upgrade to add more.")}`,
         { limit: GAUGES[key].limit, allowed: limit },
       );
   }

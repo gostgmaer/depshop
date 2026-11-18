@@ -50,6 +50,7 @@ export const keys = {
   notificationPreferences: ["notification-preferences"] as const,
   unread: ["notifications", "unread"] as const,
   plans: ["billing", "plans"] as const,
+  launchOffer: ["billing", "offer"] as const,
   subscription: ["billing", "subscription"] as const,
   usage: ["billing", "usage"] as const,
 };
@@ -279,6 +280,9 @@ export function useNotificationMutations() {
 // ── Billing ──
 export const usePlans = () =>
   useQuery({ queryKey: keys.plans, queryFn: billing.plans, staleTime: 10 * 60_000 });
+/** Free launch offer (null when billing is normal). */
+export const useLaunchOffer = () =>
+  useQuery({ queryKey: keys.launchOffer, queryFn: billing.offer, staleTime: 10 * 60_000 });
 export const useSubscription = () =>
   useQuery({ queryKey: keys.subscription, queryFn: billing.subscription });
 export const useUsage = () => useQuery({ queryKey: keys.usage, queryFn: () => billing.usage() });

@@ -27,6 +27,7 @@ import type {
   NotificationPreferences,
   PushSubscribeRequest,
   UpdateNotificationPreferences,
+  LaunchOffer,
   Plan,
   PriceAlert,
   PriceHistory,
@@ -189,6 +190,7 @@ export const push = {
 
 export const billing = {
   plans: () => api<Plan[]>("GET", "/billing/plans"),
+  offer: () => api<LaunchOffer>("GET", "/billing/offer"),
   subscription: () => api<Subscription>("GET", "/billing/subscription"),
   usage: () => api<Usage>("GET", "/usage"),
   startCheckout: (body: { plan: "PRO" | "BUSINESS"; interval: BillingIntervalValue }) =>

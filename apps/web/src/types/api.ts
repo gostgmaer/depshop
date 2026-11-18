@@ -15,6 +15,7 @@ import type {
   pushSubscribeInput,
   updateNotificationPreferencesInput,
   offerView,
+  launchOfferView,
   planView,
   priceHistory,
   productDetail,
@@ -79,6 +80,7 @@ export type NotificationPreferences = z.infer<typeof notificationPreferences>;
 export type UpdateNotificationPreferences = z.input<typeof updateNotificationPreferencesInput>;
 export type PushSubscribeRequest = z.input<typeof pushSubscribeInput>;
 export type Plan = z.infer<typeof planView>;
+export type LaunchOffer = z.infer<typeof launchOfferView>;
 export type Subscription = z.infer<typeof subscriptionView>;
 export type Usage = z.infer<typeof usageView>;
 export type Checkout = z.infer<typeof checkoutView>;

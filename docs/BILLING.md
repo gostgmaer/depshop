@@ -10,6 +10,21 @@
 - Usage limits are enforced atomically.
 - Affiliate commissions (`AffiliateClick` / `AffiliateConversion`) are a separate ledger and don't touch subscription billing.
 
+## Free launch offer (`LAUNCH_FREE_PLAN`)
+
+While DealMind launches, it's free: set `LAUNCH_FREE_PLAN` (`FREE`, `PRO` or `BUSINESS`; the templates use `PRO`) on the API and the worker.
+
+|                      | Behaviour                                                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Limits and features  | Every account gets that plan's limits and features at no cost, enforced server-side by `EntitlementService` like any plan. A higher paid plan (an existing subscriber) still applies |
+| Buying               | Checkout is refused (409, "Paid plans are paused…"); no payment details are asked for. Existing paid subscriptions can still be managed and cancelled                                |
+| UI                   | Pricing and billing pages show "Free during our launch" and no upgrade buttons; limit messages don't suggest upgrading                                                               |
+| Public signal        | `GET /api/v1/billing/offer` → `{ freeLaunch: { planCode, planName }                                                                                                                  | null }` |
+| Limits during launch | Edit the plan's limits in Admin (plan rows); no deploy needed. The LLM monthly token cap (Admin → AI models) still bounds AI cost                                                    |
+| Ending it            | Remove the variable (or leave it empty) and restart the API and worker: normal plans, prices and checkout return. Nothing is deleted or migrated                                     |
+
+Tested: `launch-offer.db.test.ts` (offer endpoint, Pro limits for a new account with nothing charged, checkout refused, no upgrade wording), web unit tests (billing and pricing pages in both modes), and the full billing suite still passes with the setting unset.
+
 ## Architecture
 
 ```

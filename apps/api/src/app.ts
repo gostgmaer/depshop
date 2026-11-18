@@ -372,6 +372,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   const entitlements = new EntitlementService(prisma, {
     graceDays: env.BILLING_GRACE_DAYS,
+    launchPlan: env.LAUNCH_FREE_PLAN ?? null,
     ...(deps.billingNow ? { now: deps.billingNow } : {}),
   });
   const billingProvider: BillingProvider | null =

@@ -1,9 +1,16 @@
 /** Phase 6.1 UI: plans, checkout (sandbox and Razorpay), cancellation, grace period, usage. */
-import { checkoutView, planView, subscriptionView, usageView } from "@dealmind/shared";
+import {
+  checkoutView,
+  launchOfferView,
+  planView,
+  subscriptionView,
+  usageView,
+} from "@dealmind/shared";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BillingView } from "@/app/(dashboard)/billing/billing-view";
+import { PricingView } from "@/app/pricing/pricing-view";
 import { annualSavingPercent } from "@/lib/billing";
 import * as services from "@/services";
 import type { Checkout, Plan, Subscription, Usage } from "@/types/api";
@@ -114,6 +121,7 @@ const checkout = (over: Partial<Checkout> = {}): Checkout => ({
 vi.mock("@/services", () => ({
   billing: {
     plans: vi.fn(),
+    offer: vi.fn(),
     subscription: vi.fn(),
     usage: vi.fn(),
     startCheckout: vi.fn(),
@@ -134,6 +142,7 @@ const svc = (services as unknown as Mocked).billing!;
 
 beforeEach(() => {
   svc.plans!.mockResolvedValue(PLANS);
+  svc.offer!.mockResolvedValue({ freeLaunch: null }); // normal billing unless a test says otherwise
   svc.subscription!.mockResolvedValue(freeSub());
   svc.usage!.mockResolvedValue(USAGE);
 });
@@ -264,5 +273,50 @@ describe("paid subscription", () => {
     );
     renderWithQuery(<BillingView />);
     expect(await screen.findByText(/Your Pro features are paused/)).toBeInTheDocument();
+  });
+});
+
+describe("free launch offer (LAUNCH_FREE_PLAN=PRO)", () => {
+  const OFFER = { freeLaunch: { planCode: "PRO" as const, planName: "Pro" } };
+  beforeEach(() => {
+    svc.offer!.mockResolvedValue(OFFER);
+    // What the API returns during the launch: nothing bought, Pro applies.
+    svc.subscription!.mockResolvedValue({ ...freeSub(), effectivePlan: "PRO" });
+  });
+
+  it("matches the API contract", () => {
+    expect(launchOfferView.safeParse(OFFER).success).toBe(true);
+    expect(launchOfferView.safeParse({ freeLaunch: null }).success).toBe(true);
+  });
+
+  it("billing: says Pro is free, offers nothing to buy, and shows no 'paused' warning", async () => {
+    renderWithQuery(<BillingView />);
+    expect(await screen.findByText(/Free during our launch./)).toBeInTheDocument();
+    expect(await screen.findByText(/You have/)).toHaveTextContent(
+      "You have Pro free during the launch.",
+    );
+    expect(screen.queryByRole("button", { name: /Upgrade to/ })).toBeNull();
+    expect(screen.queryByText(/features are paused/)).toBeNull();
+    const business = await screen.findByRole("listitem", { name: "Business plan" });
+    expect(
+      within(business).getByText("Paid plans are paused during the launch."),
+    ).toBeInTheDocument();
+  });
+
+  it("pricing: free banner, one free sign-up button, no prices to choose", async () => {
+    renderWithQuery(<PricingView signedIn={false} />);
+    expect(await screen.findByText(/Free during our launch./)).toBeInTheDocument();
+    expect(screen.getByText(/DealMind is free while we launch/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Choose/ })).toBeNull();
+    const signUp = screen.getByRole("link", { name: "Create a free account" });
+    expect(signUp).toHaveAttribute("href", "/register?next=%2Fdashboard");
+    expect(screen.queryByRole("button", { name: /Annual/ })).toBeNull(); // no billing interval to pick
+  });
+
+  it("when the offer ends (null), the normal pricing returns", async () => {
+    svc.offer!.mockResolvedValue({ freeLaunch: null });
+    renderWithQuery(<PricingView signedIn={false} />);
+    expect(await screen.findByRole("link", { name: "Choose Pro" })).toBeInTheDocument();
+    expect(screen.queryByText(/Free during our launch/)).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import type { BillingIntervalValue } from "@dealmind/shared";
 import { AlertTriangle, Download, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import { CheckoutDialog } from "@/components/billing/checkout-dialog";
+import { LaunchOfferBanner, launchPlanNote } from "@/components/billing/launch-offer";
 import { IntervalToggle, PRICE_NOTE, PlanCards } from "@/components/billing/plan-cards";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,7 @@ import {
   useBillingMutations,
   useInvoices,
   usePayments,
+  useLaunchOffer,
   usePlans,
   useSubscription,
   useUsage,
@@ -75,6 +77,7 @@ const paidLive = (s: Subscription) =>
 
 export function BillingView() {
   const plans = usePlans();
+  const offer = useLaunchOffer().data?.freeLaunch ?? null;
   const sub = useSubscription();
   const usage = useUsage();
   const m = useBillingMutations();
@@ -100,6 +103,9 @@ export function BillingView() {
   const failed = m.cancel.error ?? m.changePlan.error;
 
   const action = (p: Plan) => {
+    // Free launch: nothing to buy; an existing paid subscription can still be managed.
+    if (offer && !live)
+      return <p className="text-sm text-muted-foreground">{launchPlanNote(p.code, offer)}</p>;
     if (live && p.code === s.plan.code && s.interval === interval)
       return <p className="text-sm text-muted-foreground">Your current plan</p>;
     if (p.code === "FREE")
@@ -140,6 +146,7 @@ export function BillingView() {
   return (
     <>
       <PageHeader title="Billing" description="Your plan, usage, payments and invoices." />
+      {offer ? <LaunchOfferBanner offer={offer} /> : null}
       {failed ? <Alert tone="error">{errorMessage(failed)}</Alert> : null}
 
       <Card>
@@ -159,7 +166,12 @@ export function BillingView() {
               </Badge>
             ) : null}
           </p>
-          {s.effectivePlan !== s.plan.code ? (
+          {offer && s.effectivePlan === offer.planCode && s.plan.code !== offer.planCode ? (
+            <p className="text-sm">
+              You have <strong>{offer.planName}</strong> free during the launch.
+            </p>
+          ) : null}
+          {s.effectivePlan !== s.plan.code && !(offer && s.effectivePlan === offer.planCode) ? (
             <Alert tone="warning">
               Your {s.plan.name} features are paused; Free plan limits apply until the subscription
               is active again.

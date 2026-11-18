@@ -10,6 +10,7 @@ import {
   confirmCheckoutInput,
   invoiceView,
   paymentView,
+  launchOfferView,
   planView,
   subscriptionView,
   usageView,
@@ -41,6 +42,18 @@ export const billingRoutes: FastifyPluginAsyncZod<{ billing: BillingService }> =
       },
     },
     async () => billing.plans(),
+  );
+
+  app.get(
+    "/offer",
+    {
+      schema: {
+        tags: ["billing"],
+        summary: "Launch offer: whether DealMind is currently free for everyone",
+        response: { 200: ok(launchOfferView) },
+      },
+    },
+    async () => billing.launchOffer(),
   );
 
   await app.register(async (plain) => {

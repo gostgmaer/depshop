@@ -31,6 +31,8 @@ x-app-env: &app-env
   NOTIFICATION_TENANT_ID: ${NOTIFICATION_TENANT_ID:-}
   CONNECTORS_ENABLE_MOCKS: "true"
   BILLING_PROVIDER: sandbox
+  # Free during launch: every account gets this plan at no cost (empty = normal billing).
+  LAUNCH_FREE_PLAN: ${LAUNCH_FREE_PLAN:-PRO}
 
 services:
   postgres:

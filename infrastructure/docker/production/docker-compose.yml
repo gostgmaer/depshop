@@ -67,6 +67,7 @@ x-common-env: &common-env
   PAYMENT_TENANT_ID: ${PAYMENT_TENANT_ID:-easydev}
   PAYMENT_APPLICATION_ID: ${PAYMENT_APPLICATION_ID:-dealmind}
   BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+  LAUNCH_FREE_PLAN: ${LAUNCH_FREE_PLAN:-}
 
 services:
   # ── Edge ──────────────────────────────────────────────────────────────────

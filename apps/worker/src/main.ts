@@ -96,6 +96,11 @@ const env = z
     PAYMENT_TENANT_ID: z.string().min(1).default("easydev"),
     PAYMENT_APPLICATION_ID: z.string().min(1).default("dealmind"),
     BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(14).default(3),
+    /** Free launch offer: every account gets this plan at no cost (empty = normal billing). */
+    LAUNCH_FREE_PLAN: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.enum(["FREE", "PRO", "BUSINESS"]).optional(),
+    ),
     /** Signs email unsubscribe links (≥ 32 chars; same value in the API). */
     NOTIFICATION_TOKEN_SECRET: z.string().min(32).optional(),
     /** Web push (VAPID). All three or none; unset: push deliveries are SKIPPED. */
@@ -332,7 +337,10 @@ if (
   env.PAYMENT_SERVICE_URL &&
   env.PAYMENT_SERVICE_API_KEY
 ) {
-  const entitlements = new EntitlementService(prisma, { graceDays: env.BILLING_GRACE_DAYS });
+  const entitlements = new EntitlementService(prisma, {
+    graceDays: env.BILLING_GRACE_DAYS,
+    launchPlan: env.LAUNCH_FREE_PLAN ?? null,
+  });
   const sync = new SubscriptionSync({
     prisma,
     provider: new EasyDevPaymentsProvider({

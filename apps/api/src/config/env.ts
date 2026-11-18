@@ -113,6 +113,11 @@ const envSchema = z
     PAYMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
     /** Days of paid access kept after a failed renewal while payment is retried. */
     BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(14).default(3),
+    /** Free launch offer: every account gets this plan at no cost (empty = normal billing). */
+    LAUNCH_FREE_PLAN: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.enum(["FREE", "PRO", "BUSINESS"]).optional(),
+    ),
 
     // ── Shared EasyDev file-upload service (optional until used) ───────
     FILE_SERVICE_URL: z.string().url().optional(),

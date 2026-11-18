@@ -71,6 +71,12 @@ export const subscriptionView = z.object({
 });
 export type SubscriptionView = z.infer<typeof subscriptionView>;
 
+/** Public: whether DealMind is free during its launch, and which plan everyone gets. */
+export const launchOfferView = z.object({
+  freeLaunch: z.object({ planCode: PlanCode, planName: z.string() }).nullable(),
+});
+export type LaunchOfferView = z.infer<typeof launchOfferView>;
+
 // ── Checkout ──────────────────────────────────────────────────────────────
 
 export const checkoutInput = z

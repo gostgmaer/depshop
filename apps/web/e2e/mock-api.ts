@@ -184,6 +184,8 @@ const server = createServer((req, res) => {
     return send(res, 200, ok({ user: nid ? newcomer(nid) : USER }));
   }
 
+  if (path === "/billing/offer") return send(res, 200, ok({ freeLaunch: null }));
+
   // ── public catalog ──
   if (path === "/categories/tree")
     return send(res, 200, ok([{ ...product.category!, children: [] }]));

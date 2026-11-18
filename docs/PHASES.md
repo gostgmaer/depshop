@@ -637,3 +637,7 @@ See [pwa-architecture.md](pwa-architecture.md).
 - **Mobile:** bottom tab bar (Home, Search, Watchlists, Alerts, Account) with safe-area padding; install card in Settings (Chromium prompt, iOS manual steps).
 - **Tests:** Playwright PWA suite 14 (70/70 over 5 repeats), unit 5; full regression (Playwright 62, web unit 146) green. Lab LCP on a first visit 604 ms (mobile profile, throttled). Real devices and installation are not verified (no deployed HTTPS origin).
 - **Round 2 (small phones):** a 360×740 audit of 20 pages, kept as `e2e/small-phone.spec.ts`. Fixed: a squeezed search input (icon-only Search button on phones), filters open by default on phones, 20 px "Buy on" links (now 44 px), 16 px checkboxes (28 px hit area), a header checkbox wrapping one word per line (`CardHeader` wraps), and text under 12 px. Playwright 65 passed (3 desktop skips by design); web unit 146.
+
+## Free launch offer
+
+`LAUNCH_FREE_PLAN=PRO`: every account gets Pro free during the launch; checkout is refused; pricing and billing pages say so; limit messages don't suggest upgrading. Switch it off by unsetting the variable. See [BILLING.md](BILLING.md). Tests: API DB 191 (4 new), worker DB 43, web unit 150 (4 new), billing unit 10.

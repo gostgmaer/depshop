@@ -24,9 +24,6 @@ export default async function PricingPage() {
       </nav>
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold tracking-tight">Plans for every shopper</h1>
-        <p className="text-muted-foreground">
-          Start free. Upgrade for more searches, alerts, history and bulk tracking. Cancel any time.
-        </p>
       </header>
       <PricingView signedIn={Boolean(user)} />
     </main>

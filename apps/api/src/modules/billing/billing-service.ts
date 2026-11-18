@@ -36,6 +36,7 @@ import {
   type PaymentView,
   type PlanCode,
   type PlanView,
+  type LaunchOfferView,
   type SubscriptionView,
 } from "@dealmind/shared";
 import { recordAudit } from "../users/audit.js";
@@ -142,10 +143,23 @@ export class BillingService {
     };
   }
 
+  async launchOffer(): Promise<LaunchOfferView> {
+    const code = this.entitlements.launchPlan;
+    if (!code) return { freeLaunch: null };
+    const plan = (await this.entitlements.plans()).get(code);
+    return { freeLaunch: { planCode: code, planName: plan?.name ?? code } };
+  }
+
   async startCheckout(
     userId: string,
     input: { plan: "PRO" | "BUSINESS"; interval: BillingIntervalValue },
   ): Promise<CheckoutView> {
+    // Never take payment for something that is currently free for everyone.
+    if (this.entitlements.launchPlan)
+      throw new AppError(
+        ErrorCode.CONFLICT,
+        "Paid plans are paused: DealMind is free for everyone during the launch.",
+      );
     const { provider } = this.requireProvider();
     const plans = await this.entitlements.plans();
     const plan = plans.get(input.plan);
