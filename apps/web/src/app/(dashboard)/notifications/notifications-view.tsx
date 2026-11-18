@@ -145,7 +145,7 @@ export function NotificationsView() {
             { value: "unread", label: "Unread" },
           ]}
         />
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <SegmentedControl
             label="Notification category"
             value={category}

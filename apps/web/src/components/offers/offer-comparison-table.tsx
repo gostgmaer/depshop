@@ -39,7 +39,7 @@ export function OfferComparisonTable({
           shown as last seen, not as current prices, and never chosen as lowest.
         </p>
       ) : null}
-      <div className="hidden overflow-x-auto rounded-xl border border-border lg:block">
+      <div className="relative hidden overflow-x-auto rounded-xl border border-border lg:block">
         <table className="w-full text-sm">
           <caption className="sr-only">
             Prices of this variant across marketplaces, cheapest delivered first

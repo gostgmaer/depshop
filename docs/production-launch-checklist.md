@@ -1,6 +1,6 @@
 # Production launch checklist
 
-> Latest end-to-end evidence and release decision: [launch-readiness-report.md](launch-readiness-report.md) (Prompt 22).
+> Latest end-to-end evidence: [launch-readiness-report.md](launch-readiness-report.md) (Prompt 22). Latest launch gate: [production-go-live.md](production-go-live.md) (Prompt 23, **LAUNCH BLOCKED**).
 
 **Status as of 2026-11-17.** DealMind AI has **not** been deployed to a real server, and no external provider has approved it.
 
@@ -29,7 +29,7 @@ Evidence: [SECURITY_AUDIT.md](SECURITY_AUDIT.md), [production-deployment.md](pro
 | Deployment, automatic rollback, manual rollback | ✅ local                            | A bad release was rolled back automatically; `rollback.sh` worked; the schema guard refused an incompatible rollback.                                                                                                     |
 | Graceful shutdown                               | ✅ local                            | api, worker and agent exit 0 within 1–2 s on SIGTERM.                                                                                                                                                                     |
 | Smoke tests                                     | ✅ local (11/11 public, 3 internal) | The signed-in flow needs `SMOKE_EMAIL`/`SMOKE_PASSWORD` (a dedicated test account) 🟡.                                                                                                                                    |
-| CI pipeline                                     | 🟡                                  | Workflows lint clean (actionlint); ShellCheck clean; the steps were run locally. **Not yet run on GitHub** (push and enable Actions).                                                                                     |
+| CI pipeline                                     | ❌                                  | Ran on GitHub for the first time and **failed** (4 of 6 jobs). Causes fixed locally in Prompt 23; needs commit, push and a green run.                                                                                     |
 | CD pipeline                                     | 🟡                                  | Requires the GitHub environments, SSH secrets, a server and registry access. Never executed.                                                                                                                              |
 | Monitoring and alerting                         | 🟡                                  | Overlay ran in the rehearsal (7/7 targets, 23 rules). **No alert receiver configured; nothing runs on a server.**                                                                                                         |
 | Error tracking (Sentry) / OpenTelemetry tracing | ❌                                  | Needs a vendor or account decision. Correlation ids are in place.                                                                                                                                                         |

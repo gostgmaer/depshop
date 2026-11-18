@@ -49,7 +49,7 @@ export function AlertsView() {
         <Info aria-hidden className="mt-0.5 size-4 shrink-0" />
         {TRACKING_EXPLAINER}
       </p>
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <SegmentedControl
           label="Filter alerts by status"
           value={tab}

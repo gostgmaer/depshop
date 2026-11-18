@@ -34,7 +34,7 @@ function Meta({ metadata }: { metadata: Record<string, unknown> }) {
       {hasRest ? (
         <details>
           <summary className="cursor-pointer text-muted-foreground">Details</summary>
-          <pre className="mt-1 max-w-md overflow-x-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap break-all">
+          <pre className="relative mt-1 max-w-md overflow-x-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap break-all">
             {JSON.stringify(rest, null, 2)}
           </pre>
         </details>

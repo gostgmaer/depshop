@@ -79,7 +79,7 @@ export function NotificationSettings() {
           title="Notification channels"
           description="Choose how DealMind tells you about each kind of update. A channel turned off at the top is off for everything."
         />
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[32rem] text-sm">
             <caption className="sr-only">Notification channels by category</caption>
             <thead>

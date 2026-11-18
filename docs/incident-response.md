@@ -4,11 +4,14 @@ Short runbooks for the alerts in [monitoring-and-alerting.md](monitoring-and-ale
 
 ## Severity and roles
 
-| Severity | Examples                                                | Response                                                                                        |
-| -------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| SEV1     | site down, data loss, security breach, payments failing | Start now. One incident lead. Status update to users if impact is visible for more than 15 min. |
-| SEV2     | searches failing, alerts not sent, a connector down     | Same working day                                                                                |
-| SEV3     | slowness, single job failures                           | Next working day                                                                                |
+| Severity  | Definition and examples                                                                       | Response                                                                                                            |
+| --------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **SEV-1** | Data breach, major outage, data corruption; payments charging wrongly                         | Start now. One incident lead. Pause any launch expansion. Status update to users if impact is visible for > 15 min. |
+| **SEV-2** | Core shopping or account workflows unavailable: search, sign-in, alerts not sent              | Within 1 hour. Pause any launch expansion.                                                                          |
+| **SEV-3** | Partial degradation: one connector down, slowness, delayed notifications, single job failures | Same working day.                                                                                                   |
+| **SEV-4** | Minor visual or non-critical defects                                                          | Backlog.                                                                                                            |
+
+Escalation and roles: [production-operations-handbook.md](production-operations-handbook.md) §Responsibilities. Undo procedures: [rollback-runbook.md](rollback-runbook.md). Data loss: [disaster-recovery.md](disaster-recovery.md).
 
 **Steps:**
 

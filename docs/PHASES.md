@@ -599,3 +599,10 @@ See [launch-readiness-report.md](launch-readiness-report.md). **Decision: READY 
 - New full-stack journey (`pnpm --filter @dealmind/api test:journey`): real API, worker and agent processes; 8/8 steps.
 - Fixed: P22-1 Redis crash loop (rename-command vs AOF replay, now ACLs); P22-2 connectors without an authorized integration reported as configured and enable-able. Unused dependencies removed.
 - Staging simulation (local, production images): deploy, smoke tests, Redis ACL, backup and restore test, second release, rollback.
+
+## Prompt 23 — Controlled production launch (gate) and operational handover
+
+**Decision: LAUNCH BLOCKED.** See [production-go-live.md](production-go-live.md). No production infrastructure, secrets, staging environment or alert receiver exists, and CI had never passed on GitHub. Nothing was deployed.
+
+- CI failures fixed: the production env template was never committed (gitignored, P1); Compose read comments as values for empty template variables; pages scrolled sideways under Linux fonts (`sr-only` labels escaping scroll wrappers); a TS2742 portability error in the API test harness; gitleaks false positives.
+- New: [release-manifest.md](release-manifest.md), [rollback-runbook.md](rollback-runbook.md), [production-smoke-tests.md](production-smoke-tests.md), [production-operations-handbook.md](production-operations-handbook.md), [disaster-recovery.md](disaster-recovery.md), [production-cost-estimate.md](production-cost-estimate.md). [incident-response.md](incident-response.md) now uses SEV-1 to SEV-4.

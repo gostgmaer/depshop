@@ -234,11 +234,15 @@ export function BarList({
   );
 }
 
-/** Responsive table wrapper (horizontal scroll inside the card, never the page). */
+/**
+ * Responsive table wrapper (horizontal scroll inside the card, never the page).
+ * `relative` is required: it makes this the containing block for `sr-only` labels
+ * (position: absolute), which would otherwise escape the scroll clip and widen the page.
+ */
 export function TableWrap({ children, label }: { children: ReactNode; label: string }) {
   return (
     <div
-      className="-mx-5 overflow-x-auto px-5 sm:-mx-6 sm:px-6"
+      className="relative -mx-5 overflow-x-auto px-5 sm:-mx-6 sm:px-6"
       role="region"
       aria-label={label}
       tabIndex={0}

@@ -348,7 +348,7 @@ export function MultiCompare({
       )}
 
       {/* Desktop: one table, products as columns. */}
-      <div className="hidden overflow-x-auto rounded-xl border border-border bg-surface lg:block">
+      <div className="relative hidden overflow-x-auto rounded-xl border border-border bg-surface lg:block">
         <table className="w-full border-collapse text-left">
           <caption className="sr-only">Side-by-side comparison of the selected products</caption>
           <thead>

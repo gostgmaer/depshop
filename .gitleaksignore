@@ -1,0 +1,11 @@
+# Reviewed gitleaks false positives (Prompt 23). Each entry is commit:file:rule:line.
+# - execution_service.py: variable names (user_context=ex.user.token), not a secret
+# - notifications/security tests: the public Web Push example vector (RFC 8291 sample auth value)
+# - .env.example: an empty PAYMENT_WEBHOOK_SECRET= template line
+# Any NEW finding still fails CI.
+0dce5cbfa1f0280a326c29e6e8409b8387557985:.env.example:generic-api-key:149
+10ef3f6e06e9754a9bece8554d1a51929b44542e:apps/api/src/test/notifications.db.test.ts:generic-api-key:302
+10ef3f6e06e9754a9bece8554d1a51929b44542e:apps/api/src/test/notifications.db.test.ts:generic-api-key:393
+5b131f6ac1c55c236e878b118e5c1c6f9116d794:apps/agent/app/services/execution_service.py:generic-api-key:204
+5b131f6ac1c55c236e878b118e5c1c6f9116d794:apps/agent/app/services/execution_service.py:generic-api-key:286
+e14e4edac9b53eb03cf11e972ee43c7d5ddd01f4:apps/api/src/test/security.db.test.ts:generic-api-key:109

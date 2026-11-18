@@ -3,7 +3,7 @@ import { createPrismaClient, type PrismaClient } from "@dealmind/db";
 import { resolveTestDatabaseUrl, truncateAll } from "@dealmind/db/testing";
 import { CSRF_HEADER } from "@dealmind/shared";
 import { JobQueues, redisConnectionFromUrl } from "@dealmind/queue";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { Redis } from "ioredis";
 import { type AppDeps, buildApp } from "../app.js";
 import { loadEnv } from "../config/env.js";
@@ -134,7 +134,12 @@ export class Agent {
     return this.jar.get(name);
   }
 
-  async request(method: Method, url: string, payload?: unknown, opts: { csrf?: boolean } = {}) {
+  async request(
+    method: Method,
+    url: string,
+    payload?: unknown,
+    opts: { csrf?: boolean } = {},
+  ): Promise<LightMyRequestResponse> {
     const unsafe = method !== "GET";
     if (unsafe && opts.csrf !== false && !this.csrfToken()) {
       await this.request("GET", "/api/v1/auth/csrf");
@@ -170,16 +175,16 @@ export class Agent {
     return this.jar.get("dm_csrf") ?? this.jar.get("__Host-dm_csrf");
   }
 
-  get(url: string) {
+  get(url: string): Promise<LightMyRequestResponse> {
     return this.request("GET", url);
   }
-  post(url: string, payload?: unknown) {
+  post(url: string, payload?: unknown): Promise<LightMyRequestResponse> {
     return this.request("POST", url, payload ?? {});
   }
-  patch(url: string, payload: unknown) {
+  patch(url: string, payload: unknown): Promise<LightMyRequestResponse> {
     return this.request("PATCH", url, payload);
   }
-  delete(url: string) {
+  delete(url: string): Promise<LightMyRequestResponse> {
     return this.request("DELETE", url);
   }
 }
