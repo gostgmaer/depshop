@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.nodes.query_validator import marketplace_slugs, match_category
+from app.nodes.query_validator import fix_budget_direction, marketplace_slugs, match_category
 from app.prompts.intent import INTENT_SYSTEM, intent_user_prompt
 from app.providers.base import StructuredLlm
 from app.providers.rules import extract_intent_by_rules
@@ -154,6 +154,16 @@ def effective(intent: ExtractedIntent, query: str) -> Effective:
             ("min_price_rupees", intent.min_price_rupees),
             ("max_price_rupees", intent.max_price_rupees),
         )
+    }
+    # The same direction correction the validator applies (paise in, rupees out).
+    lo, hi, _ = fix_budget_direction(
+        budget["min_price_rupees"] * 100 if budget["min_price_rupees"] is not None else None,
+        budget["max_price_rupees"] * 100 if budget["max_price_rupees"] is not None else None,
+        query,
+    )
+    budget = {
+        "min_price_rupees": lo // 100 if lo is not None else None,
+        "max_price_rupees": hi // 100 if hi is not None else None,
     }
     values: dict[str, Any] = {
         "category": match_category(intent, SEED_CATEGORIES),

@@ -6,7 +6,7 @@ Measures how well DealMind understands a shopping request: the step that decides
 
 | Item                                         | Location                                       |
 | -------------------------------------------- | ---------------------------------------------- |
-| Labelled dataset: 60 queries, 15 fields each | `apps/agent/evals/search_queries.jsonl`        |
+| Labelled dataset: 70 queries, 15 fields each | `apps/agent/evals/search_queries.jsonl`        |
 | Evaluator                                    | `apps/agent/app/evals/intent_eval.py`          |
 | Quality gate (runs in `pnpm check`)          | `apps/agent/tests/test_search_quality_eval.py` |
 
@@ -27,7 +27,7 @@ Spec names and values are normalised lightly (`16 GB` = `16gb`, `litres` = `l`).
 
 ## Dataset
 
-- **60 queries** across smartphones, laptops, tablets, TVs, audio, wearables, ACs, refrigerators, washing machines, kitchen appliances and footwear. They cover:
+- **70 queries** across smartphones, laptops, tablets, TVs, audio, wearables, ACs, refrigerators, washing machines, kitchen appliances and footwear. They cover:
   - the six example queries from the Prompt 24 brief;
   - Indian budget formats (`₹35,000`, `35k`, `1.2 lakh`, `Rs. 65,000`, ranges);
   - brand exclusion;
@@ -35,13 +35,13 @@ Spec names and values are normalised lightly (`16 GB` = `16gb`, `litres` = `l`).
   - one Hinglish query.
 - **Split:**
   - 40 **dev** cases, used to find and fix problems;
-  - 20 **holdout** cases, written before any fix and never tuned against. Report the holdout number as the quality figure.
+  - 30 **holdout** cases: h01–h20 were written before the first round of fixes; h21–h30 were added before the budget-direction fix, so that a fresh, untouched set measured it. h08 exposed that defect, so it no longer counts as untouched. Report the holdout number as the quality figure.
 - **Labels come from the literal wording of the query, never from a model's output.**
 
 **Limitations:**
 
 - Everything was written by one person (the engineer, not shoppers), so it is a regression and coverage set, not a sample of real traffic.
-- 20 holdout cases is small: one case is 5 points of exact match.
+- 30 holdout cases is small: one case is 3.3 points of exact match.
 - **Replace or extend it with anonymised, k-anonymous real queries after launch** (from the admin "popular queries" and "empty-result queries" lists).
 
 ### Labelling guide
@@ -79,16 +79,31 @@ Per field, all 60, before → after:
 
 **The configured LLM has not been evaluated:** no LLM credentials exist (BLOCKED). Run `--provider configured` as soon as they do. It is the number that matters for production.
 
+### Round 2: budget direction (measured 2026-11-18)
+
+10 new holdout cases (h21–h30) were written **before** the fix. One of them (h23, "not more than 25000") independently reproduced the defect.
+
+| Split                                   | Before the fix  | After the fix       |
+| --------------------------------------- | --------------- | ------------------- |
+| **New holdout h21–h30 (10, untouched)** | 9/10            | **10/10**           |
+| Holdout, all 30                         | 93.3 %          | 100 %               |
+| Dev (40)                                | 97.5 %          | 97.5 %              |
+| All (70), exact match / field accuracy  | 95.7 % / 99.5 % | **98.6 % / 99.9 %** |
+
+**The evaluation caught a regression in the first version of the fix.** The negation rule allowed any two words before the direction word, so "OnePlus or **Nothing** phone under 40k" (Nothing is a brand) and "except **Samsung** under 30000" flipped to minimums: dev dropped to 95 %. The rule now accepts only filler words ("anything", "any", "priced") between the negation and the direction word. Both cases are now regression tests.
+
+**Known limit:** "no phone above 30000" still reads as a minimum, because allowing nouns between the negation and the direction word would bring back the brand collision above.
+
 ### Defects found by the evaluation
 
-| ID    | Sev.   | Defect                                                                                                                                                                                                                 | Affects                                                                     | Status                                                                            |
-| ----- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Q24-1 | **P1** | Category words were matched as **substrings**: an LLM category of "headphones" or "earphones" filtered the search to **smartphones** ("phone"); "backpacks" and "space heaters" mapped to **air conditioners** ("ac"). | **Production** (`match_category` in the query validator) and the dev parser | Fixed: whole-word matching, first-named product wins. Regression tests added.     |
-| Q24-2 | P2     | A Hinglish budget ("40000 tak", "20k ke andar") wasn't recognised as money, so **a correct LLM budget was discarded by grounding** as "not stated".                                                                    | Production (`is_stated`)                                                    | Fixed: direction words after the amount count. Tested.                            |
-| Q24-3 | P3     | Keywords kept stray punctuation and decimal budgets ("… storage .", "rtx 4060 1.").                                                                                                                                    | Rules parser (dev, and production when the LLM budget is exhausted)         | Fixed                                                                             |
-| Q24-4 | P3     | The dev parser missed screen size, energy rating, battery, processor, GPU and bare storage; and product-line brands.                                                                                                   | Rules parser (dev, and production when the LLM budget is exhausted)         | Fixed                                                                             |
-| Q24-5 | P2     | "except anything above 18000" is read as a **minimum** of ₹18,000. Grounding (`is_stated`) checks that an amount is present, **not its direction**, so production would also accept an LLM that flipped it.            | Production grounding                                                        | **Open** (holdout case h08; not tuned). Next: a direction check in the validator. |
-| Q24-6 | P3     | "Pixel 8" doesn't imply smartphones.                                                                                                                                                                                   | Rules parser (dev, and production when the LLM budget is exhausted)         | Open, by choice: inferring a category from a product line is too speculative.     |
+| ID    | Sev.   | Defect                                                                                                                                                                                                                 | Affects                                                                     | Status                                                                                                                                                                                                    |
+| ----- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q24-1 | **P1** | Category words were matched as **substrings**: an LLM category of "headphones" or "earphones" filtered the search to **smartphones** ("phone"); "backpacks" and "space heaters" mapped to **air conditioners** ("ac"). | **Production** (`match_category` in the query validator) and the dev parser | Fixed: whole-word matching, first-named product wins. Regression tests added.                                                                                                                             |
+| Q24-2 | P2     | A Hinglish budget ("40000 tak", "20k ke andar") wasn't recognised as money, so **a correct LLM budget was discarded by grounding** as "not stated".                                                                    | Production (`is_stated`)                                                    | Fixed: direction words after the amount count. Tested.                                                                                                                                                    |
+| Q24-3 | P3     | Keywords kept stray punctuation and decimal budgets ("… storage .", "rtx 4060 1.").                                                                                                                                    | Rules parser (dev, and production when the LLM budget is exhausted)         | Fixed                                                                                                                                                                                                     |
+| Q24-4 | P3     | The dev parser missed screen size, energy rating, battery, processor, GPU and bare storage; and product-line brands.                                                                                                   | Rules parser (dev, and production when the LLM budget is exhausted)         | Fixed                                                                                                                                                                                                     |
+| Q24-5 | P2     | "except anything above 18000" is read as a **minimum** of ₹18,000. Grounding (`is_stated`) checks that an amount is present, **not its direction**, so production would also accept an LLM that flipped it.            | Production grounding                                                        | **Fixed** (round 2): `stated_directions()` reads each amount's direction from the user's words, including negation; the validator moves a budget the model put on the wrong side, with a warning. Tested. |
+| Q24-6 | P3     | "Pixel 8" doesn't imply smartphones.                                                                                                                                                                                   | Rules parser (dev, and production when the LLM budget is exhausted)         | Open, by choice: inferring a category from a product line is too speculative.                                                                                                                             |
 
 ## Not measured (and why)
 

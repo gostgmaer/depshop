@@ -7,6 +7,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from typing import Literal
+
+Direction = Literal["min", "max"]
 
 _MULT = {
     "k": 1_000,
@@ -87,17 +90,56 @@ def parse_budget(text: str) -> tuple[int | None, int | None]:
         lo, hi = sorted((amounts[0].rupees, amounts[1].rupees))
         return lo, hi
     first = amounts[0]
-    before = t[max(0, first.start - 16) : first.start]
-    if re.search(r"(above|over|more than|at least|min(?:imum)?|from|starting)\s*$", before):
+    direction = amount_direction(text, first)
+    if direction == "min":
         return first.rupees, None
-    if re.search(
-        r"(under|below|less than|upto|up to|within|budget(?: of)?|max(?:imum)?|cheaper than)\s*$", before
-    ):
+    if direction == "max":
         return None, first.rupees
-    # Hindi/Hinglish puts the direction AFTER the amount: "20k ke andar", "15000 tak", "10k se zyada".
-    after = t[first.end : first.end + 16]
-    if re.match(_HINGLISH_MAX, after):
-        return None, first.rupees
-    if re.match(_HINGLISH_MIN, after):
-        return first.rupees, None
     return None, None
+
+
+_MIN_BEFORE = re.compile(r"(above|over|more than|at least|min(?:imum)?|from|starting)\s*$")
+_MAX_BEFORE = re.compile(
+    r"(under|below|less than|upto|up to|within|budget(?: of)?|max(?:imum)?|cheaper than|not exceeding)\s*$"
+)
+# A negation shortly before a direction word flips it: "not more than X" and
+# "except anything above X" are maximums; "not under X" is a minimum.
+_NEGATION = re.compile(
+    # Only filler words may sit between the negation and the direction word, so a brand
+    # ("Nothing phone under 40k") or an exclusion ("except Samsung under 30000") never flips it.
+    r"\b(not|no|never|except|excluding|nothing|anything but)"
+    r"(?:\s+(?:anything|any|something|one|priced|costing|that is|which is))?\s*$"
+)
+
+
+def amount_direction(text: str, amount: Amount) -> Direction | None:
+    """Whether the user's own words make this amount a minimum or a maximum (None = unstated)."""
+    t = text.lower()
+    before = t[max(0, amount.start - 40) : amount.start]
+    rules: tuple[tuple[re.Pattern[str], Direction, Direction], ...] = (
+        (_MIN_BEFORE, "min", "max"),
+        (_MAX_BEFORE, "max", "min"),
+    )
+    for pattern, direction, flipped in rules:
+        if m := pattern.search(before):
+            return flipped if _NEGATION.search(before[: m.start()]) else direction
+    # Hindi/Hinglish puts the direction AFTER the amount: "20k ke andar", "15000 tak", "10k se zyada".
+    after = t[amount.end : amount.end + 16]
+    if re.match(_HINGLISH_MAX, after):
+        return "max"
+    if re.match(_HINGLISH_MIN, after):
+        return "min"
+    return None
+
+
+def stated_directions(rupees: int, text: str) -> set[Direction]:
+    """Directions the query gives this exact amount (empty when it appears without one).
+
+    A range ("between A and B", "A to B") makes its lower end a minimum and its
+    upper end a maximum."""
+    amounts = extract_rupee_amounts(text)
+    lo, hi = parse_budget(text)
+    if lo is not None and hi is not None:
+        bounds: tuple[tuple[Direction, int], ...] = (("min", lo), ("max", hi))
+        return {d for d, v in bounds if v == rupees}
+    return {d for a in amounts if a.rupees == rupees and (d := amount_direction(text, a)) is not None}

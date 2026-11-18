@@ -58,3 +58,13 @@
 {"id": "h18", "split": "holdout", "query": "Godrej 1 ton window AC", "expect": {"category": "air-conditioners", "brands": ["godrej"], "specs": {"capacity": "1ton"}}}
 {"id": "h19", "split": "holdout", "query": "phones that dropped in price this month", "expect": {"category": "smartphones", "sort_mode": "price_drop"}}
 {"id": "h20", "split": "holdout", "query": "iQOO phone with 256GB storage under 35k", "expect": {"category": "smartphones", "brands": ["iqoo"], "max_price_rupees": 35000, "specs": {"storage": "256gb"}}}
+{"id": "h21", "split": "holdout", "query": "Realme narzo phone below 15k with 6GB RAM", "expect": {"category": "smartphones", "brands": ["realme"], "max_price_rupees": 15000, "specs": {"ram": "6gb"}}}
+{"id": "h22", "split": "holdout", "query": "laptop above ₹1,00,000 with 32GB RAM", "expect": {"category": "laptops", "min_price_rupees": 100000, "specs": {"ram": "32gb"}}}
+{"id": "h23", "split": "holdout", "query": "Bose headphones not more than 25000", "expect": {"category": "audio", "brands": ["bose"], "max_price_rupees": 25000}}
+{"id": "h24", "split": "holdout", "query": "TV 30000 se kam 43 inch", "expect": {"category": "televisions", "max_price_rupees": 30000, "specs": {"screen_size": "43inch"}}}
+{"id": "h25", "split": "holdout", "query": "Blue Star 1.5 ton AC on Croma", "expect": {"category": "air-conditioners", "brands": ["blue star"], "specs": {"capacity": "1.5ton"}, "marketplaces": ["croma"]}}
+{"id": "h26", "split": "holdout", "query": "kurti under 800 rupees", "expect": {"category": "womens-clothing", "max_price_rupees": 800}}
+{"id": "h27", "split": "holdout", "query": "Xiaomi tablet with the biggest price drop", "expect": {"category": "tablets", "brands": ["xiaomi"], "sort_mode": "price_drop"}}
+{"id": "h28", "split": "holdout", "query": "microwave with at least 15% off, I have an SBI credit card", "expect": {"category": "kitchen-appliances", "min_discount_percent": 15, "payment_banks": ["SBI"], "card_types": ["CREDIT"]}}
+{"id": "h29", "split": "holdout", "query": "fitness band from 2000 to 4000", "expect": {"category": "wearables", "min_price_rupees": 2000, "max_price_rupees": 4000}}
+{"id": "h30", "split": "holdout", "query": "Adidas sneakers cheaper than ₹5,000", "expect": {"category": "footwear", "brands": ["adidas"], "max_price_rupees": 5000}}

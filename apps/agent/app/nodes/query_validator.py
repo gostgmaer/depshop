@@ -17,7 +17,7 @@ from app.providers.rules import MARKETPLACES, category_from_text
 from app.schemas.intent import ExtractedIntent, ShoppingFilters, SortMode, Validation
 from app.schemas.internal import CategoryRef
 from app.state.state import ShoppingSearchState
-from app.utils.money import is_stated
+from app.utils.money import is_stated, stated_directions
 
 _KEY = re.compile(r"[^a-z0-9]")
 
@@ -40,6 +40,22 @@ def match_category(intent: ExtractedIntent, categories: list[CategoryRef]) -> st
         if slug in by_slug:
             return slug
     return None
+
+
+def fix_budget_direction(
+    min_paise: int | None, max_paise: int | None, query: str
+) -> tuple[int | None, int | None, list[str]]:
+    """Moves a grounded budget to the bound the query's wording states, with a warning."""
+    warnings: list[str] = []
+    if max_paise is not None and stated_directions(max_paise // 100, query) == {"min"} and min_paise is None:
+        warnings.append(f"Read ₹{max_paise // 100:,} as a minimum, as the query states it.")
+        min_paise, max_paise = max_paise, None
+    elif (
+        min_paise is not None and stated_directions(min_paise // 100, query) == {"max"} and max_paise is None
+    ):
+        warnings.append(f"Read ₹{min_paise // 100:,} as a maximum, as the query states it.")
+        min_paise, max_paise = None, min_paise
+    return min_paise, max_paise, warnings
 
 
 def marketplace_slugs(names: list[str]) -> list[str]:
@@ -71,6 +87,11 @@ async def query_validator(state: ShoppingSearchState, deps: AgentDeps) -> dict[s
                 min_paise = None
             else:
                 max_paise = None
+    # Direction: the amount is the user's, and so is its direction. If the query's own
+    # words make it the other bound ("not more than ₹25,000" read as a minimum), follow
+    # the words. An amount stated without a direction keeps the model's reading.
+    min_paise, max_paise, moved = fix_budget_direction(min_paise, max_paise, query)
+    warnings.extend(moved)
     if isinstance(explicit.get("minPricePaise"), int):
         min_paise = int(explicit["minPricePaise"])
     if isinstance(explicit.get("maxPricePaise"), int):
