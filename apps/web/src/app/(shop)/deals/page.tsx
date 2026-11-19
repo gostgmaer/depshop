@@ -5,7 +5,7 @@ import { DealsView } from "./deals-view";
 export const metadata: Metadata = {
   title: "Deals",
   description:
-    "Current deals from products DealMind has already found: priced below the marketplace's stated MRP, in stock and recently seen.",
+    "Current deals from the connected stores: well below the store's stated MRP, in stock and recently seen. Search them by product, brand or category.",
 };
 
 export default function DealsPage() {

@@ -21,3 +21,4 @@ export * from "./mock/mock-connector.js";
 export * from "./mock/seed-mock-sources.js";
 export * from "./default-registry.js";
 export * from "./core/executor/lookup.js";
+export * from "./core/deals/deal-feed-runner.js";

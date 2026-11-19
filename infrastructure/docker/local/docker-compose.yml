@@ -33,6 +33,10 @@ x-app-env: &app-env
   BILLING_PROVIDER: sandbox
   # Free during launch: every account gets this plan at no cost (empty = normal billing).
   LAUNCH_FREE_PLAN: ${LAUNCH_FREE_PLAN:-PRO}
+  DEAL_MIN_DISCOUNT_PERCENT: ${DEAL_MIN_DISCOUNT_PERCENT:-20}
+  LIVE_SEARCH_ENABLED: ${LIVE_SEARCH_ENABLED:-false}
+  DEALS_FEED_ENABLED: ${DEALS_FEED_ENABLED:-true}
+  DEALS_FEED_INTERVAL_MINUTES: ${DEALS_FEED_INTERVAL_MINUTES:-60}
   # Affiliate / marketplace credentials (empty = not connected; links go out untagged).
   AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
   AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}

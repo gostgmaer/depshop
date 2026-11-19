@@ -78,7 +78,9 @@ describe("mobile tab bar", () => {
 
   it("marks exactly one tab for every main area", () => {
     expect(activeTab("/dashboard")).toEqual(["Home"]);
-    expect(activeTab("/search/123")).toEqual(["Search"]);
+    // Searching happens on Deals; past searches still belong to it.
+    expect(activeTab("/deals")).toEqual(["Deals"]);
+    expect(activeTab("/search/123")).toEqual(["Deals"]);
     expect(activeTab("/watchlists/9")).toEqual(["Watchlists"]);
     expect(activeTab("/alerts")).toEqual(["Alerts"]);
     for (const p of ["/settings/notifications", "/billing", "/notifications", "/history"]) {

@@ -5,6 +5,7 @@
 import type {
   AlertStatusValue,
   CreateSearchInput,
+  DealPolicy,
   NotificationCategoryValue,
   BillingIntervalValue,
 } from "@dealmind/shared";
@@ -84,8 +85,10 @@ export const catalog = {
       opts,
     ),
   /** Current verified deals from products already in the catalog (no marketplace is contacted). */
-  deals: (q: { page?: number; pageSize?: number; category?: string } = {}) =>
+  deals: (q: { page?: number; pageSize?: number; category?: string; q?: string } = {}) =>
     apiPage<Deal>(`/deals${queryString(q)}`),
+  /** Minimum discount that counts as a deal, and whether live store search is on. */
+  dealPolicy: () => api<DealPolicy>("GET", "/deals/policy"),
   products: (q: ProductQuery = {}, opts?: RequestOptions) =>
     apiPage<ProductSummary>(
       `/products${queryString({ ...q, inStock: q.inStock === undefined ? undefined : String(q.inStock) })}`,

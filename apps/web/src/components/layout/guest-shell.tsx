@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { ViewerProvider } from "@/lib/viewer";
 
 const GUEST_LINKS = [
-  { href: "/search", label: "Search" },
   { href: "/deals", label: "Deals" },
   { href: "/categories", label: "Categories" },
   { href: "/compare", label: "Compare" },

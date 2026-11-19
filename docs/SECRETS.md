@@ -193,6 +193,8 @@ Rotating the VAPID pair drops every existing push subscription.
 
 ## 13. Tuning (all have working defaults)
 
+**Deals:** `DEAL_MIN_DISCOUNT_PERCENT` (api, worker; default 20, must match), `LIVE_SEARCH_ENABLED` (api; default `false` = shoppers search stored deals), `DEALS_FEED_ENABLED` / `DEALS_FEED_INTERVAL_MINUTES` (worker; default `true` / 60). See `CATALOG.md` "Deals".
+
 `WORKER_CONCURRENCY`, `NOTIFICATION_CONCURRENCY`, `PRICE_TRACKING_CONCURRENCY`,
 `TRACKING_ENABLED`, `TRACKING_SOURCE_SHARE`, `TRACKING_MAX_QUEUED`, `AGENT_TIMEOUT_SECONDS`,
 `AGENT_MAX_CONNECTIONS`, `CORS_ORIGINS` (normally empty), `TRAEFIK_LOG_LEVEL`,

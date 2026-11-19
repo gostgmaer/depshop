@@ -9,6 +9,7 @@
  *    hourly cleanup and a dead-letter queue. See docs/TRACKING.md.
  */
 import {
+  DealFeedRunner,
   HealthMonitor,
   PrismaSourceConfigProvider,
   PrismaSourceStatusStore,
@@ -26,9 +27,12 @@ import {
 import { SharedServiceEmailProvider, WebPushProvider } from "@dealmind/notifications";
 import { NotificationClient } from "@easydev_org/notification-sdk";
 import { createPrismaClient } from "@dealmind/db";
+import { invalidateProductCaches } from "@dealmind/catalog";
+import { CatalogImporter, MatchingEngine } from "@dealmind/intelligence";
 import {
   QueueName,
   billingControlJob,
+  dealsControlJob,
   redisConnectionFromUrl,
   shoppingSearchJob,
 } from "@dealmind/queue";
@@ -38,6 +42,7 @@ import { writeFile } from "node:fs/promises";
 import { pino } from "pino";
 import { z } from "zod";
 import { AgentClient } from "./agent-client.js";
+import { syncDeals } from "./processors/deals-feed.processor.js";
 import { processShoppingSearch } from "./search-processor.js";
 import { TrackingMetrics } from "./services/tracking-metrics.js";
 import { notifySearchFinished } from "./services/search-notifications.js";
@@ -71,6 +76,13 @@ const env = z
     AGENT_USER_CONTEXT_SECRET: z.string().min(32),
     AGENT_TIMEOUT_SECONDS: z.coerce.number().int().min(10).max(900).default(180),
     LOG_LEVEL: z.string().default("info"),
+    // ── Deals feed: discounted products from the stores' feeds ──
+    DEALS_FEED_ENABLED: z.enum(["true", "false"]).default("true"),
+    DEALS_FEED_INTERVAL_MINUTES: z.coerce.number().int().min(15).max(1_440).default(60),
+    /** Smallest discount off MRP that is stored as a deal (same value as the API). */
+    DEAL_MIN_DISCOUNT_PERCENT: z.coerce.number().int().min(1).max(90).default(20),
+    DEALS_FEED_MAX_PAGES: z.coerce.number().int().min(1).max(1_000).default(50),
+    DEALS_FEED_MAX_ITEMS: z.coerce.number().int().min(1).max(100_000).default(5_000),
     // ── Global price tracking ──
     TRACKING_ENABLED: z.enum(["true", "false"]).default("true"),
     TRACKING_SCHEDULER_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
@@ -378,6 +390,65 @@ if (
     log.info("billing reconcile off: the sandbox provider lives in the API process only");
 }
 
+// ── Deals feed: hourly sync of the stores' discounted products into the catalog ──
+const dealsQueue = new Queue(QueueName.dealsControl, { connection, prefix: bullPrefix });
+let dealsWorker: Worker | null = null;
+if (env.DEALS_FEED_ENABLED === "true") {
+  const onRedisError = (err: unknown) =>
+    log.warn({ err: (err as Error).message }, "redis unavailable for the deals feed");
+  const runner = new DealFeedRunner(registry, sources, {
+    allowMocks,
+    // The stores' per-minute budgets are shared with search and price tracking.
+    rateLimiter: new RedisRateLimiter(redis, prefix, onRedisError),
+    maxPagesPerSource: env.DEALS_FEED_MAX_PAGES,
+    maxItemsPerSource: env.DEALS_FEED_MAX_ITEMS,
+  });
+  const importer = new CatalogImporter(prisma, {
+    engine: new MatchingEngine(),
+    onProductsChanged: (ids) => invalidateProductCaches(redis, prefix, ids),
+  });
+  dealsWorker = new Worker(
+    QueueName.dealsControl,
+    async (job) => {
+      dealsControlJob.parse(job.data);
+      const r = await syncDeals({
+        runner,
+        importer,
+        minDiscountBp: env.DEAL_MIN_DISCOUNT_PERCENT * 100,
+        log,
+      });
+      log.info(
+        {
+          imported: r.imported,
+          review: r.review,
+          rejected: r.rejected,
+          sources: r.sources.map((x) => ({
+            slug: x.slug,
+            status: x.status,
+            reason: x.reason,
+            accepted: x.accepted,
+          })),
+        },
+        "deals feed synced",
+      );
+      return { imported: r.imported, review: r.review, rejected: r.rejected };
+    },
+    // One sync at a time; a full feed can take a while.
+    { connection, prefix: bullPrefix, concurrency: 1, lockDuration: 15 * 60_000 },
+  );
+  dealsWorker.on("failed", (job, err) =>
+    log.error({ jobId: job?.id, err: err.message }, "deals feed sync failed"),
+  );
+  await dealsQueue.upsertJobScheduler(
+    "deals-sync",
+    { every: env.DEALS_FEED_INTERVAL_MINUTES * 60_000 },
+    { name: "sync", data: { task: "sync" } },
+  );
+} else {
+  await dealsQueue.removeJobScheduler("deals-sync");
+  log.warn("deals feed disabled (DEALS_FEED_ENABLED=false)");
+}
+
 for (const w of [searchWorker, healthWorker]) {
   w.on("failed", (job, err) =>
     log.error({ queue: w.name, jobId: job?.id, err: err.message }, "job failed"),
@@ -418,6 +489,8 @@ async function shutdown(signal: string): Promise<void> {
     notificationWorker.close(),
     billingWorker?.close(),
     billingQueue.close(),
+    dealsWorker?.close(),
+    dealsQueue.close(),
     ...trackingWorkers.map((w) => w.close()),
   ]);
   await Promise.all([

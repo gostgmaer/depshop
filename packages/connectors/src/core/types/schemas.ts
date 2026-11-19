@@ -44,6 +44,8 @@ export const connectorCapabilitiesSchema = z.object({
   shipping: z.boolean(),
   promotions: z.boolean(),
   maxResultsPerRequest: z.number().int().min(1),
+  /** Can list currently discounted products in bulk (`fetchDeals`). */
+  dealFeed: z.boolean().optional(),
 });
 export type ConnectorCapabilities = z.infer<typeof connectorCapabilitiesSchema>;
 

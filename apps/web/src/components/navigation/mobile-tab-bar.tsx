@@ -6,7 +6,7 @@ import {
   Home,
   LayoutDashboard,
   LogIn,
-  Sparkles,
+  LayoutGrid,
   Star,
   Tag,
   UserRound,
@@ -23,7 +23,7 @@ import { type NavItem, isActive } from "./nav-items";
  */
 export const TAB_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
-  { href: "/search", label: "Search", icon: Sparkles },
+  { href: "/deals", label: "Deals", icon: Tag, match: ["/search"] },
   { href: "/watchlists", label: "Watchlists", icon: Star },
   { href: "/alerts", label: "Alerts", icon: BellRing },
   {
@@ -37,8 +37,8 @@ export const TAB_ITEMS: NavItem[] = [
 /** Visitors without an account (public shopping pages). */
 export const GUEST_TAB_ITEMS: NavItem[] = [
   { href: "/", label: "Home", icon: Home },
-  { href: "/search", label: "Search", icon: Sparkles },
-  { href: "/deals", label: "Deals", icon: Tag },
+  { href: "/deals", label: "Deals", icon: Tag, match: ["/search"] },
+  { href: "/categories", label: "Categories", icon: LayoutGrid, match: ["/products"] },
   { href: "/compare", label: "Compare", icon: GitCompareArrows },
   { href: "/login", label: "Sign in", icon: LogIn },
 ];

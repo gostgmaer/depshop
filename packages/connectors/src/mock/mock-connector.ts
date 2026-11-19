@@ -6,7 +6,12 @@
  * provenance `MOCK`, the source rows are flagged `isSample`, and the executor
  * refuses to run mock connectors unless explicitly allowed (never in production).
  */
-import type { ConnectorCallContext, ShoppingConnector } from "../core/interfaces/connector.js";
+import type {
+  ConnectorCallContext,
+  DealFeedPage,
+  DealFeedRequest,
+  ShoppingConnector,
+} from "../core/interfaces/connector.js";
 import { sleep } from "../core/retry/retry.js";
 import { ConnectorError } from "../core/types/errors.js";
 import type {
@@ -131,6 +136,7 @@ export class MockConnector implements ShoppingConnector {
       shipping: true,
       promotions: true,
       maxResultsPerRequest: 50,
+      dealFeed: true,
     };
   }
 
@@ -202,6 +208,20 @@ export class MockConnector implements ShoppingConnector {
       )
       .slice(0, request.limit);
     return { sourceId: this.id, items, totalAvailable: items.length, fetchedAt: new Date() };
+  }
+
+  /** The fixtures this store sells at least `minDiscountBp` below MRP (one page). */
+  async fetchDeals(request: DealFeedRequest, ctx: ConnectorCallContext): Promise<DealFeedPage> {
+    if (this.options.latencyMs) await sleep(this.options.latencyMs, ctx.signal);
+    const items = this.fixtures
+      .map((f) => this.toItem(f))
+      .filter(
+        (i) =>
+          i.mrpPaise !== undefined &&
+          i.mrpPaise > i.sellingPricePaise &&
+          ((i.mrpPaise - i.sellingPricePaise) * 10_000) / i.mrpPaise >= request.minDiscountBp,
+      );
+    return { sourceId: this.id, items, fetchedAt: new Date() };
   }
 
   async getProduct(externalId: string): Promise<NormalizedProductInput | null> {

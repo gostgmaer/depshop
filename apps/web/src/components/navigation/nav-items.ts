@@ -8,7 +8,6 @@ import {
   LayoutGrid,
   type LucideIcon,
   Settings,
-  Sparkles,
   Star,
   Tag,
 } from "lucide-react";
@@ -26,8 +25,7 @@ export const NAV_SECTIONS: { label: string; items: NavItem[] }[] = [
     label: "Shop",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/search", label: "AI Search", icon: Sparkles },
-      { href: "/deals", label: "Deals", icon: Tag },
+      { href: "/deals", label: "Deals", icon: Tag, match: ["/search"] },
       { href: "/categories", label: "Categories", icon: LayoutGrid, match: ["/products"] },
       { href: "/compare", label: "Compare", icon: GitCompareArrows },
     ],

@@ -4,6 +4,7 @@
  */
 import {
   dealView,
+  dealPolicyView,
   dealsQuery,
   paginationOf,
   AppError,
@@ -237,10 +238,10 @@ async function historyLimit(
 }
 
 /** Public deals from already-stored offers (no marketplace is contacted). */
-export const dealRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = async (
-  app,
-  { catalog },
-) => {
+export const dealRoutes: FastifyPluginAsyncZod<{
+  catalog: CatalogService;
+  liveSearch: boolean;
+}> = async (app, { catalog, liveSearch }) => {
   app.get(
     "/",
     {
@@ -256,6 +257,18 @@ export const dealRoutes: FastifyPluginAsyncZod<{ catalog: CatalogService }> = as
       const { items, total } = await catalog.deals(req.query);
       return paginated(items, paginationOf(req.query, total));
     },
+  );
+
+  app.get(
+    "/policy",
+    {
+      schema: {
+        tags: ["catalog"],
+        summary: "What counts as a deal (minimum discount off MRP) and whether live search is on",
+        response: { 200: ok(dealPolicyView) },
+      },
+    },
+    async () => ({ minDiscountPercent: catalog.dealMinDiscountBp / 100, liveSearch }),
   );
 };
 

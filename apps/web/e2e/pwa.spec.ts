@@ -166,7 +166,7 @@ test("mobile bottom navigation: five tabs, current page marked, back button work
   await expect(tabs).toBeVisible();
   await expect(tabs.getByRole("link")).toHaveText([
     "Home",
-    "Search",
+    "Deals",
     "Watchlists",
     "Alerts",
     "Account",

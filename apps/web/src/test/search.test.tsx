@@ -91,6 +91,12 @@ const page = <T,>(items: T[]) => ({
   pagination: { page: 1, pageSize: 20, total: items.length, totalPages: 1 },
 });
 
+// These suites test the live search bar: the deal policy says live search is on.
+vi.mock("@/hooks/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/queries")>()),
+  useDealPolicy: () => ({ data: { minDiscountPercent: 20, liveSearch: true } }),
+}));
+
 vi.mock("@/services", () => ({
   catalog: {
     categoryTree: vi.fn(async () => [

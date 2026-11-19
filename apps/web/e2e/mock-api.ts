@@ -251,32 +251,44 @@ const server = createServer((req, res) => {
       ok({ items: [], recommendations: recommendations("00000000-0000-7000-8000-000000000002") }),
     );
 
+  // Live search stays on here so the live-search flows keep their browser coverage;
+  // deals-only mode is covered by the unit tests and the API tests.
+  if (path === "/deals/policy")
+    return send(res, 200, ok({ minDiscountPercent: 20, liveSearch: true }));
   if (path === "/deals")
     return send(
       res,
       200,
-      page([
-        {
-          productId: PRODUCT_ID,
-          variantId: "20000000-0000-7000-8000-000000000001",
-          name: "Acme Nova 7 5G",
-          brand: "Acme",
-          imageUrl: null,
-          category: { slug: "smartphones", name: "Smartphones" },
-          attributes: { ram_gb: 8, storage_gb: 256 },
-          offer: {
-            sourceSlug: "mock_1",
-            sourceName: "Mock Store 1",
-            isSample: true,
-            sellingPricePaise: 2_449_900,
-            mrpPaise: 2_999_900,
-            shippingPaise: 0,
-            discountBp: 1_833,
-            observedAt: new Date().toISOString(),
+      page(
+        [
+          {
+            productId: PRODUCT_ID,
+            variantId: "20000000-0000-7000-8000-000000000001",
+            name: "Acme Nova 7 5G",
+            brand: "Acme",
+            imageUrl: null,
+            category: { slug: "smartphones", name: "Smartphones" },
+            attributes: { ram_gb: 8, storage_gb: 256 },
+            offer: {
+              sourceSlug: "mock_1",
+              sourceName: "Mock Store 1",
+              isSample: true,
+              sellingPricePaise: 2_399_900,
+              mrpPaise: 2_999_900,
+              shippingPaise: 0,
+              discountBp: 2_000,
+              observedAt: new Date().toISOString(),
+            },
+            offerCount: 2,
           },
-          offerCount: 2,
-        },
-      ]),
+        ].filter((d) =>
+          (url.searchParams.get("q") ?? "")
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean)
+            .every((w) => `${d.name} ${d.brand} ${d.category.name}`.toLowerCase().includes(w)),
+        ),
+      ),
     );
 
   // ── guest search (no account): POST creates a guest; a guest may read its own search ──

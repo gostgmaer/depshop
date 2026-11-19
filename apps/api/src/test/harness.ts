@@ -64,6 +64,8 @@ export async function createTestApp(
     IAM_BASE_URL: FAKE_IAM_BASE,
     REDIS_URL: testRedisUrl(),
     REDIS_KEY_PREFIX: prefix,
+    // Most suites exercise live search; deals-only mode is tested explicitly.
+    LIVE_SEARCH_ENABLED: "true",
     ...envOverrides,
   });
   const prisma = createPrismaClient({ url });

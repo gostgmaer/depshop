@@ -56,6 +56,8 @@ export interface CatalogOptions {
   ttl: CatalogCacheTtls;
   /** Offers not observed for this long are stale (never shown as live). */
   offerStaleAfterMs: number;
+  /** Smallest discount off MRP listed as a deal, in basis points (default 2000 = 20%). */
+  dealMinDiscountBp?: number;
   /** Connector execution metrics (shared Redis store written by the worker). */
   metrics?: MetricsStore;
   now?: () => Date;
@@ -169,14 +171,28 @@ export class CatalogService {
     );
   }
 
+  /** Smallest discount listed as a deal, in basis points. */
+  get dealMinDiscountBp(): number {
+    return this.options.dealMinDiscountBp ?? 2_000;
+  }
+
   /**
    * Public deals from offers already stored (never contacts a marketplace). One card
    * per variant: its cheapest delivered offer among current, in-stock, still-listed
-   * offers from ACTIVE sources priced below their stated MRP. Deepest discount first.
+   * offers from ACTIVE sources at least `dealMinDiscountBp` below their stated MRP.
+   * `q`: every word must appear in the product name, brand or category. Deepest discount first.
    */
-  async deals(q: { page: number; pageSize: number; category?: string }) {
+  async deals(q: { page: number; pageSize: number; category?: string; q?: string }) {
     const cutoff = this.freshCutoff();
     const category = q.category ?? null;
+    const minBp = this.dealMinDiscountBp;
+    // Letters and digits only: nothing a LIKE pattern could interpret.
+    const words = (q.q ?? "")
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length >= 2)
+      .slice(0, 8);
+    const terms = words.length ? words : null;
     const offset = (q.page - 1) * q.pageSize;
     const rows = await this.prisma.$queryRaw<
       {
@@ -220,6 +236,9 @@ export class CatalogService {
           AND o."mrpPaise" IS NOT NULL
           AND o."mrpPaise" > o."sellingPricePaise"
           AND (${category}::text IS NULL OR c."slug" = ${category}::text)
+          AND (${terms}::text[] IS NULL OR NOT EXISTS (
+                SELECT 1 FROM unnest(${terms}::text[]) AS w
+                WHERE position(w IN lower(p."name" || ' ' || p."brand" || ' ' || COALESCE(c."name", ''))) = 0))
       ),
       best AS (
         SELECT DISTINCT ON ("variantId") *, COUNT(*) OVER (PARTITION BY "variantId") AS "offerCount"
@@ -235,7 +254,7 @@ export class CatalogService {
       JOIN "Product" p ON p."id" = b."productId"
       JOIN "ProductVariant" v ON v."id" = b."variantId"
       LEFT JOIN "Category" c ON c."id" = p."categoryId"
-      WHERE b."discountBp" >= 1
+      WHERE b."discountBp" >= ${minBp}
       ORDER BY b."discountBp" DESC, b.delivered ASC, b."variantId"
       LIMIT ${q.pageSize} OFFSET ${offset}`;
     const total = rows[0] ? Number(rows[0].total) : 0;

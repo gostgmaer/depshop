@@ -383,6 +383,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       history: env.CATALOG_HISTORY_TTL_SECONDS,
     },
     offerStaleAfterMs: env.CATALOG_OFFER_STALE_HOURS * 3_600_000,
+    dealMinDiscountBp: env.DEAL_MIN_DISCOUNT_PERCENT * 100,
     metrics: new RedisMetricsStore(redis, env.REDIS_KEY_PREFIX, (err) =>
       app.log.warn({ err: (err as Error).message }, "connector metrics unavailable"),
     ),
@@ -607,10 +608,15 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
         entitlements,
       });
       await v1.register(sourceRoutes, { prefix: "/sources", catalog });
-      await v1.register(dealRoutes, { prefix: "/deals", catalog });
+      await v1.register(dealRoutes, {
+        prefix: "/deals",
+        catalog,
+        liveSearch: env.LIVE_SEARCH_ENABLED === "true",
+      });
       await v1.register(searchRoutes, {
         prefix: "/search",
         search,
+        liveSearch: env.LIVE_SEARCH_ENABLED === "true",
         redis,
         redisPrefix: env.REDIS_KEY_PREFIX,
       });

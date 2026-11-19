@@ -22,6 +22,7 @@
     "@dealmind/catalog": "workspace:*",
     "@dealmind/connectors": "workspace:*",
     "@dealmind/db": "workspace:*",
+    "@dealmind/intelligence": "workspace:*",
     "@dealmind/notifications": "workspace:*",
     "@dealmind/queue": "workspace:*",
     "@dealmind/shared": "workspace:*",

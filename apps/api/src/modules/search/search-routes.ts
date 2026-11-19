@@ -23,6 +23,11 @@ const idParam = z.object({ id: z.string().uuid() });
 
 export interface SearchRouteDeps {
   search: SearchService;
+  /**
+   * Live marketplace search. Off: submitting is refused (shoppers search the stored deals at
+   * /deals?q=…); existing searches stay readable.
+   */
+  liveSearch?: boolean;
   /** Redis for the progress stream (a dedicated subscriber per connection). */
   redis?: Redis;
   redisPrefix?: string;
@@ -33,7 +38,7 @@ const HEARTBEAT_MS = 15_000;
 
 export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
   app,
-  { search, redis, redisPrefix },
+  { search, liveSearch = true, redis, redisPrefix },
 ) => {
   // Guest search: no account needed. Submitting creates a guest identity (signed cookie)
   // when there is neither a session nor a guest; reading needs one or the other, and a
@@ -44,7 +49,16 @@ export const searchRoutes: FastifyPluginAsyncZod<SearchRouteDeps> = async (
     {
       // Searches are expensive downstream: stricter per-IP limit on submission.
       config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
-      preHandler: app.ensureGuest,
+      // Checked first, so a refused submission never creates a guest identity.
+      preHandler: [
+        async () => {
+          if (!liveSearch)
+            throw AppError.forbidden(
+              "Live store search is turned off. Search the current deals instead.",
+            );
+        },
+        app.ensureGuest,
+      ],
       schema: {
         tags: ["search"],
         summary: "Submit a shopping search (asynchronous; returns PENDING)",

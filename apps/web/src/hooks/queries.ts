@@ -26,7 +26,9 @@ import {
 export const keys = {
   categories: ["categories"] as const,
   products: (q: ProductQuery) => ["products", q] as const,
-  deals: (q: { page: number; category?: string }) => ["deals", q] as const,
+  deals: (q: { page: number; pageSize?: number; category?: string; q?: string }) =>
+    ["deals", q] as const,
+  dealPolicy: ["deals", "policy"] as const,
   product: (id: string) => ["product", id] as const,
   pricing: (id: string, variantId?: string, includeStale = false) =>
     ["product", id, "pricing", variantId ?? "all", includeStale ? "stale" : "fresh"] as const,
@@ -59,12 +61,15 @@ export const keys = {
 // ── Catalog ──
 export const useCategories = () =>
   useQuery({ queryKey: keys.categories, queryFn: catalog.categoryTree, staleTime: 10 * 60_000 });
-export const useDeals = (q: { page: number; category?: string }) =>
+export const useDeals = (q: { page: number; pageSize?: number; category?: string; q?: string }) =>
   useQuery({
     queryKey: keys.deals(q),
-    queryFn: () => catalog.deals({ ...q, pageSize: 24 }),
+    queryFn: () => catalog.deals({ pageSize: 24, ...q }),
     placeholderData: keepPreviousData,
   });
+/** What counts as a deal; rarely changes (server configuration). */
+export const useDealPolicy = () =>
+  useQuery({ queryKey: keys.dealPolicy, queryFn: catalog.dealPolicy, staleTime: 10 * 60_000 });
 export const useProducts = (q: ProductQuery, enabled = true) =>
   useQuery({
     queryKey: keys.products(q),

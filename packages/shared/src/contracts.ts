@@ -168,8 +168,17 @@ export const dealsQuery = z
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(48).default(24),
     category: z.string().trim().min(1).max(100).optional(),
+    /** Words that must all appear in the product name, brand or category. */
+    q: z.string().trim().min(2).max(100).optional(),
   })
   .strict();
+/** What counts as a deal (shown to shoppers). */
+export const dealPolicyView = z.object({
+  minDiscountPercent: z.number().int(),
+  /** Live marketplace search per query; false = search looks through the stored deals. */
+  liveSearch: z.boolean(),
+});
+export type DealPolicy = z.infer<typeof dealPolicyView>;
 export const dealView = z.object({
   productId: uuid,
   variantId: uuid,

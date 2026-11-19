@@ -1,7 +1,8 @@
 /**
  * Public deals: built only from offers already stored (no marketplace call), and a
  * closed deal is hidden. "Closed" = no offer that is current (seen within the
- * freshness window), in stock, still listed and priced below its stated MRP.
+ * freshness window), in stock, still listed and at least DEAL_MIN_DISCOUNT_PERCENT (20%)
+ * below its stated MRP.
  */
 import type { DealView } from "@dealmind/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -113,8 +114,9 @@ describe("public deals", () => {
     const active = await source();
     const disabled = await source("DISABLED");
     const live = await variant("Live deal");
-    await offer(live, active.id, { price: 10_000_00, mrp: 12_000_00 });
+    await offer(live, active.id, { price: 10_000_00, mrp: 12_500_00 }); // exactly 20% off
     const cases: [string, Parameters<typeof offer>[2], string?][] = [
+      ["Under 20% off", { price: 10_100_00, mrp: 12_500_00 }],
       ["Stale", { price: 100, mrp: 200, ageHours: 48 }],
       ["Out of stock", { price: 100, mrp: 200, stock: "OUT_OF_STOCK" }],
       ["Unknown stock", { price: 100, mrp: 200, stock: "UNKNOWN" }],
@@ -150,7 +152,7 @@ describe("public deals", () => {
     const s = await source();
     const small = await variant("Small discount");
     const big = await variant("Big discount");
-    await offer(small, s.id, { price: 95_00, mrp: 100_00 });
+    await offer(small, s.id, { price: 75_00, mrp: 100_00 }); // 25%: still a 20%+ deal
     await offer(big, s.id, { price: 50_00, mrp: 100_00 });
     expect((await deals()).data.map((d) => d.name)).toEqual(["Big discount", "Small discount"]);
 
@@ -173,5 +175,32 @@ describe("public deals", () => {
     const page1 = await deals("?pageSize=1");
     expect(page1.data).toHaveLength(1);
     expect(page1.meta.pagination.total).toBe(2);
+  });
+
+  it("search: every word must match the name, brand or category (case-insensitive)", async () => {
+    const s = await source();
+    const cat = await ctx.prisma.category.create({
+      data: { slug: `phones-${uid()}`, name: "Smartphones" },
+    });
+    await offer(await variant("Nova 7 5G 128GB", cat.id), s.id, {
+      price: 18_000_00,
+      mrp: 25_000_00,
+    });
+    await offer(await variant("Stride Running Shoes"), s.id, { price: 2_000_00, mrp: 4_000_00 });
+    const names = async (q: string) =>
+      (await deals(`?q=${encodeURIComponent(q)}`)).data.map((d) => d.name);
+    expect(await names("nova")).toEqual(["Nova 7 5G 128GB"]);
+    expect(await names("ACME smartphones")).toEqual(["Nova 7 5G 128GB"]); // brand + category
+    expect(await names("running shoes")).toEqual(["Stride Running Shoes"]);
+    expect(await names("nova shoes")).toEqual([]); // all words must match
+    expect(await names("100%_off")).toEqual([]); // LIKE wildcards are not patterns
+  });
+
+  it("publishes the deal policy (minimum discount)", async () => {
+    const res = await new Agent(ctx.app).get("/api/v1/deals/policy");
+    expect(res.json<{ data: unknown }>().data).toEqual({
+      minDiscountPercent: 20,
+      liveSearch: true,
+    });
   });
 });

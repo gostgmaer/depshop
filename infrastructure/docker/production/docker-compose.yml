@@ -68,6 +68,8 @@ x-common-env: &common-env
   PAYMENT_APPLICATION_ID: ${PAYMENT_APPLICATION_ID:-dealmind}
   BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
   LAUNCH_FREE_PLAN: ${LAUNCH_FREE_PLAN:-}
+  # Deals: minimum discount off MRP (API list and worker feed must agree).
+  DEAL_MIN_DISCOUNT_PERCENT: ${DEAL_MIN_DISCOUNT_PERCENT:-20}
 
 services:
   # ── Edge ──────────────────────────────────────────────────────────────────
@@ -243,6 +245,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET}
       # First-run admin setup token (optional; generated and logged when unset). See docs/ADMIN.md.
       ADMIN_SETUP_TOKEN: ${ADMIN_SETUP_TOKEN:-}
+      LIVE_SEARCH_ENABLED: ${LIVE_SEARCH_ENABLED:-false}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY}
       COOKIE_SECURE: "true"
       API_DOCS_ENABLED: "false"
@@ -303,6 +306,8 @@ services:
       PRICE_TRACKING_CONCURRENCY: ${PRICE_TRACKING_CONCURRENCY:-8}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      DEALS_FEED_ENABLED: ${DEALS_FEED_ENABLED:-true}
+      DEALS_FEED_INTERVAL_MINUTES: ${DEALS_FEED_INTERVAL_MINUTES:-60}
     networks: [backend, egress]
     depends_on:
       postgres: { condition: service_healthy }

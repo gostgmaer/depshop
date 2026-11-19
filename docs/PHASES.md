@@ -652,3 +652,7 @@ See [pwa-architecture.md](pwa-architecture.md).
 ## First-run admin setup
 
 While no administrator exists, `/setup` creates the first one with a one-time token (printed once in the API log, or `ADMIN_SETUP_TOKEN`). The account is registered in the IAM and becomes ADMIN at its first sign-in; then setup closes. Tests: API 220 (10 new), web unit 157 (5 new). See ADMIN.md.
+
+## Deals-only catalog
+
+DealMind now loads only discounted products (≥ `DEAL_MIN_DISCOUNT_PERCENT`, default 20 %) from the stores' deals feeds every hour through the normal catalog import, shows the top deals on the home page, and searches the stored deals instead of the stores (`LIVE_SEARCH_ENABLED=false`). Flipkart's product-feed deals connector is built from the docs but not yet run live (no credentials); Amazon has no client yet; the mock stores exercise the whole flow. See CATALOG.md "Deals". Tests: API 224, worker DB 46, connectors 43, web unit 161, Playwright (desktop + mobile) pass.

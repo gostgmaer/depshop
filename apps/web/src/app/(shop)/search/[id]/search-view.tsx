@@ -30,7 +30,13 @@ import {
   SegmentedControl,
 } from "@/components/ui/misc";
 import { LoadingRows, Skeleton } from "@/components/ui/skeleton";
-import { useCancelSearch, useCreateSearch, useSearch, useSearchResults } from "@/hooks/queries";
+import {
+  useCancelSearch,
+  useCreateSearch,
+  useDealPolicy,
+  useSearch,
+  useSearchResults,
+} from "@/hooks/queries";
 import { useSearchEvents } from "@/hooks/use-search-events";
 import { ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/auth-hooks";
@@ -85,6 +91,7 @@ export function SearchView({ id }: { id: string }) {
   const results = useSearchResults(id, search.data?.status, url.page, url.sort);
   const cancel = useCancelSearch(id);
   const rerun = useCreateSearch();
+  const policy = useDealPolicy();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -116,6 +123,11 @@ export function SearchView({ id }: { id: string }) {
   const staleCount = items.filter((r) => r.offer.isStale).length;
   const runAgain = async () => {
     setRerunError(null);
+    // Live store search off: look for the same words among the current deals.
+    if (!policy.data?.liveSearch) {
+      router.push(`/deals?q=${encodeURIComponent(s.query.slice(0, 100))}`);
+      return;
+    }
     try {
       const next = await rerun.mutateAsync(toSearchInput(fromSearch(s.query, s.filters)));
       router.push(`/search/${next.id}`);
@@ -148,7 +160,11 @@ export function SearchView({ id }: { id: string }) {
             ) : (
               <Button variant="outline" onClick={() => void runAgain()} disabled={rerun.isPending}>
                 <RefreshCw aria-hidden className="size-4" />{" "}
-                {rerun.isPending ? "Starting…" : "Run again"}
+                {rerun.isPending
+                  ? "Starting…"
+                  : policy.data?.liveSearch
+                    ? "Run again"
+                    : "Search current deals"}
               </Button>
             )}
             <Button variant="ghost" aria-expanded={editing} onClick={() => setEditing((e) => !e)}>

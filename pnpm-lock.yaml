@@ -249,6 +249,9 @@ importers:
       '@dealmind/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@dealmind/intelligence':
+        specifier: workspace:*
+        version: link:../../packages/intelligence
       '@dealmind/notifications':
         specifier: workspace:*
         version: link:../../packages/notifications

@@ -98,17 +98,40 @@ categories return `404 NOT_FOUND`.
 - When they are shown, they are flagged and labeled as last-known, never as live.
 - Offers from non-ACTIVE sources are never exposed.
 
-## Deals (`GET /api/v1/deals`, public)
+## Deals: the product's core
 
-Products DealMind has **already fetched**, shown without contacting any marketplace. One card per variant: its cheapest delivered offer among offers that are:
+DealMind is **deals-only**: it collects discounted products from the stores, keeps them current, and shows only real deals. Shoppers search the stored deals; no store is contacted per query.
 
-- from an `ACTIVE` source;
-- **current** (observed within the offer freshness window, `CATALOG_OFFER_STALE_HOURS`, default 24 h);
-- in stock (`IN_STOCK` or `LIMITED`);
-- still listed (`missingSince` null, tracking state not `EXPIRED`);
-- priced **below the stated MRP** (direct discount ≥ 0.01 %).
+### Where deals come from: the deals feed (worker, `deals-control` queue)
 
-When none qualifies, the deal is **closed** and the product disappears from the page; it reappears if a fresh discounted offer is seen. Price history is never deleted. Sorted by discount, deepest first; filter by `category` slug; paginated (24 per page, max 48). Sample (mock) sources are labelled. Tests: `deals.db.test.ts` (5), `e2e/guest.spec.ts`. Web: `/deals` (public; not indexed until the catalog holds real data).
+Every `DEALS_FEED_INTERVAL_MINUTES` (default 60) the worker runs `syncDeals`:
+
+1. **Eligible stores only:** the same rules as live search (source `ACTIVE`, connector registered and enabled, credentials ready, mocks only outside production) plus the connector's `dealFeed` capability.
+2. **Fetch:** `connector.fetchDeals()` page by page (`DealFeedRunner`), within the store's per-minute budget (shared with price tracking), a timeout per page, and limits per run (`DEALS_FEED_MAX_PAGES` 50, `DEALS_FEED_MAX_ITEMS` 5000). One failing store never stops the others.
+3. **Keep only deals:** each item is validated (`normalizedProductSchema`) and kept only if it is in stock, has a listed (not indicative) price and is at least **`DEAL_MIN_DISCOUNT_PERCENT` (default 20 %) below MRP**.
+4. **Import:** through the normal `CatalogImporter` (match/deduplicate → product and variant → offer upsert → price snapshot). So every deal has a product page, offers from every store, **price history from its first sighting**, alerts/watchlists and buy links through the affiliate redirect.
+
+| Store             | Deals feed                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Flipkart          | Category **product feeds** of the Affiliate API (listing `/api/<trackingId>.json` → `…/1.0/feeds/…/category/<c>.json?inStock=true`, ≤ 500 items per page, `nextUrl`). Their DOTD/offers APIs are **banners without prices** and are not used. Built from the published docs, **never called live** (no credentials); only the API's own host is ever requested with the credentials. |
+| Amazon India      | None yet: there is no Amazon network client. The Creators API `SearchItems` documents a `minSavingPercent` filter to build on once approved.                                                                                                                                                                                                                                         |
+| Mock stores (dev) | Their fictional fixtures at ≥ the threshold, labelled sample data.                                                                                                                                                                                                                                                                                                                   |
+
+### Listing and search (`GET /api/v1/deals`, public)
+
+One card per variant: its cheapest delivered offer among offers that are from an `ACTIVE` source, **current** (observed within `CATALOG_OFFER_STALE_HOURS`, default 24 h), in stock (`IN_STOCK`/`LIMITED`), still listed (not missing or `EXPIRED`) and **at least `DEAL_MIN_DISCOUNT_PERCENT` below MRP**. Sorted by discount, deepest first; filter by `category`; **`q`**: every word (letters and digits only, up to 8) must appear in the product name, brand or category. `GET /api/v1/deals/policy` → `{ minDiscountPercent, liveSearch }` for the UI.
+
+**A deal ends on its own:** when the discount drops below the threshold, the item goes out of stock or is removed, the feed stops refreshing it; price tracking re-prices it (or it goes stale) and the list hides it. It comes back if a fresh qualifying offer is seen. Price history is never deleted.
+
+### Live search switch
+
+`LIVE_SEARCH_ENABLED` (API, default **false**): submitting a live marketplace search (`POST /api/v1/search`) is refused with 403 before any guest identity, search or job is created. Old searches stay readable. The web follows the policy: the search box searches deals, `/search` redirects to `/deals`, and "Run again" on an old search opens the deals search for the same words. Setting it to `true` restores live search everywhere.
+
+### Web
+
+Home page: deals search box and the top deals. `/deals`: search, category filter, pagination; each card opens the product page (all offers, price history, buy links). Navigation: **Deals** replaces "AI Search". Mock-store data is always labelled.
+
+Tests: connectors `deal-feed-runner.test.ts` (7), worker `deals-feed.db.test.ts` (3), API `deals.db.test.ts` (7) and `deals-only.db.test.ts` (2), web `deals.test.tsx` (4), `e2e/guest.spec.ts`.
 
 ## Caching (Redis, shared `…:cache:v1:catalog:*` keys)
 

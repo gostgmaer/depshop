@@ -23,6 +23,10 @@ connector without affiliate links. **Affiliate status never changes deal ranking
 All real sources stay **disabled until authorized**. Production forces
 `CONNECTORS_ENABLE_MOCKS=false`.
 
+## Deals feed
+
+DealMind loads only **discounted products** (≥ `DEAL_MIN_DISCOUNT_PERCENT`, default 20 %) from each connected store's feed every hour. Flipkart: its category product feeds (the DOTD/offers APIs are banners without prices). Amazon: no client yet. Once a store is ACTIVE with credentials, its deals appear on the home page and `/deals` after the next sync; check the worker log line `deals feed synced` (per store: status and items accepted). See [`../CATALOG.md`](../CATALOG.md) "Deals".
+
 ## Settings (api and worker)
 
 | Variable                                       | Where from                                                                        |

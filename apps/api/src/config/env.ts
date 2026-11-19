@@ -118,6 +118,13 @@ const envSchema = z
     PAYMENT_WEBHOOK_SECRET: z.string().min(32).optional(),
     /** Days of paid access kept after a failed renewal while payment is retried. */
     BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(14).default(3),
+    /** Smallest discount off MRP that counts as a deal (deals feed and the deals list). */
+    DEAL_MIN_DISCOUNT_PERCENT: z.coerce.number().int().min(1).max(90).default(20),
+    /**
+     * Live marketplace search per shopper query. "false" (default): search looks only
+     * through the stored deals, and the stores are contacted only by the deals feed.
+     */
+    LIVE_SEARCH_ENABLED: z.enum(["true", "false"]).default("false"),
     /** Free launch offer: every account gets this plan at no cost (empty = normal billing). */
     LAUNCH_FREE_PLAN: z.preprocess(
       (v) => (v === "" ? undefined : v),

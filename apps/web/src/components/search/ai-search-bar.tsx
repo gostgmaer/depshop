@@ -23,7 +23,13 @@ import {
 import { useForm, useWatch } from "react-hook-form";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useCreateSearch, useProductSuggestions, useSearches } from "@/hooks/queries";
+import { DealSearchBox } from "@/components/deals/deal-search-box";
+import {
+  useCreateSearch,
+  useDealPolicy,
+  useProductSuggestions,
+  useSearches,
+} from "@/hooks/queries";
 import { useDebounced } from "@/hooks/use-debounced";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { errorMessage } from "@/lib/auth-hooks";
@@ -70,25 +76,43 @@ export function buildSuggestions(
   return out.slice(0, limit);
 }
 
-/**
- * Natural-language search with autocomplete and optional explicit filters
- * (which always win over what the AI infers). The text alone is enough to
- * search: filters are never required.
- */
-export function AiSearchBar({
-  compact = false,
-  initialFilters = false,
-  initialValues,
-  submitLabel = "Search",
-  onSubmitted,
-}: {
+type SearchBarProps = {
   compact?: boolean;
   initialFilters?: boolean;
   /** Prefill (editing a previous search). */
   initialValues?: SearchFormValues;
   submitLabel?: string;
   onSubmitted?: (searchId: string) => void;
-}) {
+};
+
+/**
+ * The search box. With live store search off (the API's deal policy, the default), it
+ * searches the stored deals instead: no store is contacted per query.
+ */
+export function AiSearchBar(props: SearchBarProps) {
+  const policy = useDealPolicy();
+  if (policy.data?.liveSearch) return <LiveSearchBar {...props} />;
+  return (
+    <DealSearchBox
+      compact={props.compact ?? false}
+      initialQuery={props.initialValues?.query ?? ""}
+      submitLabel={props.compact ? "Search" : "Search deals"}
+    />
+  );
+}
+
+/**
+ * Natural-language search with autocomplete and optional explicit filters
+ * (which always win over what the AI infers). The text alone is enough to
+ * search: filters are never required.
+ */
+function LiveSearchBar({
+  compact = false,
+  initialFilters = false,
+  initialValues,
+  submitLabel = "Search",
+  onSubmitted,
+}: SearchBarProps) {
   const router = useRouter();
   const create = useCreateSearch();
   // null = "default": open from the sm breakpoint up, closed on phones (CSS, so no flash after

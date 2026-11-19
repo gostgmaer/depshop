@@ -5,6 +5,9 @@
  * (https://affiliate.flipkart.com/api-docs/af_prod_ref.html, read 2026-11):
  *   GET https://affiliate-api.flipkart.net/affiliate/1.0/search.json?query=…&resultCount=≤10
  *   GET https://affiliate-api.flipkart.net/affiliate/1.0/product.json?id=…
+ *   GET https://affiliate-api.flipkart.net/affiliate/api/<trackingId>.json (product feed listing)
+ *   GET <listing>.apiGroups.affiliate.apiListings.<category>.availableVariants.<v>.get
+ *       (category product feed, ≤ 500 items per page, `nextUrl` to continue, `inStock=true`)
  *   headers Fk-Affiliate-Id, Fk-Affiliate-Token
  *   response productInfoList[].productBaseInfoV1 / productShippingInfoV1
  * The FAQ states a limit of 20 calls/second per affiliate.
@@ -15,7 +18,12 @@
  * Listing prices are LISTED, never claimed as checkout prices.
  */
 import { z } from "zod";
-import type { ConnectorCallContext, ShoppingConnector } from "../core/interfaces/connector.js";
+import type {
+  ConnectorCallContext,
+  DealFeedPage,
+  DealFeedRequest,
+  ShoppingConnector,
+} from "../core/interfaces/connector.js";
 import { rupeesToPaise } from "../core/normalizers/offers.js";
 import { ConnectorError } from "../core/types/errors.js";
 import type {
@@ -66,6 +74,37 @@ const productInfo = z
   .passthrough();
 export type FlipkartProductInfo = z.infer<typeof productInfo>;
 
+/** Product feed listing: one feed URL per category and API version. */
+const feedListing = z
+  .object({
+    apiGroups: z.object({
+      affiliate: z.object({
+        apiListings: z.record(
+          z
+            .object({
+              availableVariants: z.record(z.object({ get: z.string() }).passthrough()),
+            })
+            .passthrough(),
+        ),
+      }),
+    }),
+  })
+  .passthrough();
+
+const feedPage = z
+  .object({
+    productInfoList: z.array(z.unknown()).default([]),
+    nextUrl: z.string().nullish(),
+  })
+  .passthrough();
+
+/** Deals-feed position: the category feed URLs and where we are in them. */
+const dealCursor = z.object({
+  urls: z.array(z.string()).max(500),
+  i: z.number().int().min(0),
+  next: z.string().optional(),
+});
+
 const searchResponse = z
   .object({ productInfoList: z.array(z.unknown()).default([]) })
   .passthrough();
@@ -110,6 +149,7 @@ export class FlipkartConnector implements ShoppingConnector {
       shipping: true,
       promotions: true,
       maxResultsPerRequest: MAX_RESULTS,
+      dealFeed: true,
     };
   }
 
@@ -121,11 +161,20 @@ export class FlipkartConnector implements ShoppingConnector {
     return missing.length ? { state: "PENDING_CREDENTIALS", missing } : { state: "READY" };
   }
 
-  private async get(
-    path: string,
-    params: Record<string, string>,
-    signal: AbortSignal,
-  ): Promise<unknown> {
+  private get(path: string, params: Record<string, string>, signal: AbortSignal) {
+    return this.getUrl(`${this.base}${path}?${new URLSearchParams(params).toString()}`, signal);
+  }
+
+  /**
+   * Credentials ride in headers, so only URLs on the configured API host are ever requested
+   * (feed URLs come from Flipkart's own listing response).
+   */
+  private async getUrl(url: string, signal: AbortSignal): Promise<unknown> {
+    if (new URL(url).origin !== new URL(this.base).origin) {
+      throw new ConnectorError("INVALID_RESPONSE", "Flipkart feed URL is not on the API host", {
+        retryable: false,
+      });
+    }
     if (this.getReadiness().state !== "READY") {
       throw new ConnectorError(
         "NOT_CONFIGURED",
@@ -133,7 +182,6 @@ export class FlipkartConnector implements ShoppingConnector {
         { retryable: false },
       );
     }
-    const url = `${this.base}${path}?${new URLSearchParams(params).toString()}`;
     const res = await this.http(url, {
       headers: {
         "Fk-Affiliate-Id": this.config.affiliateId!,
@@ -247,6 +295,77 @@ export class FlipkartConnector implements ShoppingConnector {
     // Unmappable entries are passed through as-is so the executor counts them as rejected.
     const items = body.data.productInfoList.map((raw) => this.toItem(raw, operation) ?? raw);
     return { sourceId: this.id, items, fetchedAt: new Date() };
+  }
+
+  /**
+   * Discounted, in-stock products from the category product feeds: the first call reads the
+   * feed listing, then each call fetches one feed page (≤ 500 items) and keeps only those at
+   * least `minDiscountBp` below MRP. The cursor walks every category's feed via `nextUrl`.
+   */
+  async fetchDeals(request: DealFeedRequest, ctx: ConnectorCallContext): Promise<DealFeedPage> {
+    let cursor: z.infer<typeof dealCursor>;
+    if (request.cursor) {
+      const parsed = dealCursor.safeParse(JSON.parse(request.cursor));
+      if (!parsed.success)
+        throw new ConnectorError("INVALID_RESPONSE", "Invalid Flipkart deals cursor", {
+          retryable: false,
+        });
+      cursor = parsed.data;
+    } else {
+      const listing = feedListing.safeParse(
+        await this.get(
+          `/api/${encodeURIComponent(this.config.affiliateId ?? "")}.json`,
+          {},
+          ctx.signal,
+        ),
+      );
+      if (!listing.success)
+        throw new ConnectorError("INVALID_RESPONSE", "Unexpected Flipkart feed listing", {
+          retryable: false,
+        });
+      const urls = Object.values(listing.data.apiGroups.affiliate.apiListings)
+        .map((c) => {
+          const variants = c.availableVariants;
+          // Prefer the newest documented version.
+          const key = Object.keys(variants).sort().reverse()[0];
+          return key ? variants[key]!.get : undefined;
+        })
+        .filter((u): u is string => typeof u === "string")
+        .slice(0, 500);
+      cursor = { urls, i: 0 };
+    }
+    const fetchedAt = new Date();
+    const url = cursor.next ?? cursor.urls[cursor.i];
+    if (!url) return { sourceId: this.id, items: [], fetchedAt };
+    const withStock = new URL(url);
+    if (!cursor.next) withStock.searchParams.set("inStock", "true");
+    const page = feedPage.safeParse(await this.getUrl(withStock.toString(), ctx.signal));
+    if (!page.success)
+      throw new ConnectorError("INVALID_RESPONSE", "Unexpected Flipkart feed page", {
+        retryable: false,
+      });
+    const operation = "GET /1.0/feeds/{trackingId}/category/{category}.json";
+    const items = page.data.productInfoList
+      .map((raw) => this.toItem(raw, operation))
+      .filter(
+        (i): i is NormalizedProductInput =>
+          i !== null &&
+          i.stockStatus === "IN_STOCK" &&
+          i.mrpPaise !== undefined &&
+          i.mrpPaise > i.sellingPricePaise &&
+          ((i.mrpPaise - i.sellingPricePaise) * 10_000) / i.mrpPaise >= request.minDiscountBp,
+      );
+    const next: z.infer<typeof dealCursor> | null = page.data.nextUrl
+      ? { urls: cursor.urls, i: cursor.i, next: page.data.nextUrl }
+      : cursor.i + 1 < cursor.urls.length
+        ? { urls: cursor.urls, i: cursor.i + 1 }
+        : null;
+    return {
+      sourceId: this.id,
+      items,
+      ...(next ? { nextCursor: JSON.stringify(next) } : {}),
+      fetchedAt,
+    };
   }
 
   async getProduct(

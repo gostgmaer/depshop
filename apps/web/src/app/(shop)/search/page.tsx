@@ -1,4 +1,6 @@
+import type { DealPolicy } from "@dealmind/shared";
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { Sparkles } from "lucide-react";
 import { RecentSearches } from "@/components/dashboard/widgets";
 import { AiSearchBar } from "@/components/search/ai-search-bar";
@@ -6,10 +8,14 @@ import { EXAMPLE_QUERIES } from "@/components/search/search-input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/misc";
+import { publicGet } from "@/lib/server-api";
 
 export const metadata: Metadata = { title: "AI Search" };
 
-export default function SearchPage() {
+export default async function SearchPage() {
+  // Live store search off (the default): searching means searching the current deals.
+  const policy = await publicGet<DealPolicy>("/deals/policy");
+  if (!policy?.liveSearch) redirect("/deals");
   return (
     <>
       <PageHeader

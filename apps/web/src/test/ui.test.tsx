@@ -25,6 +25,12 @@ import { productPricing, searchDetail, searchResult } from "./fixtures";
 import { renderWithQuery } from "./render";
 import { navigation } from "./setup";
 
+// These suites test the live search bar: the deal policy says live search is on.
+vi.mock("@/hooks/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/queries")>()),
+  useDealPolicy: () => ({ data: { minDiscountPercent: 20, liveSearch: true } }),
+}));
+
 vi.mock("@/services", () => ({
   catalog: {
     categoryTree: vi.fn(async () => []),
@@ -124,7 +130,7 @@ describe("2. navigation", () => {
     const nav = screen.getByRole("navigation", { name: "Main" });
     for (const name of [
       "Dashboard",
-      "AI Search",
+      "Deals",
       "Categories",
       "Compare",
       "Watchlists",

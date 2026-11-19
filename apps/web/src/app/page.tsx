@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
+import { DealSearchBox } from "@/components/deals/deal-search-box";
+import { HomeDeals } from "@/components/deals/home-deals";
 import { Button } from "@/components/ui/button";
 import { jsonLdString, siteJsonLd, siteUrl } from "@/lib/seo";
 import { getServerUser } from "@/lib/server-session";
@@ -11,15 +13,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * Claims here must stay true of the running system: DealMind searches the
- * marketplaces it is connected to (and says which it couldn't reach), shows the
- * lowest price among the offers it found, and computes discounts deterministically.
+ * Claims here must stay true of the running system: DealMind loads discounted products
+ * from the stores it is connected to, shows only current deals (at least the configured
+ * discount below MRP, in stock, seen recently) and computes discounts deterministically.
  * No "every store", "lowest price guaranteed" or coverage claims.
  */
 const features = [
   {
-    title: "Search connected marketplaces at once",
-    body: "Describe what you want once. DealMind searches the marketplaces it is connected to in parallel and tells you which ones it couldn't search.",
+    title: "Only real, current deals",
+    body: "Products are loaded from the stores DealMind is connected to, and only those well below the store's stated MRP, in stock and seen recently are shown. When a deal ends, it disappears.",
   },
   {
     title: "Compare the same variant",
@@ -95,22 +97,21 @@ export default async function HomePage() {
           Find genuine deals. Compare prices. Track products. Buy smarter.
         </h1>
         <p className="max-w-2xl text-lg text-muted-foreground">
-          Describe what you want in plain language. DealMind compares the same product variant
-          across the marketplaces it searched, shows the lowest price among the offers it found, and
-          tells you whether a discount is genuine.
+          DealMind collects the current discounts from the stores it is connected to, compares the
+          same product variant across them, and shows each product&apos;s price history so you can
+          see whether a discount is genuine.
         </p>
+        <DealSearchBox className="max-w-2xl" />
         <div className="flex flex-wrap gap-3">
-          <Button size="lg" variant="ai" asChild>
-            <Link href="/search">Search products</Link>
-          </Button>
           <Button size="lg" variant="outline" asChild>
-            <Link href="/deals">Explore deals</Link>
+            <Link href="/deals">Explore all deals</Link>
           </Button>
           <Button size="lg" variant="ghost" asChild>
             <a href="#features">How it works</a>
           </Button>
         </div>
       </section>
+      <HomeDeals />
       <section id="features" aria-labelledby="features-heading" className="flex flex-col gap-6">
         <h2 id="features-heading" className="text-2xl font-semibold tracking-tight">
           How DealMind helps
