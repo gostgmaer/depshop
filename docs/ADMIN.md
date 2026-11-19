@@ -15,7 +15,7 @@ organizations or memberships.
 - **API:** every `/api/v1/admin/*` route checks `app.requireAdmin` in `onRequest`.
   - The check runs before body validation, so non-admins get 401/403 and no schema hints.
   - The role is read from the database through the session. It is never taken from the client.
-- **Admin bootstrap:** promote a user with the existing `PATCH /api/v1/admin/users/:id/role` (by an existing admin) or directly in the database. Admins can't change their own role or status.
+- **Admin bootstrap (first run):** while no administrator exists, the API keeps a one-time **setup token** (only its SHA-256 is stored, in `PlatformSetup`). It is printed once in the API log at start-up (`First-run setup … setupToken`), or set it yourself with `ADMIN_SETUP_TOKEN`. Open **`/setup`** (the sign-in page links to it while setup is pending), enter the token plus the administrator's name, e-mail and password: the account is registered in the IAM like any sign-up, and **becomes ADMIN at its first sign-in** (audit action `setup.first_admin`). The token is single-use (5 attempts per 15 min per IP); once an ADMIN exists, `/setup` is closed for good. Further admins: `PATCH /api/v1/admin/users/:id/role` by an existing admin. Admins can't change their own role or status. Tests: `setup.db.test.ts` (8), `setup.test.tsx`.
 
 ## Rules enforced
 
@@ -93,7 +93,7 @@ superseded by `/sources` and `/audit-logs` above.
 
 ## Known gaps
 
-- No admin bootstrap CLI. Promotion is via an existing admin or SQL.
+- First-run admin setup via `/setup` and a one-time token (see above); later promotions via an existing admin.
 - Collected revenue, taxes and refund amounts are not mirrored. Use the payment service's own reports.
 - Notification delivery health stays at `/admin/notifications` (Phase 5.3) and is not yet a console page.
 - Match review (`/admin/match-reviews`) is API-only; no console page yet.

@@ -37,6 +37,7 @@ export const PRIVATE_PATH_PREFIXES = [
   "/reset-password",
   "/verify-email",
   "/unsubscribe",
+  "/setup",
   "/api/",
 ] as const;
 

@@ -63,6 +63,16 @@ export const registerInput = z
   .strict();
 export type RegisterInput = z.infer<typeof registerInput>;
 
+/** First-run setup: the one-time token plus the first administrator's sign-up details. */
+export const setupAdminInput = registerInput
+  .extend({ token: z.string().trim().min(8).max(200) })
+  .strict();
+export type SetupAdminInput = z.infer<typeof setupAdminInput>;
+export const setupStatus = z.object({
+  /** True while no administrator exists (the /setup page is available). */
+  required: z.boolean(),
+});
+
 export const loginInput = z
   .object({ email: emailSchema, password: z.string().min(1, "Password is required").max(128) })
   .strict();

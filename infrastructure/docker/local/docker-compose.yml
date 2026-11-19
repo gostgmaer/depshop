@@ -83,6 +83,7 @@ services:
       PORT: "4000"
       TRUST_PROXY: loopback
       SESSION_SECRET: ${SESSION_SECRET:?set in .env}
+      ADMIN_SETUP_TOKEN: ${ADMIN_SETUP_TOKEN:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set in .env}
       COOKIE_SECURE: "false"
       API_DOCS_ENABLED: "true"

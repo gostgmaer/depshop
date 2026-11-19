@@ -121,6 +121,8 @@ import { type HealthCheck, healthRoutes } from "./modules/health/health-routes.j
 import { userRoutes } from "./modules/users/user-routes.js";
 import { UserService } from "./modules/users/user-service.js";
 import { GuestService } from "./modules/auth/guest-service.js";
+import { setupRoutes } from "./modules/setup/setup-routes.js";
+import { SetupService } from "./modules/setup/setup-service.js";
 import { authPlugin } from "./plugins/auth.js";
 import { csrfPlugin } from "./plugins/csrf.js";
 
@@ -358,6 +360,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     passwordChanged: (u, a) => notificationService.passwordChanged(u, a),
     log: app.log,
   });
+  const setup = new SetupService(prisma, {
+    ...(env.ADMIN_SETUP_TOKEN ? { configuredToken: env.ADMIN_SETUP_TOKEN } : {}),
+    register: (input) => auth.register(input, {}),
+  });
+  auth.firstRunSetup = setup;
+  // While no administrator exists, make sure a one-time setup token is ready (and logged).
+  app.addHook("onReady", async () => {
+    await setup
+      .prepare(app.log)
+      .catch((err: unknown) =>
+        app.log.error({ err: (err as Error).message }, "first-run setup check failed"),
+      );
+  });
   const users = new UserService(prisma, sessions, iam);
   const cache = new CacheService(redis, env.REDIS_KEY_PREFIX, app.log);
   const catalog = new CatalogService(prisma, cache, {
@@ -528,6 +543,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   await app.register(
     async (v1) => {
+      await v1.register(setupRoutes, { prefix: "/setup", setup });
       await v1.register(authRoutes, {
         prefix: "/auth",
         auth,

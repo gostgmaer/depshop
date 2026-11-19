@@ -1394,3 +1394,18 @@ model PushSubscription {
 
   @@index([userId])
 }
+
+/// First-run setup (one row, id = 1). While no ADMIN exists, a one-time setup token
+/// (stored hashed) lets the operator name the first administrator's e-mail; that
+/// account becomes ADMIN on its first sign-in, and setup is then closed for good.
+model PlatformSetup {
+  id             Int       @id @default(1)
+  /// SHA-256 (hex) of the current one-time setup token; null once used.
+  setupTokenHash String?
+  /// Lower-cased e-mail claimed through /setup; becomes ADMIN on first sign-in.
+  adminEmail     String?
+  claimedAt      DateTime?
+  /// Set when the claimed account signed in and was made ADMIN.
+  completedAt    DateTime?
+  updatedAt      DateTime  @updatedAt
+}

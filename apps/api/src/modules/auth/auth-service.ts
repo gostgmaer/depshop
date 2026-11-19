@@ -77,6 +77,10 @@ export class AuthService {
     private readonly events: AccountEvents | null = null,
   ) {}
 
+  /** First-run setup (set by app.ts): promotes the claimed first administrator on sign-in. */
+  firstRunSetup: { promoteOnSignIn(user: { id: string; email: string }): Promise<boolean> } | null =
+    null;
+
   private async emit(what: string, fn: (e: AccountEvents) => Promise<void>) {
     if (!this.events) return;
     try {
@@ -91,7 +95,12 @@ export class AuthService {
 
   // ── Registration & login ────────────────────────────────────────────────
 
-  async register(input: RegisterInput, client: ClientInfo): Promise<void> {
+  /**
+   * Registers in the IAM. `existing` is true when the e-mail already had an account; the
+   * public sign-up route ignores it (identical response, no enumeration), only first-run
+   * setup (token holder = operator) tells the operator.
+   */
+  async register(input: RegisterInput, client: ClientInfo): Promise<{ existing: boolean }> {
     try {
       await this.iam.register({
         email: input.email,
@@ -101,7 +110,7 @@ export class AuthService {
       });
     } catch (err) {
       const e = iamFailure(err);
-      if (e.status === 409) return; // existing account: identical response
+      if (e.status === 409) return { existing: true }; // the public route still answers identically
       if (e.status === 403) throw AppError.forbidden("Sign-up is currently closed");
       if (e.status === 429)
         throw new AppError(ErrorCode.RATE_LIMITED, "Too many attempts. Try again later.");
@@ -111,6 +120,7 @@ export class AuthService {
       }
       throw e;
     }
+    return { existing: false };
   }
 
   /**
@@ -152,6 +162,7 @@ export class AuthService {
     }
 
     await this.throttle.recordSuccess(key);
+    if (this.firstRunSetup && (await this.firstRunSetup.promoteOnSignIn(user))) user.role = "ADMIN";
     if (presentedSession) await this.sessions.revoke(presentedSession.sessionId);
     const session = await this.sessions.create(user.id, client, { tokens: result, claims });
     await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });

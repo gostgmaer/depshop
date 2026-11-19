@@ -648,3 +648,7 @@ See [pwa-architecture.md](pwa-architecture.md).
 - **Deals page** (`/deals`): products already in the catalog (no marketplace calls), one card per variant, hidden when the deal closes (not current, out of stock, removed, or no longer below MRP). See CATALOG.md "Deals".
 - Web: public pages moved to the `(shop)` route group (fixes a prefetch-redirect bug found by the browser tests); guest shell and tab bar; "Sign in to …" in place of tracking controls.
 - Tests: API DB 210 (19 new), worker DB 43 (guest retention), web unit 152, Playwright 73 (8 new guest tests).
+
+## First-run admin setup
+
+While no administrator exists, `/setup` creates the first one with a one-time token (printed once in the API log, or `ADMIN_SETUP_TOKEN`). The account is registered in the IAM and becomes ADMIN at its first sign-in; then setup closes. Tests: API 218 (8 new), web unit 156 (4 new). See ADMIN.md.

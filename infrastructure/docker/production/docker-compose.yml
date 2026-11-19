@@ -241,6 +241,8 @@ services:
       # Only Traefik (on the fixed edge subnet) may set X-Forwarded-For.
       TRUST_PROXY: ${EDGE_SUBNET:-172.30.10.0/24}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET}
+      # First-run admin setup token (optional; generated and logged when unset). See docs/ADMIN.md.
+      ADMIN_SETUP_TOKEN: ${ADMIN_SETUP_TOKEN:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY}
       COOKIE_SECURE: "true"
       API_DOCS_ENABLED: "false"

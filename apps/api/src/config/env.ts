@@ -51,6 +51,11 @@ const envSchema = z
 
     /** HMAC key for CSRF tokens. Min 32 chars; rotate to invalidate all CSRF tokens. */
     SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
+    /** First-run setup token (optional). Unset: one is generated and logged while no admin exists. */
+    ADMIN_SETUP_TOKEN: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.string().min(16).max(200).optional(),
+    ),
     /** Absolute session lifetime. */
     SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
     /** Sessions unused for this long expire. */

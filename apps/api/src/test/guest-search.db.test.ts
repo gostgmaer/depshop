@@ -2,7 +2,8 @@
  * Guest search: no account needed to search, but a guest only ever sees its own
  * searches and can't use any account feature.
  */
-import type { SearchView } from "@dealmind/shared";
+import type { searchView } from "@dealmind/shared";
+import type { z } from "zod";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { GUEST_EMAIL_DOMAIN } from "../modules/auth/guest-service.js";
 import {
@@ -16,6 +17,7 @@ import {
 
 let ctx: TestContext;
 const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
+type SearchView = z.infer<typeof searchView>;
 const QUERY = { query: "Find a smartphone under ₹30,000 with 8GB RAM" };
 
 beforeAll(async () => {

@@ -64,6 +64,13 @@ export interface ProductQuery {
   pageSize?: number;
 }
 
+/** First-run admin setup (public). */
+export const setup = {
+  status: () => api<{ required: boolean }>("GET", "/setup"),
+  claim: (body: { token: string; name: string; email: string; password: string }) =>
+    api<{ email: string; existingAccount: boolean }>("POST", "/setup/admin", body),
+};
+
 export const catalog = {
   categoryTree: () => api<CategoryNode[]>("GET", "/categories/tree"),
   category: (idOrSlug: string) =>
