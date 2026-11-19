@@ -33,6 +33,12 @@ x-app-env: &app-env
   BILLING_PROVIDER: sandbox
   # Free during launch: every account gets this plan at no cost (empty = normal billing).
   LAUNCH_FREE_PLAN: ${LAUNCH_FREE_PLAN:-PRO}
+  # Affiliate / marketplace credentials (empty = not connected; links go out untagged).
+  AMAZON_ASSOCIATES_PARTNER_TAG: ${AMAZON_ASSOCIATES_PARTNER_TAG:-}
+  AMAZON_CREATORS_CREDENTIAL_ID: ${AMAZON_CREATORS_CREDENTIAL_ID:-}
+  AMAZON_CREATORS_CREDENTIAL_SECRET: ${AMAZON_CREATORS_CREDENTIAL_SECRET:-}
+  FLIPKART_AFFILIATE_ID: ${FLIPKART_AFFILIATE_ID:-}
+  FLIPKART_AFFILIATE_TOKEN: ${FLIPKART_AFFILIATE_TOKEN:-}
 
 services:
   postgres:
