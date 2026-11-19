@@ -130,6 +130,8 @@ chmod 600 /opt/dealmind/.env.production       # then fill every value (openssl r
 
 ## 3. Secrets and configuration
 
+**Every variable, which container needs it and how to generate it:** [SECRETS.md](SECRETS.md). How to obtain and verify each external service's credentials: [integrations/](integrations/README.md).
+
 - **Where secrets live:** only in `/opt/dealmind/.env.production` (mode 600) or your platform's secret manager rendering that file.
   - They are passed to each container as environment variables, each service getting only what it needs.
   - None are in images, the repository, or CI logs.
@@ -170,6 +172,7 @@ chmod 600 /opt/dealmind/.env.production       # then fill every value (openssl r
    For a new domain, consider a short HSTS max-age first (edit `stsSeconds` in `middlewares.yml`), and raise it once HTTPS is confirmed. Start with `ACME_CA_SERVER` set to the Let's Encrypt **staging** CA on a brand-new host, to avoid rate limits; remove it after the first certificate.
 4. Verify backups: run `scripts/backup/pg-backup.sh`, then `scripts/restore/restore-test.sh`. Install the schedule in [backup-and-recovery.md](backup-and-recovery.md).
 5. Optionally start monitoring; see [monitoring-and-alerting.md](monitoring-and-alerting.md).
+6. Create the first administrator: read the one-time token from the API log (`scripts/deploy/compose.sh logs api | grep "First-run setup"`), open `https://APP_DOMAIN/setup`, then sign in once with that account (see [ADMIN.md](ADMIN.md)).
 
 ## 5. Routine operations
 

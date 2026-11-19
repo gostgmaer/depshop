@@ -11,6 +11,17 @@ compare identical products, find genuine discounts, and track prices.
 - Shared EasyDev services (IAM, notifications, files), changes made, known issues: [docs/SHARED_SERVICES.md](docs/SHARED_SERVICES.md)
 - API docs: run the API and open `http://127.0.0.1:4000/docs`
 
+### Start here
+
+| I want to…                                                                                              | Read                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run it on my machine                                                                                    | [Getting started](#getting-started) below                                                                                                                                                      |
+| Know every env variable / API key, which service needs it, how to generate it                           | [docs/SECRETS.md](docs/SECRETS.md)                                                                                                                                                             |
+| Connect an external service (AI model, sign-in, e-mail, push, payments, marketplaces/affiliates, files) | [docs/integrations/](docs/integrations/README.md)                                                                                                                                              |
+| Deploy to staging / production                                                                          | [docs/production-deployment.md](docs/production-deployment.md), then [docs/production-go-live.md](docs/production-go-live.md)                                                                  |
+| Create the first administrator                                                                          | [Making the first admin](#making-the-first-admin) below                                                                                                                                        |
+| Operate, roll back, recover                                                                             | [docs/production-operations-handbook.md](docs/production-operations-handbook.md), [docs/rollback-runbook.md](docs/rollback-runbook.md), [docs/disaster-recovery.md](docs/disaster-recovery.md) |
+
 ## Requirements
 
 Node.js ≥ 22, pnpm 10 (`corepack enable`), Docker with Compose v2, and the
@@ -38,6 +49,22 @@ the IAM (here `http://localhost:3100`, since port 3000 is taken locally):
 `PORT=3100 pnpm --filter @dealmind/web dev`. Optional
 dev-only admin UIs (pgAdmin, RedisInsight): `pnpm infra:tools`.
 
+**Local backend in Docker** (what this machine uses): the production images run in
+development mode with their own PostgreSQL and Redis, the API on `127.0.0.1:4000`, and the
+Next.js dev server on the host:
+
+```bash
+docker build -f infrastructure/docker/production/node.Dockerfile --target migrate -t local/dealmind-migrate:local .
+docker build -f infrastructure/docker/production/node.Dockerfile --target api     -t local/dealmind-api:local .
+docker build -f infrastructure/docker/production/node.Dockerfile --target worker  -t local/dealmind-worker:local .
+docker build -f infrastructure/docker/production/agent.Dockerfile                 -t local/dealmind-agent:local .
+docker compose -f infrastructure/docker/local/docker-compose.yml --project-directory . -p dealmind-local up -d
+cd apps/web && API_INTERNAL_URL=http://127.0.0.1:4000 npx next dev -p 3100 -H localhost
+```
+
+Don't run `next build` or the Playwright tests while that dev server is running: they share
+`apps/web/.next` and the dev UI loses its CSS (restart it with a clean `.next`).
+
 Full containerised stack behind Traefik (web at `http://localhost`, API at
 `http://localhost/api`; not yet validated, see PHASES.md):
 
@@ -59,10 +86,15 @@ pnpm --filter @dealmind/api test:contract   # live contract test against the sha
 
 ## Making the first admin
 
-There is no self-service admin signup. Register normally, then:
+On first start, while no administrator exists, the API prints a **one-time setup token** in
+its log (or set your own with `ADMIN_SETUP_TOKEN`):
 
-```sql
-UPDATE "User" SET role = 'ADMIN' WHERE email = 'you@example.com';
+```bash
+docker compose -f infrastructure/docker/local/docker-compose.yml --project-directory . -p dealmind-local logs api | grep "First-run setup"
 ```
 
-Log in again to receive an access token carrying the new role.
+Open `/setup` (the sign-in page links to it while setup is pending), enter the token and the
+administrator's name, e-mail and password, then **sign in once**: that first sign-in makes the
+account ADMIN. `/setup` then closes for good. Further admins: an existing admin calls
+`PATCH /api/v1/admin/users/:userId/role` (there is no button for it in the admin UI yet).
+Details: [docs/ADMIN.md](docs/ADMIN.md).
